@@ -1,0 +1,20 @@
+[
+  {
+    "id": "lever-abc-123",
+    "text": "Machine Learning Engineer, New Grad",
+    "hostedUrl": "https://jobs.lever.co/acme/lever-abc-123?lever-source=github",
+    "applyUrl": "https://jobs.lever.co/acme/lever-abc-123/apply?utm_medium=board",
+    "createdAt": 1786809600000,
+    "description": "<p>Build production ML systems.</p>",
+    "additional": "<p>Early career program.</p>",
+    "workplaceType": "hybrid",
+    "lists": [
+      {"text": "What you will do", "content": "<ul><li>Ship models</li></ul>"}
+    ],
+    "categories": {
+      "location": "Los Angeles, CA",
+      "commitment": "Regular Full-Time"
+    }
+  }
+]
+

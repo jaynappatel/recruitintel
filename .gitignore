@@ -1,0 +1,32 @@
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# JavaScript
+node_modules/
+.next/
+coverage/
+*.tsbuildinfo
+pnpm-debug.log*
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+
+# Local database artifacts
+postgres-data/
+

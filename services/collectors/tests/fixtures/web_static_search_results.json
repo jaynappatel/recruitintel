@@ -1,0 +1,22 @@
+{
+  "\"Stripe\" internship 2027": [
+    {
+      "url": "https://stripe.com/jobs/university/internships?utm_source=test",
+      "title": "Stripe University Internships 2027",
+      "snippet": "Applications open September 1, 2026.",
+      "rank": 1
+    },
+    {
+      "url": "https://stripe.com/jobs/university/internships?utm_medium=duplicate",
+      "title": "Duplicate result",
+      "snippet": "Same canonical page.",
+      "rank": 2
+    },
+    {
+      "url": "https://careerengagement.utexas.edu/events/stripe-fair",
+      "title": "Fall Technology Career Fair",
+      "snippet": "Meet Stripe on campus.",
+      "rank": 3
+    }
+  ]
+}

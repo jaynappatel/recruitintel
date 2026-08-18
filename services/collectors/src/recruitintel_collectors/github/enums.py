@@ -1,0 +1,29 @@
+from enum import StrEnum
+
+
+class GitHubRepositoryType(StrEnum):
+    INTERNSHIP_LIST = "INTERNSHIP_LIST"
+    NEW_GRAD_LIST = "NEW_GRAD_LIST"
+    INTERVIEW_QUESTIONS = "INTERVIEW_QUESTIONS"
+    COMPANY_REPOSITORY = "COMPANY_REPOSITORY"
+    OTHER = "OTHER"
+
+
+class GitHubParserType(StrEnum):
+    AUTO = "AUTO"
+    MARKDOWN_TABLE = "MARKDOWN_TABLE"
+    CSV = "CSV"
+    JSON = "JSON"
+    INTERNSHIP_LIST = "INTERNSHIP_LIST"
+    INTERVIEW_QUESTIONS = "INTERVIEW_QUESTIONS"
+
+
+class GitHubRecordType(StrEnum):
+    INTERVIEW_QUESTION = "INTERVIEW_QUESTION"
+    JOB = "JOB"
+
+
+class QuestionDifficulty(StrEnum):
+    EASY = "EASY"
+    MEDIUM = "MEDIUM"
+    HARD = "HARD"

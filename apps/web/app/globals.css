@@ -1,0 +1,146 @@
+@import "tailwindcss";
+
+:root {
+  /* Minimal base palette: neutral paper, near-black ink, one warm accent.
+     Everything else (glass surfaces, dark panels) is derived from these. */
+  --paper: #f3f2ee;
+  --ink: #14151a;
+  --muted: #6b6d76;
+  --line: rgb(20 21 26 / 10%);
+
+  --panel: #121317;
+  --panel-bright: #1d1e24;
+  --panel-line: rgb(255 255 255 / 9%);
+  --panel-glass: rgb(15 16 20 / 78%);
+
+  --accent: #c9974a;
+  --accent-bright: #dcac66;
+  --accent-soft: rgb(201 151 74 / 14%);
+
+  --surface: rgb(255 255 255 / 64%);
+  --surface-soft: rgb(20 21 26 / 4%);
+
+  /* Legacy aliases so existing components render through the new palette unchanged. */
+  --background: var(--paper);
+  --forest: var(--panel);
+  --forest-bright: var(--accent);
+  --mint: var(--accent);
+  --amber: var(--accent-bright);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--background);
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at 90% -6%, rgb(201 151 74 / 10%), transparent 32rem),
+    radial-gradient(circle at 4% 18%, rgb(20 21 26 / 4%), transparent 26rem), var(--background);
+  background-attachment: fixed;
+  color: var(--ink);
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.page-grid {
+  display: grid;
+  grid-template-columns: 16rem minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.app-sidebar {
+  background: var(--panel-glass);
+  backdrop-filter: blur(22px) saturate(140%);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
+  border-right: 1px solid var(--panel-line);
+  color: #f6f5f2;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  padding: 1.5rem 1rem;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+
+.app-main {
+  min-width: 0;
+  padding: 1.5rem clamp(1rem, 3vw, 3rem) 4rem;
+}
+
+/* Frosted glass panel used for cards, sections, and headers throughout the app. */
+.surface {
+  background: var(--surface);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 55%),
+    0 12px 30px rgb(20 21 26 / 6%);
+}
+
+/* Dark counterpart of .surface — for hero/header bands that sit on a dark ink panel. */
+.glass-dark {
+  background: var(--panel-glass);
+  backdrop-filter: blur(22px) saturate(140%);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
+  border: 1px solid var(--panel-line);
+}
+
+.eyebrow {
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.metric-number {
+  font-family: Georgia, "Times New Roman", serif;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 860px) {
+  .page-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .app-sidebar {
+    min-height: auto;
+    height: auto;
+    position: static;
+    padding: 1rem;
+  }
+
+  .desktop-sidebar-copy {
+    display: none;
+  }
+}

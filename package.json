@@ -1,0 +1,21 @@
+{
+  "name": "recruitintel",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @recruitintel/web dev",
+    "build": "pnpm --filter @recruitintel/web build",
+    "lint": "pnpm -r --if-present lint",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test",
+    "format:check": "pnpm -r --if-present format:check",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "db:migrate": "pnpm --filter @recruitintel/db migrate",
+    "db:seed": "pnpm --filter @recruitintel/db seed",
+    "db:smoke": "pnpm --filter @recruitintel/db smoke"
+  }
+}
