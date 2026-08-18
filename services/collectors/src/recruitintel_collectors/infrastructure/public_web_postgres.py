@@ -918,7 +918,13 @@ class PostgresPublicWebRepository:
                       fetched_count = greatest(fetched_count, %s),
                       relevant_count = greatest(relevant_count, %s),
                       observations_created = greatest(observations_created, %s),
-                      events_created = greatest(events_created, %s), duration_ms = %s
+                      events_created = greatest(events_created, %s),
+                      recruiter_profiles_created = greatest(recruiter_profiles_created, %s),
+                      campus_events_created = greatest(campus_events_created, %s),
+                      unresolved_recruiter_references = greatest(
+                        unresolved_recruiter_references, %s
+                      ),
+                      duration_ms = %s
                     where collector_run_id = %s
                     """,
                     (
@@ -927,6 +933,9 @@ class PostgresPublicWebRepository:
                         stats.relevant,
                         stats.observations_created,
                         stats.events_created,
+                        stats.recruiter_profiles_created,
+                        stats.campus_events_created,
+                        stats.unresolved_recruiter_references,
                         stats.duration_ms,
                         run_id,
                     ),

@@ -1,6 +1,6 @@
 # RecruitIntel implementation plan
 
-**Status (2026-08-17):** Milestones 1, 2, and 3 are implemented and verified. Milestone 1 details are in `docs/milestone-1.md`; GitHub/interview-question operation and API contracts are in `docs/github-intelligence.md`; public-web operation, safety controls, and API contracts are in `docs/public-web-intelligence.md`.
+**Status (2026-08-18):** Milestones 1, 2, 3, and 4 are implemented and verified. Milestone 1 details are in `docs/milestone-1.md`; GitHub/interview-question operation and API contracts are in `docs/github-intelligence.md`; public-web operation is in `docs/public-web-intelligence.md`; recruiter/campus architecture and exact APIs are in `docs/recruiter-campus-intelligence.md`.
 
 ## Repository decision
 
@@ -233,13 +233,44 @@ Known Milestone 3 technical debt:
 - date and claim extraction is conservative and English-oriented;
 - the one admin bearer token remains an MVP boundary that should become scoped service/user authorization later.
 
+## Milestone 4 completion record
+
+Milestone 4 implements:
+
+- canonical people plus conservative exact recruiter deduplication by company/name or unique public profile identity;
+- recruiter profiles, deterministic title categories, immutable evidence, school and role-family projections, and unresolved references;
+- reviewed school aliases/location fields and deterministic alias resolution;
+- campus recruiting event projections with date certainty and independent observation evidence;
+- transparent categorical relationship strength with rule reasons and current/aging/stale/unknown freshness;
+- direct consumption from Milestone 3 `WEB_PROCESS` plus a finite command for already-normalized observations;
+- idempotent recruiter discovery/activity, school signal, and campus-event recruiting events;
+- stable typed company/recruiter/school/event APIs and admin-authenticated manual recruiter/evidence creation;
+- explicit LinkedIn host/redirect fetch denial while public profile URLs may remain references;
+- synthetic unit and PostgreSQL coverage through observation extraction, graph persistence, retry, events, and API projection.
+
+Verification completed:
+
+- 71 Python tests passed, including all PostgreSQL integrations;
+- 26 TypeScript/Vitest tests passed across database, shared, types, and web packages, including the observation-to-API PostgreSQL projection;
+- Ruff format/lint, strict mypy, ESLint, TypeScript type checks, and Prettier checks passed;
+- migration `0004_recruiter_campus_intelligence.sql` applied from empty state and skipped cleanly on rerun;
+- the updated development seed applied twice and the expanded schema/deduplication smoke passed;
+- the Next.js 16 production build compiled every Milestone 4 route;
+- production-server HTTP smoke passed for recruiter creation/evidence, recruiter/company/school reads, and populated campus-event reads.
+
+Known Milestone 4 technical debt:
+
+- deterministic free-text extraction is conservative and primarily English-oriented; the optional LLM interface is intentionally disabled;
+- a production deployment still needs a reviewed `SearchProvider`; the built-in static provider is fixture-oriented;
+- unresolved records have storage/status but no administration UI or resolution endpoint;
+- current relationship projections are recomputed when evidence arrives; API freshness prevents old `ACTIVE` state from being presented as current, but there is no scheduled stale-status materialization job;
+- person identity has no fuzzy/biographical entity resolution by design; ambiguous identities require review;
+- the MVP admin bearer token should become scoped service/user authorization;
+- durable work still needs an external scheduler invocation.
+
 ## Deferred milestones
 
-### Milestone 4 — Recruiters and campus relationships
-
-People/recruiter profiles, recruiter/company/school links, reviewed manual profile URLs, and calendar-backed campus entities. No authenticated LinkedIn scraping.
-
-### Milestone 5 — Watchlists, alerts, application tracking, and activity scoring
+### Milestone 5 — Watchlists, alerts, application tracking, and activity scoring (not started)
 
 Multi-user-ready watchlists, database notification provider, application tracking, and an explainable score made from event aggregates.
 

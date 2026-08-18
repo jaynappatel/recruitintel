@@ -205,5 +205,8 @@ class WebRunStats(BaseModel):
     relevant: int = Field(default=0, ge=0)
     observations_created: int = Field(default=0, ge=0)
     events_created: int = Field(default=0, ge=0)
+    recruiter_profiles_created: int = Field(default=0, ge=0)
+    campus_events_created: int = Field(default=0, ge=0)
+    unresolved_recruiter_references: int = Field(default=0, ge=0)
     unchanged: bool = False
     duration_ms: int = Field(default=0, ge=0)

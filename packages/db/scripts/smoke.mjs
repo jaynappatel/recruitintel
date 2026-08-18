@@ -23,6 +23,16 @@ try {
       (select count(*) from public.public_recruiting_observations)::int
         as public_recruiting_observations,
       (select count(*) from public.public_recruiting_claims)::int as public_recruiting_claims,
+      (select count(*) from public.schools)::int as schools,
+      (select count(*) from public.people)::int as people,
+      (select count(*) from public.recruiter_profiles)::int as recruiter_profiles,
+      (select count(*) from public.recruiter_evidence)::int as recruiter_evidence,
+      (select count(*) from public.recruiter_school_relationships)::int
+        as recruiter_school_relationships,
+      (select count(*) from public.recruiter_role_focus)::int as recruiter_role_focus,
+      (select count(*) from public.campus_recruiting_events)::int as campus_recruiting_events,
+      (select count(*) from public.unresolved_recruiter_observations)::int
+        as unresolved_recruiter_observations,
       (select count(*) from public.recruiting_events)::int as events,
       (select count(*) from public.schema_migrations)::int as migrations
   `;
@@ -37,6 +47,11 @@ try {
     "public_web_candidates_company_id_canonical_url_key",
     "public_recruiting_observations_fingerprint_key",
     "public_recruiting_claims_fingerprint_key",
+    "school_aliases_normalized_alias_key",
+    "recruiter_profiles_person_id_company_id_key",
+    "recruiter_evidence_fingerprint_key",
+    "campus_recruiting_events_fingerprint_key",
+    "unresolved_recruiter_observations_fingerprint_key",
   ];
   const constraints = await sql`
     select conname
@@ -45,11 +60,11 @@ try {
       and conname in ${sql(requiredConstraints)}
   `;
 
-  if (!counts || counts.migrations < 3) {
+  if (!counts || counts.migrations < 4) {
     throw new Error("no applied RecruitIntel migrations were found");
   }
-  if (counts.companies < 1 || counts.sources < 1) {
-    throw new Error("development seed is missing companies or sources");
+  if (counts.companies < 1 || counts.sources < 1 || counts.schools < 1) {
+    throw new Error("development seed is missing companies, sources, or schools");
   }
   if (
     counts.github_repositories < 1 ||

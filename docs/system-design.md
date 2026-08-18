@@ -358,14 +358,36 @@ erDiagram
 
 Candidate URLs, immutable extracted content, source observations, and aggregate claims are separate identities. Multiple independent sources may support or conflict on one claim. The current jobs projection is linked only by an unambiguous canonical URL match and is never duplicated by public-web ingestion. Exact contracts and safety behavior are documented in `docs/public-web-intelligence.md`.
 
+## Milestone 4 ERD extensions
+
+Migration `0004_recruiter_campus_intelligence.sql` adds:
+
+```mermaid
+erDiagram
+  PEOPLE ||--o{ RECRUITER_PROFILES : has
+  COMPANIES ||--o{ RECRUITER_PROFILES : recruits_through
+  RECRUITER_PROFILES ||--o{ RECRUITER_EVIDENCE : supported_by
+  PUBLIC_RECRUITING_OBSERVATIONS ||--o{ RECRUITER_EVIDENCE : yields
+  RECRUITER_PROFILES ||--o{ RECRUITER_SCHOOL_RELATIONSHIPS : focuses_on
+  SCHOOLS ||--o{ RECRUITER_SCHOOL_RELATIONSHIPS : linked_to
+  RECRUITER_SCHOOL_RELATIONSHIPS ||--o{ RECRUITER_SCHOOL_EVIDENCE : supported_by
+  RECRUITER_PROFILES ||--o{ RECRUITER_ROLE_FOCUS : covers
+  RECRUITER_ROLE_FOCUS ||--o{ RECRUITER_ROLE_EVIDENCE : supported_by
+  COMPANIES ||--o{ CAMPUS_RECRUITING_EVENTS : hosts
+  SCHOOLS ||--o{ CAMPUS_RECRUITING_EVENTS : may_host
+  CAMPUS_RECRUITING_EVENTS ||--o{ CAMPUS_RECRUITING_EVENT_EVIDENCE : supported_by
+  PUBLIC_RECRUITING_OBSERVATIONS ||--o{ CAMPUS_RECRUITING_EVENT_EVIDENCE : supplies
+```
+
+Person and recruiter identity, source evidence, and school/role/event projections are separate. Exact normalized identity and evidence fingerprints provide retry deduplication; ambiguous identities remain unresolved. Relationship strength is a transparent categorical projection over immutable evidence. Milestone 4 reuses `WEB_PROCESS` and existing observations rather than introducing another crawler. Exact contracts and operating rules are documented in `docs/recruiter-campus-intelligence.md`.
+
 ## Future ERD extensions
 
 Later migrations add:
 
-- `people`, `recruiter_profiles`, and recruiter/school/company relationships.
 - `watchlists`, users, and watchlist companies.
 - `alerts` and notification deliveries.
-- calendar-backed campus entities and application tracking.
+- calendar synchronization and application tracking.
 
 These tables link back to `sources`, `observations`, and `recruiting_events`; they do not introduce alternative provenance systems.
 
@@ -387,6 +409,8 @@ Milestone 2 adds typed repository attachment/listing, durable sync requests, det
 
 Milestone 3 adds typed public-web intelligence, observation/detail, claim, and search-state reads plus admin-authenticated durable search/fetch requests. The browser receives normalized bounded evidence and provenance, never raw HTML. Exact frontend response shapes are documented in `docs/public-web-intelligence.md`.
 
+Milestone 4 adds typed recruiter/evidence and company/school/campus-event reads plus admin-authenticated manual recruiter/evidence writes. Responses always expose source provenance, categorical relationship reasons, and freshness. Exact frontend response shapes are documented in `docs/recruiter-campus-intelligence.md`.
+
 ## Local development and deployment
 
 Docker Compose runs PostgreSQL only. The web app and Python collector run on the host for fast feedback. Migrations and seed SQL are explicit scripts. Seed data includes recognizable companies and synthetic local jobs/events, clearly labeled as seed/demo records. Basic UI development therefore needs no network or provider credentials.
@@ -399,6 +423,7 @@ Scheduling is an interface at the process boundary: `python -m recruitintel_coll
 - Raw HTML is sanitized; the UI renders normalized text, not provider HTML.
 - Fixed provider hosts and validated tenant slugs prevent arbitrary URL fetching in Milestone 1.
 - Milestone 3 arbitrary public URLs are restricted to HTTP/HTTPS, normalized, DNS-checked against private/non-routable destinations before every request and redirect, robots-checked, rate/size/time bounded, and never rendered or executed.
+- LinkedIn URLs may be retained from permitted search results or manual input, but the fetcher blocks LinkedIn hosts and redirect targets before any HTTP request. No cookies, authenticated scraping, browser automation, CAPTCHA bypass, or anti-bot circumvention exists.
 - Secrets are read from environment variables and `.env` is ignored.
 - Database users can later be split into migration, collector-write, and web-read roles.
 - Collector logs redact headers, query secrets, and response bodies.

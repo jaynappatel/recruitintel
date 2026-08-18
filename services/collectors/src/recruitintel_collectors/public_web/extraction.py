@@ -147,6 +147,7 @@ def _json_ld_metadata(parts: list[str]) -> tuple[dict[str, Any], datetime | None
         values.extend(parsed if isinstance(parsed, list) else [parsed])
     published: datetime | None = None
     types: list[str] = []
+    people: list[dict[str, str]] = []
 
     def visit(value: Any) -> None:
         nonlocal published
@@ -154,6 +155,15 @@ def _json_ld_metadata(parts: list[str]) -> tuple[dict[str, Any], datetime | None
             type_value = value.get("@type")
             if isinstance(type_value, str):
                 types.append(type_value)
+                if type_value.casefold() == "person":
+                    name = value.get("name")
+                    job_title = value.get("jobTitle")
+                    url = value.get("url")
+                    if isinstance(name, str) and isinstance(job_title, str):
+                        person = {"name": _clean(name), "job_title": _clean(job_title)}
+                        if isinstance(url, str) and url.startswith(("http://", "https://")):
+                            person["url"] = url
+                        people.append(person)
             if published is None:
                 for key in ("datePublished", "dateCreated", "uploadDate"):
                     raw_date = value.get(key)
@@ -169,7 +179,14 @@ def _json_ld_metadata(parts: list[str]) -> tuple[dict[str, Any], datetime | None
 
     for item in values:
         visit(item)
-    return ({"json_ld_types": sorted(set(types))} if types else {}), published
+    metadata: dict[str, Any] = {}
+    if types:
+        metadata["json_ld_types"] = sorted(set(types))
+    if people:
+        metadata["people"] = list(
+            {json.dumps(item, sort_keys=True): item for item in people}.values()
+        )[:20]
+    return metadata, published
 
 
 class DeterministicHtmlExtractor:

@@ -13,6 +13,9 @@ from recruitintel_collectors.infrastructure.github_postgres import PostgresGitHu
 from recruitintel_collectors.infrastructure.http import ProviderHttpClient
 from recruitintel_collectors.infrastructure.postgres import PostgresCollectorRepository
 from recruitintel_collectors.infrastructure.public_web_postgres import PostgresPublicWebRepository
+from recruitintel_collectors.infrastructure.recruiter_campus_postgres import (
+    PostgresRecruiterCampusRepository,
+)
 from recruitintel_collectors.logging import configure_logging
 from recruitintel_collectors.pipeline import CollectorRunner
 from recruitintel_collectors.public_web.fetcher import SafePublicWebFetcher
@@ -37,6 +40,11 @@ def _parser() -> argparse.ArgumentParser:
         "public-web-work", help="Run one durable public-web work request"
     )
     public_web.add_argument("--request-id", type=UUID, required=True)
+    recruiter_campus = subcommands.add_parser(
+        "recruiter-campus-process",
+        help="Process one existing public recruiting observation without re-fetching",
+    )
+    recruiter_campus.add_argument("--observation-id", type=UUID, required=True)
     subcommands.add_parser("list-sources", help="List configured ATS source IDs")
     return parser
 
@@ -89,6 +97,7 @@ async def _execute(arguments: argparse.Namespace) -> int:
         else:
             static_provider = StaticSearchProvider({})
         public_web_repository = PostgresPublicWebRepository(settings.database_url)
+        recruiter_campus_repository = PostgresRecruiterCampusRepository(settings.database_url)
         async with SafePublicWebFetcher(
             user_agent=settings.user_agent,
             timeout_seconds=settings.timeout_seconds,
@@ -99,10 +108,19 @@ async def _execute(arguments: argparse.Namespace) -> int:
                 repository=public_web_repository,
                 search_providers={static_provider.name: static_provider},
                 fetcher=public_fetcher,
+                recruiter_campus_processor=recruiter_campus_repository,
             )
             public_stats = await public_worker.run(arguments.request_id)
             print(public_stats.model_dump_json())
             return 0
+
+    if arguments.command == "recruiter-campus-process":
+        recruiter_campus_repository = PostgresRecruiterCampusRepository(settings.database_url)
+        recruiter_stats = await recruiter_campus_repository.process_observation(
+            arguments.observation_id
+        )
+        print(recruiter_stats.model_dump_json())
+        return 0
 
     async with ProviderHttpClient(
         user_agent=settings.user_agent,

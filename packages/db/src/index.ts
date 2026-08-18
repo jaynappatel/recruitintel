@@ -3,6 +3,7 @@ import postgres, { type Sql } from "postgres";
 export * from "./github";
 export * from "./interview-questions";
 export * from "./public-web";
+export * from "./recruiter-campus";
 
 export interface CompanyRecord {
   id: string;

@@ -1,6 +1,6 @@
 # RecruitIntel
 
-RecruitIntel is a provenance-first recruiting intelligence foundation for students and new graduates. Milestones 1–3 collect public Greenhouse/Lever jobs, configured GitHub recruiting files, and permitted public recruiting pages; normalize jobs, interview questions, and web evidence deterministically; store current state plus source evidence; and emit immutable recruiting events. It does not use an LLM or make hiring predictions.
+RecruitIntel is a provenance-first recruiting intelligence foundation for students and new graduates. Milestones 1–4 collect public Greenhouse/Lever jobs, configured GitHub recruiting files, and permitted public recruiting pages; normalize jobs, interview questions, recruiter/school relationships, campus events, and web evidence deterministically; store current state plus source evidence; and emit immutable recruiting events. It does not use an LLM or make hiring predictions.
 
 ## Architecture
 
@@ -116,6 +116,19 @@ uv run recruitintel-collectors public-web-work --request-id REQUEST_UUID
 
 See [public web intelligence](docs/public-web-intelligence.md) for exact API contracts, JSON provider format, query budgets, safe-fetch controls, worker behavior, and troubleshooting. Public-web processing stores normalized text rather than raw HTML and never executes page JavaScript.
 
+## Recruiter and campus intelligence
+
+Successful `WEB_PROCESS` work consumes its normalized observations into the recruiter/campus graph. To process an existing Milestone 3 observation without another fetch:
+
+```bash
+uv run recruitintel-collectors recruiter-campus-process \
+  --observation-id PUBLIC_RECRUITING_OBSERVATION_UUID
+```
+
+Read APIs cover recruiters by company, recruiter detail/evidence, campus events by company, and schools with related companies/recruiters/events. Admin-authenticated POST routes create a recruiter or append immutable evidence. Manual and public LinkedIn URLs are references only: the fetcher blocks LinkedIn before HTTP and does not use authentication, browser automation, cookies, or CAPTCHA bypass.
+
+See [recruiter and campus intelligence](docs/recruiter-campus-intelligence.md) for exact contracts, identity/deduplication rules, title classification, evidence/relevance calculation, freshness, worker integration, search-provider configuration, and troubleshooting.
+
 ## Quality checks
 
 TypeScript/Next.js:
@@ -137,7 +150,7 @@ uv run mypy --config-file pyproject.toml services/collectors/src
 uv run pytest
 ```
 
-The default tests are deterministic and offline. They cover company/job/question normalization, Greenhouse/Lever/GitHub parsing, GitHub URL and rate-limit safety, public-web URL/SSRF/redirect/robots/size controls, deterministic HTML/relevance/date extraction, content/event fingerprints, duplicate identities, idempotent observations/events, conflicting claims, analytics, job lifecycle transitions, and failed/partial-sync safety.
+The default tests are deterministic and offline. They cover company/job/question/person/school normalization, recruiter title and role classification, Greenhouse/Lever/GitHub parsing, GitHub URL and rate-limit safety, public-web URL/SSRF/redirect/robots/restricted-site/size controls, deterministic HTML/relevance/date/campus extraction, relationship strength and freshness, duplicate identities, idempotent observations/events, unresolved/conflicting evidence, analytics, job lifecycle transitions, and failed/partial-sync safety.
 
 To exercise the PostgreSQL repository itself, create and migrate the isolated database once, then opt into the integration marker:
 
@@ -147,7 +160,7 @@ DATABASE_URL="$TEST_DATABASE_URL" pnpm db:migrate
 uv run pytest -m integration
 ```
 
-The integration fixtures use reserved test UUIDs. They verify the full ATS lifecycle, a synthetic GitHub flow from sync through analytics, and a synthetic public-web flow from search through candidate deduplication, fetch/change/no-op detection, observations, conflicts, events, and API projection fields. Never set `TEST_DATABASE_URL` to a shared or production database.
+The integration fixtures use reserved test UUIDs. They verify the full ATS lifecycle, a synthetic GitHub flow from sync through analytics, a synthetic public-web flow from search through candidate deduplication/fetch/change/no-op/observations/conflicts/events, and recruiter/campus flow from public observation through extraction, graph evidence, retry idempotency, recruiting events, and typed API projection. Never set `TEST_DATABASE_URL` to a shared or production database.
 
 ## Environment variables
 
@@ -157,7 +170,7 @@ All supported values and local defaults are in `.env.example`:
 - `TEST_DATABASE_URL`: reserved for opt-in integration tests; never points tests at production;
 - `RECRUITINTEL_USER_AGENT`: identifying provider request header;
 - `GITHUB_TOKEN`: optional worker-only official GitHub API token;
-- `RECRUITINTEL_ADMIN_TOKEN`: bearer token for GitHub and public-web mutations;
+- `RECRUITINTEL_ADMIN_TOKEN`: bearer token for GitHub, public-web, and recruiter-evidence mutations;
 - `PUBLIC_WEB_STATIC_RESULTS_FILE`: optional JSON fixture/provider input keyed by exact generated query;
 - `PUBLIC_WEB_MAX_RESPONSE_BYTES`: independent public HTML response limit;
 - `PUBLIC_WEB_REQUESTS_PER_SECOND`: per-host public-web request rate;
@@ -165,11 +178,11 @@ All supported values and local defaults are in `.env.example`:
 
 ## Safety and data handling
 
-- ATS/GitHub URLs come from fixed hosts. Public-web URLs are HTTP/HTTPS-only, DNS/private-network and redirect validated, robots-aware, and time/rate/size bounded.
+- ATS/GitHub URLs come from fixed hosts. Public-web URLs are HTTP/HTTPS-only, DNS/private-network and redirect validated, robots-aware, restricted-site-aware, and time/rate/size bounded. LinkedIn URLs may be stored but are never fetched.
 - External HTML is converted to normalized plain text and is neither retained nor rendered. Raw provider JSON remains untrusted and is never rendered.
 - Source reliability is an internal ranking signal, not a truth claim.
 - Current jobs are projections; snapshots, observations, and events preserve provenance/history.
 - A failed, partial, malformed, or concurrent sync cannot infer mass closures.
 - Collected text must never be promoted into executable instructions for a future LLM.
 
-See the [Milestone 1 record](docs/milestone-1.md), [GitHub intelligence](docs/github-intelligence.md), [public web intelligence](docs/public-web-intelligence.md), and [ML roadmap](docs/ml-roadmap.md) for implemented scope and the leakage-safe future dataset design.
+See the [Milestone 1 record](docs/milestone-1.md), [GitHub intelligence](docs/github-intelligence.md), [public web intelligence](docs/public-web-intelligence.md), [recruiter and campus intelligence](docs/recruiter-campus-intelligence.md), and [ML roadmap](docs/ml-roadmap.md) for implemented scope and the leakage-safe future dataset design.

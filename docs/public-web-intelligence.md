@@ -89,6 +89,7 @@ Canonicalization lowercases/IDNA-normalizes hosts, removes fragments and default
 - accepts HTML/XHTML only and enforces both declared and streamed response-size limits;
 - retains only safe response headers and normalized extracted data, never raw HTML;
 - does not execute JavaScript, solve CAPTCHAs, rotate browser identities, or bypass access controls.
+- rejects LinkedIn hosts and LinkedIn redirect targets before HTTP; public search-result/profile URLs may remain stored references.
 
 Operators remain responsible for source terms and permission. A successful technical fetch is not itself authorization to collect a site.
 
@@ -139,6 +140,8 @@ The three work types are:
 - `WEB_SEARCH`: run one configured query, canonicalize/deduplicate results, and enqueue at most `maxFetches` candidates;
 - `WEB_FETCH`: validate/fetch/extract/hash one candidate and enqueue processing only for new content;
 - `WEB_PROCESS`: classify the current immutable document and transactionally persist observations, claims, links, and events.
+
+After a successful `WEB_PROCESS`, Milestone 4 consumes the just-created observations through the recruiter/campus processor. Existing observation IDs can be replayed with `recruiter-campus-process` without fetching their pages again. See `docs/recruiter-campus-intelligence.md`.
 
 Runs record start/end/status, company, provider/query where applicable, candidates, fetched/relevant counts, observations/events created, duration, and errors. Work claims increment attempt count atomically. Retryable failures return to `PENDING` with bounded exponential delay until `maxAttempts`; SSRF/robots denials become blocked/terminal. A PostgreSQL one-running-run-per-source constraint prevents concurrent processing of the same source.
 
@@ -242,11 +245,17 @@ All fields have defaults except optional role/school/year. Returns HTTP `202`:
 ```json
 {
   "data": {
-    "requests": [{
-      "id": "uuid", "workType": "WEB_SEARCH", "status": "PENDING",
-      "companyId": "uuid", "searchQueryId": "uuid", "candidateId": null,
-      "requestedAt": "RFC3339 timestamp"
-    }],
+    "requests": [
+      {
+        "id": "uuid",
+        "workType": "WEB_SEARCH",
+        "status": "PENDING",
+        "companyId": "uuid",
+        "searchQueryId": "uuid",
+        "candidateId": null,
+        "requestedAt": "RFC3339 timestamp"
+      }
+    ],
     "queriesGenerated": 10,
     "skippedByBudget": 0
   }
@@ -267,6 +276,7 @@ Admin-authenticated. Returns HTTP `202 { data: PublicWebWorkRequest }`, `400` fo
 - Static searches return zero candidates: set `PUBLIC_WEB_STATIC_RESULTS_FILE` and ensure its keys exactly match the generated query strings shown by the search-query API.
 - `UnsafeUrlError`: the URL is malformed, contains credentials, or resolves to a non-public address.
 - `RobotsDeniedError`: the candidate remains blocked; do not bypass the policy.
+- `RestrictedSiteError`: LinkedIn or another explicitly restricted target remains a URL reference and is never fetched.
 - `ResponseTooLargeError`/unsupported content: raise limits only after reviewing the source; V1 accepts public HTML/XHTML only.
 - Search requests are skipped: inspect `nextAllowedRunAt` and the configured minimum interval.
 - Work returns to `PENDING`: inspect `collector_errors`, `attemptCount`, `nextAttemptAt`, and the related `public_web_runs` row.
@@ -274,4 +284,4 @@ Admin-authenticated. Returns HTTP `202 { data: PublicWebWorkRequest }`, `400` fo
 
 ## Deferred scope
 
-Milestone 3 does not add recruiter/person graph modeling, recruiter profile APIs, calendar backend, watchlists, alerts, application tracking, activity scoring, authenticated LinkedIn collection, live commercial search credentials, browser/JavaScript rendering, LLM extraction, embeddings, or ML. Recruiter links can be added later through explicit nullable association columns/tables without changing public-web candidate or document identity.
+Milestone 3 itself does not add recruiter/person graph modeling. Milestone 4 layers that graph on these immutable observations without changing public-web candidate or document identity. Calendar backend, watchlists, alerts, application tracking, activity scoring, authenticated LinkedIn collection, live commercial search credentials, browser/JavaScript rendering, LLM extraction, embeddings, and ML remain deferred.

@@ -24,6 +24,7 @@ from recruitintel_collectors.public_web.extraction import (
 from recruitintel_collectors.public_web.fetcher import (
     HostRateLimiter,
     ResponseTooLargeError,
+    RestrictedSiteError,
     RobotsDeniedError,
     SafePublicWebFetcher,
 )
@@ -176,6 +177,35 @@ async def test_fetcher_revalidates_redirects_and_enforces_size_and_robots() -> N
 
 
 @pytest.mark.asyncio
+async def test_fetcher_never_requests_linkedin_pages_or_redirect_targets() -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        if request.url.host == "example.com":
+            return httpx.Response(
+                302,
+                headers={"location": "https://www.linkedin.com/in/jane-smith"},
+                request=request,
+            )
+        raise AssertionError(f"restricted URL was requested: {request.url}")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    async with client:
+        async with SafePublicWebFetcher(
+            user_agent="RecruitIntelTest/1",
+            resolver=Resolver("108.174.10.10"),
+            robots_policy=Robots(),
+            client=client,
+        ) as fetcher:
+            with pytest.raises(RestrictedSiteError):
+                await fetcher.fetch("https://www.linkedin.com/in/jane-smith")
+            with pytest.raises(RestrictedSiteError):
+                await fetcher.fetch("https://example.com/profile")
+    assert calls == ["https://example.com/profile"]
+
+
+@pytest.mark.asyncio
 async def test_host_rate_limiter_spaces_requests() -> None:
     limiter = HostRateLimiter(50)
     await limiter.wait("example.com")
@@ -223,6 +253,9 @@ def test_source_reliability_and_relevance_are_transparent_and_deterministic() ->
     assert university.classification is WebSourceClassification.UNIVERSITY
     forum = classify_source("https://www.reddit.com/r/csMajors/post", _company())
     assert forum.reliability_level is ReliabilityLevel.LOW
+    linkedin = classify_source("https://www.linkedin.com/in/jane-smith", _company())
+    assert linkedin.classification is WebSourceClassification.RECRUITER_PUBLIC_PAGE
+    assert "page_content_not_fetched" in linkedin.reasons
 
     extractor = DeterministicHtmlExtractor()
     relevance = DeterministicRelevanceClassifier()

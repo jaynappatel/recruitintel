@@ -2,6 +2,10 @@ from datetime import UTC, datetime
 from time import monotonic
 from uuid import UUID
 
+from recruitintel_collectors.recruiter_campus.protocols import (
+    RecruiterCampusObservationProcessor,
+)
+
 from .classification import DeterministicRelevanceClassifier, classify_source
 from .extraction import DeterministicHtmlExtractor, normalized_content_hash
 from .information import DeterministicRecruitingInformationExtractor
@@ -23,6 +27,7 @@ class PublicWebWorker:
         extractor: DeterministicHtmlExtractor | None = None,
         relevance_classifier: DeterministicRelevanceClassifier | None = None,
         information_extractor: DeterministicRecruitingInformationExtractor | None = None,
+        recruiter_campus_processor: RecruiterCampusObservationProcessor | None = None,
     ) -> None:
         self._repository = repository
         self._search_providers = search_providers
@@ -30,6 +35,7 @@ class PublicWebWorker:
         self._extractor = extractor or DeterministicHtmlExtractor()
         self._relevance = relevance_classifier or DeterministicRelevanceClassifier()
         self._information = information_extractor or DeterministicRecruitingInformationExtractor()
+        self._recruiter_campus = recruiter_campus_processor
 
     async def run(self, request_id: UUID) -> WebRunStats:
         started = monotonic()
@@ -109,12 +115,22 @@ class PublicWebWorker:
                     relevance=relevance,
                     observations=observations,
                 )
+                downstream = (
+                    await self._recruiter_campus.process_document(document.id)
+                    if self._recruiter_campus is not None
+                    else None
+                )
                 stats = WebRunStats(
                     request_id=request.id,
                     work_type=request.work_type,
                     relevant=int(relevance.status.value == "RELEVANT"),
                     observations_created=created,
                     events_created=events,
+                    recruiter_profiles_created=(downstream.recruiters_created if downstream else 0),
+                    campus_events_created=(downstream.campus_events_created if downstream else 0),
+                    unresolved_recruiter_references=(
+                        downstream.unresolved_created if downstream else 0
+                    ),
                     duration_ms=int((monotonic() - started) * 1000),
                 )
             await self._repository.complete_run(run_id, stats)

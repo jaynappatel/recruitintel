@@ -107,7 +107,10 @@ class DeterministicRecruitingInformationExtractor:
                     date_precision=signal.precision,
                     date_certainty=signal.certainty,
                     claim_subject=f"{observation_type.value.casefold()}:{focus}",
-                    metadata={"extraction_rule": "date_phrase_v1"},
+                    metadata={
+                        "extraction_rule": "date_phrase_v1",
+                        "structured_metadata": document.structured_metadata,
+                    },
                 )
             )
         first_date = date_signals[0] if date_signals else None
@@ -128,7 +131,10 @@ class DeterministicRecruitingInformationExtractor:
                     date_precision=first_date.precision if first_date else DatePrecision.UNKNOWN,
                     date_certainty=(first_date.certainty if first_date else DateCertainty.CLAIMED),
                     claim_subject=f"{observation_type.value.casefold()}:{_subject(title)}",
-                    metadata={"extraction_rule": "keyword_signal_v1"},
+                    metadata={
+                        "extraction_rule": "keyword_signal_v1",
+                        "structured_metadata": document.structured_metadata,
+                    },
                 )
             )
         if not observations:
@@ -144,7 +150,10 @@ class DeterministicRecruitingInformationExtractor:
                     source_url=document.final_url,
                     occurred_at=document.published_at,
                     claim_subject=f"general:{_subject(title)}",
-                    metadata={"extraction_rule": "relevance_fallback_v1"},
+                    metadata={
+                        "extraction_rule": "relevance_fallback_v1",
+                        "structured_metadata": document.structured_metadata,
+                    },
                 )
             )
         deduplicated = {

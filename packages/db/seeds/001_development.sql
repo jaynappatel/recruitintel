@@ -34,6 +34,37 @@ insert into public.company_domains (id, company_id, domain) values
   ('12000000-0000-0000-0000-000000000005', '10000000-0000-0000-0000-000000000005', 'datadoghq.com')
 on conflict (domain) do update set company_id = excluded.company_id;
 
+insert into public.schools (
+  id, canonical_name, slug, website, domains, aliases, city, state_region, country
+) values (
+  '13000000-0000-0000-0000-000000000001',
+  'University of Texas at Austin',
+  'ut-austin',
+  'https://www.utexas.edu',
+  '{utexas.edu}',
+  '{"UT Austin","The University of Texas at Austin"}',
+  'Austin',
+  'Texas',
+  'US'
+)
+on conflict (canonical_name) do update set
+  slug = excluded.slug,
+  website = excluded.website,
+  domains = excluded.domains,
+  aliases = excluded.aliases,
+  city = excluded.city,
+  state_region = excluded.state_region,
+  country = excluded.country;
+
+insert into public.school_aliases (school_id, alias, normalized_alias) values
+  ((select id from public.schools where canonical_name = 'University of Texas at Austin'),
+   'University of Texas at Austin', 'university of texas at austin'),
+  ((select id from public.schools where canonical_name = 'University of Texas at Austin'),
+   'UT Austin', 'ut austin')
+on conflict (normalized_alias) do update set
+  school_id = excluded.school_id,
+  alias = excluded.alias;
+
 -- Manual seed sources support a useful offline UI. ATS sources below are separate and
 -- contain no seed jobs, so live collection never rewrites demonstration records.
 insert into public.sources (

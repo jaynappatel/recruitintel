@@ -20,6 +20,10 @@ class RobotsDeniedError(PermissionError):
     pass
 
 
+class RestrictedSiteError(RobotsDeniedError):
+    """A public URL may be retained as evidence but must not be fetched automatically."""
+
+
 class ResponseTooLargeError(ValueError):
     pass
 
@@ -149,10 +153,12 @@ class SafePublicWebFetcher:
             await self._client.aclose()
 
     async def fetch(self, url: str) -> FetchedDocument:
+        self._enforce_site_policy(url)
         requested_url = await validate_public_url(url, self._resolver)
         current_url = requested_url
         redirects = 0
         while True:
+            self._enforce_site_policy(current_url)
             current_url = await validate_public_url(current_url, self._resolver)
             if not await self._robots.allowed(current_url, self._user_agent):
                 raise RobotsDeniedError(f"robots.txt disallows {current_url}")
@@ -203,6 +209,14 @@ class SafePublicWebFetcher:
                 content_type=media_type,
                 body=bytes(body).decode(_charset(content_type), errors="replace"),
                 headers=safe_headers,
+            )
+
+    @staticmethod
+    def _enforce_site_policy(url: str) -> None:
+        hostname = (urlsplit(url).hostname or "").casefold().rstrip(".")
+        if hostname == "linkedin.com" or hostname.endswith(".linkedin.com"):
+            raise RestrictedSiteError(
+                "LinkedIn URLs may be retained from permitted search results but are not fetched"
             )
 
     async def _request_with_retries(self, url: str) -> httpx.Response:

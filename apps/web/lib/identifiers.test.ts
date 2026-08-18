@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isCompanyIdentifier } from "./identifiers";
+import { isCompanyIdentifier, isDatabaseUuid, isSchoolIdentifier } from "./identifiers";
 
 describe("company identifier validation", () => {
   it("accepts canonical slugs and UUIDs", () => {
@@ -11,5 +11,13 @@ describe("company identifier validation", () => {
   it("rejects SQL-like and path-like input before querying", () => {
     expect(isCompanyIdentifier("' or true --")).toBe(false);
     expect(isCompanyIdentifier("../companies")).toBe(false);
+  });
+});
+
+describe("school and entity identifiers", () => {
+  it("accepts school slugs but requires UUIDs for entity ids", () => {
+    expect(isSchoolIdentifier("ut-austin")).toBe(true);
+    expect(isDatabaseUuid("d3000000-0000-0000-0000-000000000001")).toBe(true);
+    expect(isDatabaseUuid("ut-austin")).toBe(false);
   });
 });

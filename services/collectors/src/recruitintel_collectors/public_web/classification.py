@@ -82,6 +82,13 @@ def classify_source(url: str, company: CompanyWebConfig) -> SourceAssessment:
             confidence=0.65,
             reasons=("github_domain",),
         )
+    if _host_matches(host, "linkedin.com"):
+        return SourceAssessment(
+            classification=WebSourceClassification.RECRUITER_PUBLIC_PAGE,
+            reliability_level=ReliabilityLevel.UNKNOWN,
+            confidence=0.50,
+            reasons=("restricted_public_profile_url", "page_content_not_fetched"),
+        )
     return SourceAssessment(
         classification=WebSourceClassification.PUBLIC_WEB,
         reliability_level=ReliabilityLevel.UNKNOWN,

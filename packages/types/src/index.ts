@@ -26,6 +26,7 @@ export const eventTypes = [
   "INTERVIEW_REPORT_DISCOVERED",
   "CAREER_PAGE_CHANGED",
   "CAMPUS_EVENT_DISCOVERED",
+  "SCHOOL_RECRUITING_SIGNAL",
   "RECRUITING_ARTICLE_DISCOVERED",
   "APPLICATION_DATE_SIGNAL",
   "HIRING_SIGNAL",
@@ -83,6 +84,42 @@ export const relevanceStatuses = [
 ] as const;
 export const datePrecisions = ["EXACT", "RANGE", "MONTH", "APPROXIMATE", "UNKNOWN"] as const;
 export const dateCertainties = ["CONFIRMED", "ESTIMATED", "HISTORICAL", "CLAIMED"] as const;
+export const recruiterProfileStatuses = ["ACTIVE", "UNVERIFIED", "STALE", "INACTIVE"] as const;
+export const recruiterRoleCategories = [
+  "UNIVERSITY_RECRUITING",
+  "EARLY_CAREER",
+  "TECHNICAL_RECRUITING",
+  "TALENT_ACQUISITION",
+  "CAMPUS_PROGRAMS",
+  "UNIVERSITY_PROGRAMS",
+  "EMERGING_TALENT",
+  "GENERAL_RECRUITING",
+  "OTHER",
+] as const;
+export const recruiterEvidenceTypes = [
+  "EMPLOYMENT",
+  "UNIVERSITY_RECRUITING",
+  "SCHOOL_CONNECTION",
+  "ROLE_FOCUS",
+  "CAMPUS_EVENT",
+  "RECRUITING_ANNOUNCEMENT",
+  "PUBLIC_PROFILE",
+  "OTHER",
+] as const;
+export const relationshipStrengths = ["HIGH", "MEDIUM", "LOW", "LIMITED_EVIDENCE"] as const;
+export const relationshipStatuses = ["ACTIVE", "UNVERIFIED", "STALE", "INACTIVE"] as const;
+export const freshnessStatuses = ["CURRENT", "AGING", "STALE", "UNKNOWN"] as const;
+export const campusRecruitingEventTypes = [
+  "CAREER_FAIR",
+  "INFO_SESSION",
+  "COMPANY_VISIT",
+  "TECH_TALK",
+  "COFFEE_CHAT",
+  "HACKATHON",
+  "RECRUITING_EVENT",
+  "INTERVIEW_EVENT",
+  "OTHER",
+] as const;
 
 export const githubRepositoryTypeSchema = z.enum(githubRepositoryTypes);
 export const githubParserTypeSchema = z.enum(githubParserTypes);
@@ -93,6 +130,13 @@ export const sourceReliabilityLevelSchema = z.enum(sourceReliabilityLevels);
 export const relevanceStatusSchema = z.enum(relevanceStatuses);
 export const datePrecisionSchema = z.enum(datePrecisions);
 export const dateCertaintySchema = z.enum(dateCertainties);
+export const recruiterProfileStatusSchema = z.enum(recruiterProfileStatuses);
+export const recruiterRoleCategorySchema = z.enum(recruiterRoleCategories);
+export const recruiterEvidenceTypeSchema = z.enum(recruiterEvidenceTypes);
+export const relationshipStrengthSchema = z.enum(relationshipStrengths);
+export const relationshipStatusSchema = z.enum(relationshipStatuses);
+export const freshnessStatusSchema = z.enum(freshnessStatuses);
+export const campusRecruitingEventTypeSchema = z.enum(campusRecruitingEventTypes);
 export const databaseUuidSchema = z
   .string()
   .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
@@ -449,6 +493,195 @@ export const publicWebIntelligenceSchema = z.object({
   latestClaims: z.array(publicRecruitingClaimSchema),
 });
 
+const publicHttpUrlSchema = z.url().refine((value) => {
+  const url = new URL(value);
+  return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password;
+}, "Must be a public HTTP(S) URL without credentials");
+
+export const companyReferenceSchema = z.object({
+  id: databaseUuidSchema,
+  name: z.string().min(1),
+  slug: z.string().min(1),
+});
+
+export const schoolSummarySchema = z.object({
+  id: databaseUuidSchema,
+  canonicalName: z.string().min(1),
+  slug: z.string().min(1),
+  aliases: z.array(z.string()),
+  domain: z.string().nullable(),
+  city: z.string().nullable(),
+  stateRegion: z.string().nullable(),
+  country: z.string().nullable(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+
+export const freshnessSchema = z.object({
+  status: freshnessStatusSchema,
+  ageDays: z.number().int().nonnegative().nullable(),
+  lastVerifiedAt: z.iso.datetime().nullable(),
+});
+
+export const recruiterEvidenceSchema = z.object({
+  id: databaseUuidSchema,
+  recruiterProfileId: databaseUuidSchema,
+  source: z.object({
+    id: databaseUuidSchema,
+    name: z.string().min(1),
+    type: z.string().min(1),
+    reliabilityScore: z.number().min(0).max(1),
+  }),
+  recruitingObservationId: databaseUuidSchema.nullable(),
+  sourceUrl: publicHttpUrlSchema,
+  evidenceType: recruiterEvidenceTypeSchema,
+  evidenceText: z.string().min(1),
+  observedAt: z.iso.datetime(),
+  publishedAt: z.iso.datetime().nullable(),
+  contentHash: z.string().regex(/^[0-9a-f]{64}$/),
+  fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+  reliability: sourceReliabilityLevelSchema,
+  confidence: z.number().min(0).max(1),
+  school: schoolSummarySchema.nullable(),
+  roleFamily: roleFamilySchema.nullable(),
+  metadata: z.record(z.string(), z.unknown()),
+});
+
+export const recruiterSchoolFocusSchema = z.object({
+  school: schoolSummarySchema,
+  strength: relationshipStrengthSchema,
+  reasons: z.array(z.string()),
+  evidenceCount: z.number().int().nonnegative(),
+  confidence: z.number().min(0).max(1),
+  status: relationshipStatusSchema,
+  firstObservedAt: z.iso.datetime(),
+  lastObservedAt: z.iso.datetime(),
+  freshness: freshnessSchema,
+});
+
+export const recruiterRoleFocusSchema = z.object({
+  roleFamily: roleFamilySchema,
+  strength: relationshipStrengthSchema,
+  reasons: z.array(z.string()),
+  evidenceCount: z.number().int().nonnegative(),
+  confidence: z.number().min(0).max(1),
+  firstObservedAt: z.iso.datetime(),
+  lastObservedAt: z.iso.datetime(),
+  freshness: freshnessSchema,
+});
+
+export const recruiterSummarySchema = z.object({
+  id: databaseUuidSchema,
+  personId: databaseUuidSchema,
+  name: z.string().min(1),
+  company: companyReferenceSchema,
+  title: z.string().min(1),
+  categories: z.array(recruiterRoleCategorySchema).min(1),
+  location: z.string().nullable(),
+  publicProfileUrl: publicHttpUrlSchema.nullable(),
+  status: recruiterProfileStatusSchema,
+  confidence: z.number().min(0).max(1),
+  firstSeenAt: z.iso.datetime(),
+  lastSeenAt: z.iso.datetime(),
+  lastVerifiedAt: z.iso.datetime(),
+  freshness: freshnessSchema,
+  schoolFocus: z.array(recruiterSchoolFocusSchema),
+  roleFocus: z.array(recruiterRoleFocusSchema),
+});
+
+export const recruiterDetailSchema = recruiterSummarySchema.extend({
+  evidence: z.array(recruiterEvidenceSchema),
+});
+
+export const campusRecruitingEventSchema = z.object({
+  id: databaseUuidSchema,
+  company: companyReferenceSchema,
+  school: schoolSummarySchema.nullable(),
+  title: z.string().min(1),
+  eventType: campusRecruitingEventTypeSchema,
+  description: z.string(),
+  startsAt: z.iso.datetime().nullable(),
+  endsAt: z.iso.datetime().nullable(),
+  dateStart: z.iso.date().nullable(),
+  dateEnd: z.iso.date().nullable(),
+  datePrecision: datePrecisionSchema,
+  dateCertainty: dateCertaintySchema,
+  location: z.string().nullable(),
+  isVirtual: z.boolean(),
+  registrationUrl: publicHttpUrlSchema.nullable(),
+  source: z.object({
+    id: databaseUuidSchema,
+    name: z.string().min(1),
+    type: z.string().min(1),
+    reliabilityScore: z.number().min(0).max(1),
+  }),
+  sourceUrl: publicHttpUrlSchema,
+  firstSeenAt: z.iso.datetime(),
+  lastVerifiedAt: z.iso.datetime(),
+  freshness: freshnessSchema,
+  confidence: z.number().min(0).max(1),
+  fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+  evidenceCount: z.number().int().positive(),
+  metadata: z.record(z.string(), z.unknown()),
+});
+
+export const schoolCompanyIntelligenceSchema = z.object({
+  company: companyReferenceSchema,
+  recruiterCount: z.number().int().nonnegative(),
+  campusEventCount: z.number().int().nonnegative(),
+  lastObservedAt: z.iso.datetime(),
+});
+
+export const recruiterListQuerySchema = listQuerySchema.extend({
+  category: recruiterRoleCategorySchema.optional(),
+  roleFamily: roleFamilySchema.optional(),
+  school: z.string().min(1).max(200).optional(),
+  includeStale: z
+    .enum(["true", "false"])
+    .transform((value) => value === "true")
+    .default(true),
+});
+
+export const campusEventListQuerySchema = listQuerySchema.extend({
+  eventType: campusRecruitingEventTypeSchema.optional(),
+  includePast: z
+    .enum(["true", "false"])
+    .transform((value) => value === "true")
+    .default(true),
+});
+
+export const schoolListQuerySchema = listQuerySchema.extend({
+  query: z.string().max(200).optional(),
+});
+
+export const createRecruiterRequestSchema = z.object({
+  name: z.string().min(2).max(200),
+  title: z.string().min(2).max(300),
+  location: z.string().max(300).optional(),
+  publicProfileUrl: publicHttpUrlSchema.optional(),
+  sourceUrl: publicHttpUrlSchema,
+  evidenceText: z.string().min(1).max(10_000),
+  observedAt: z.iso.datetime().optional(),
+  confidence: z.number().min(0).max(1).default(0.5),
+  reliability: sourceReliabilityLevelSchema.default("UNKNOWN"),
+  schoolIdentifiers: z.array(z.string().min(1).max(200)).max(20).default([]),
+  roleFamilies: z.array(roleFamilySchema).max(20).default([]),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+});
+
+export const createRecruiterEvidenceRequestSchema = z.object({
+  sourceUrl: publicHttpUrlSchema,
+  evidenceType: recruiterEvidenceTypeSchema,
+  evidenceText: z.string().min(1).max(10_000),
+  observedAt: z.iso.datetime().optional(),
+  publishedAt: z.iso.datetime().optional(),
+  reliability: sourceReliabilityLevelSchema.default("UNKNOWN"),
+  confidence: z.number().min(0).max(1).default(0.5),
+  schoolIdentifier: z.string().min(1).max(200).optional(),
+  roleFamily: roleFamilySchema.optional(),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+});
+
 export type Company = z.infer<typeof companySchema>;
 export type Job = z.infer<typeof jobSchema>;
 export type RecruitingEvent = z.infer<typeof recruitingEventSchema>;
@@ -465,3 +698,10 @@ export type WebSearchQuery = z.infer<typeof webSearchQuerySchema>;
 export type PublicWebWorkRequest = z.infer<typeof publicWebWorkRequestSchema>;
 export type WebSearchRequest = z.infer<typeof webSearchRequestSchema>;
 export type PublicWebIntelligence = z.infer<typeof publicWebIntelligenceSchema>;
+export type SchoolSummary = z.infer<typeof schoolSummarySchema>;
+export type RecruiterEvidence = z.infer<typeof recruiterEvidenceSchema>;
+export type RecruiterSummary = z.infer<typeof recruiterSummarySchema>;
+export type RecruiterDetail = z.infer<typeof recruiterDetailSchema>;
+export type CampusRecruitingEvent = z.infer<typeof campusRecruitingEventSchema>;
+export type CreateRecruiterRequest = z.infer<typeof createRecruiterRequestSchema>;
+export type CreateRecruiterEvidenceRequest = z.infer<typeof createRecruiterEvidenceRequestSchema>;

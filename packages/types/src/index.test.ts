@@ -2,12 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   attachGithubRepositoryRequestSchema,
+  createRecruiterEvidenceRequestSchema,
+  createRecruiterRequestSchema,
   interviewQuestionAnalyticsSchema,
   jobsQuerySchema,
   publicRecruitingClaimSchema,
   publicRecruitingObservationSchema,
   publicWebIntelligenceSchema,
   roleFamilySchema,
+  recruiterDetailSchema,
   webSearchRequestSchema,
 } from "./index";
 
@@ -143,5 +146,107 @@ describe("API query schemas", () => {
         latestClaims: [],
       }),
     ).toMatchObject({ candidateCounts: { total: 0 }, latestClaims: [] });
+  });
+
+  it("applies conservative defaults to manual recruiter evidence", () => {
+    expect(
+      createRecruiterRequestSchema.parse({
+        name: "Jane Smith",
+        title: "University Recruiter",
+        sourceUrl: "https://example.edu/events/company",
+        evidenceText: "Jane Smith is listed as the university recruiter contact.",
+      }),
+    ).toMatchObject({ confidence: 0.5, reliability: "UNKNOWN", schoolIdentifiers: [] });
+    expect(
+      createRecruiterEvidenceRequestSchema.parse({
+        sourceUrl: "https://example.edu/events/company",
+        evidenceType: "SCHOOL_CONNECTION",
+        evidenceText: "Jane Smith is the listed contact for this event.",
+      }),
+    ).toMatchObject({ confidence: 0.5, reliability: "UNKNOWN" });
+  });
+
+  it("validates recruiter provenance, categorical relevance, and freshness", () => {
+    const school = {
+      id: "d2000000-0000-0000-0000-000000000001",
+      canonicalName: "University of Texas at Austin",
+      slug: "ut-austin",
+      aliases: ["UT Austin"],
+      domain: "utexas.edu",
+      city: "Austin",
+      stateRegion: "Texas",
+      country: "US",
+      createdAt: "2026-08-18T00:00:00.000Z",
+      updatedAt: "2026-08-18T00:00:00.000Z",
+    };
+    const recruiter = recruiterDetailSchema.parse({
+      id: "d3000000-0000-0000-0000-000000000001",
+      personId: "d3000000-0000-0000-0000-000000000002",
+      name: "Jane Smith",
+      company: {
+        id: "10000000-0000-0000-0000-000000000001",
+        name: "Stripe",
+        slug: "stripe",
+      },
+      title: "University Recruiter",
+      categories: ["UNIVERSITY_RECRUITING"],
+      location: null,
+      publicProfileUrl: null,
+      status: "ACTIVE",
+      confidence: 0.9,
+      firstSeenAt: "2026-08-01T00:00:00.000Z",
+      lastSeenAt: "2026-08-18T00:00:00.000Z",
+      lastVerifiedAt: "2026-08-18T00:00:00.000Z",
+      freshness: {
+        status: "CURRENT",
+        ageDays: 0,
+        lastVerifiedAt: "2026-08-18T00:00:00.000Z",
+      },
+      schoolFocus: [
+        {
+          school,
+          strength: "HIGH",
+          reasons: ["two_independent_sources", "explicit_relationship"],
+          evidenceCount: 2,
+          confidence: 0.9,
+          status: "ACTIVE",
+          firstObservedAt: "2026-08-01T00:00:00.000Z",
+          lastObservedAt: "2026-08-18T00:00:00.000Z",
+          freshness: {
+            status: "CURRENT",
+            ageDays: 0,
+            lastVerifiedAt: "2026-08-18T00:00:00.000Z",
+          },
+        },
+      ],
+      roleFocus: [],
+      evidence: [
+        {
+          id: "d4000000-0000-0000-0000-000000000001",
+          recruiterProfileId: "d3000000-0000-0000-0000-000000000001",
+          source: {
+            id: "d5000000-0000-0000-0000-000000000001",
+            name: "UT Austin careers",
+            type: "UNIVERSITY",
+            reliabilityScore: 0.9,
+          },
+          recruitingObservationId: null,
+          sourceUrl: "https://example.edu/events/company",
+          evidenceType: "SCHOOL_CONNECTION",
+          evidenceText: "Jane Smith is listed as the recruiter contact.",
+          observedAt: "2026-08-18T00:00:00.000Z",
+          publishedAt: null,
+          contentHash: "a".repeat(64),
+          fingerprint: "b".repeat(64),
+          reliability: "HIGH",
+          confidence: 0.9,
+          school,
+          roleFamily: null,
+          metadata: {},
+        },
+      ],
+    });
+    expect(recruiter.schoolFocus[0]?.strength).toBe("HIGH");
+    expect(recruiter.evidence[0]?.source.name).toBe("UT Austin careers");
   });
 });
