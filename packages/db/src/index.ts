@@ -4,6 +4,7 @@ export * from "./github";
 export * from "./interview-questions";
 export * from "./public-web";
 export * from "./recruiter-campus";
+export * from "./calendar";
 
 export interface CompanyRecord {
   id: string;

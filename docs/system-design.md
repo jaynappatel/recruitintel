@@ -381,13 +381,37 @@ erDiagram
 
 Person and recruiter identity, source evidence, and school/role/event projections are separate. Exact normalized identity and evidence fingerprints provide retry deduplication; ambiguous identities remain unresolved. Relationship strength is a transparent categorical projection over immutable evidence. Milestone 4 reuses `WEB_PROCESS` and existing observations rather than introducing another crawler. Exact contracts and operating rules are documented in `docs/recruiter-campus-intelligence.md`.
 
+## Milestone 5 ERD extensions
+
+Migration `0005_recruiting_calendar.sql` adds:
+
+```mermaid
+erDiagram
+  PUBLIC_RECRUITING_OBSERVATIONS ||--o| RECRUITING_DATES : projects
+  CAMPUS_RECRUITING_EVENTS ||--o| RECRUITING_DATES : projects
+  RECRUITING_DATES ||--o{ CALENDAR_ITEMS : displays_as
+  COMPANIES ||--o{ APPLICATION_PLANS : targets
+  APPLICATION_PLANS ||--o{ APPLICATION_PLAN_TASKS : generates
+  APPLICATION_PLAN_TASKS ||--|| CALENDAR_ITEMS : schedules
+  CALENDAR_CONNECTIONS ||--o{ CALENDAR_SYNC_REQUESTS : queues
+  CALENDAR_SYNC_REQUESTS ||--o{ CALENDAR_SYNC_RUNS : attempts
+  CALENDAR_CONNECTIONS ||--o{ CALENDAR_EXTERNAL_EVENTS : owns
+  CALENDAR_ITEMS ||--o{ CALENDAR_EXTERNAL_EVENTS : maps
+```
+
+Recruiting facts, owner actions, generated plan metadata, provider connections, and external event
+identity remain separate. Source fingerprints deduplicate intelligence projections; owner/date and
+plan sequence constraints prevent projection/task duplication. External mappings and deterministic
+Google event IDs make provider retries idempotent. Refresh credentials use a versioned encryption
+abstraction and access tokens remain ephemeral.
+
 ## Future ERD extensions
 
 Later migrations add:
 
 - `watchlists`, users, and watchlist companies.
 - `alerts` and notification deliveries.
-- calendar synchronization and application tracking.
+- application tracking CRM and analytics projections.
 
 These tables link back to `sources`, `observations`, and `recruiting_events`; they do not introduce alternative provenance systems.
 
@@ -411,11 +435,20 @@ Milestone 3 adds typed public-web intelligence, observation/detail, claim, and s
 
 Milestone 4 adds typed recruiter/evidence and company/school/campus-event reads plus admin-authenticated manual recruiter/evidence writes. Responses always expose source provenance, categorical relationship reasons, and freshness. Exact frontend response shapes are documented in `docs/recruiter-campus-intelligence.md`.
 
+Milestone 5 adds owner-scoped recruiting-date/calendar/application-plan APIs plus a provider-neutral,
+one-way Calendar sync queue. OAuth routes retain state and refresh credentials only on the server;
+provider calls run in the finite Python worker. Exact contracts are documented in
+`docs/recruiting-calendar.md` and setup is in `docs/google-calendar-integration.md`.
+
 ## Local development and deployment
 
 Docker Compose runs PostgreSQL only. The web app and Python collector run on the host for fast feedback. Migrations and seed SQL are explicit scripts. Seed data includes recognizable companies and synthetic local jobs/events, clearly labeled as seed/demo records. Basic UI development therefore needs no network or provider credentials.
 
 Scheduling is an interface at the process boundary: `python -m recruitintel_collectors run --source <uuid>` performs one finite sync and returns a meaningful exit code. Local cron, GitHub Actions, Supabase scheduling, Celery, Temporal, or another orchestrator can invoke that command later without changing collector domain code.
+
+Calendar synchronization uses the same boundary:
+`python -m recruitintel_collectors calendar-sync --request-id <uuid>`. The HTTP route only creates
+or returns an active durable request.
 
 ## Security and trust boundaries
 

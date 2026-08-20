@@ -682,6 +682,315 @@ export const createRecruiterEvidenceRequestSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).default({}),
 });
 
+export const recruitingDateTypes = [
+  "APPLICATION_OPEN",
+  "APPLICATION_DEADLINE",
+  "EXPECTED_OPENING_WINDOW",
+  "CAREER_FAIR",
+  "CAMPUS_EVENT",
+  "INFO_SESSION",
+  "INTERVIEW_EVENT",
+  "OTHER",
+] as const;
+export const calendarDateCertainties = [
+  "CONFIRMED",
+  "ESTIMATED",
+  "HISTORICAL",
+  "CLAIMED",
+  "USER_CREATED",
+] as const;
+export const calendarItemTypes = [
+  "RECRUITING_DATE",
+  "APPLICATION_TASK",
+  "LEETCODE",
+  "INTERVIEW_PREP",
+  "SYSTEM_DESIGN",
+  "BEHAVIORAL_PREP",
+  "RECRUITER_OUTREACH",
+  "RESUME_WORK",
+  "CAREER_EVENT",
+  "OA",
+  "CUSTOM",
+] as const;
+export const calendarItemStatuses = ["TODO", "DONE", "SKIPPED", "CANCELLED"] as const;
+export const calendarItemSources = ["RECRUITING_INTELLIGENCE", "USER", "APPLICATION_PLAN"] as const;
+export const applicationPlanStatuses = ["DRAFT", "ACTIVE", "COMPLETED", "ARCHIVED"] as const;
+export const calendarConnectionStatuses = [
+  "CONNECTED",
+  "REAUTH_REQUIRED",
+  "DISCONNECTED",
+  "ERROR",
+] as const;
+export const calendarSyncStatuses = ["PENDING", "SYNCED", "UNCHANGED", "DELETED", "ERROR"] as const;
+
+export const recruitingDateTypeSchema = z.enum(recruitingDateTypes);
+export const calendarDateCertaintySchema = z.enum(calendarDateCertainties);
+export const calendarItemTypeSchema = z.enum(calendarItemTypes);
+export const calendarItemStatusSchema = z.enum(calendarItemStatuses);
+export const calendarItemSourceSchema = z.enum(calendarItemSources);
+export const applicationPlanStatusSchema = z.enum(applicationPlanStatuses);
+export const calendarConnectionStatusSchema = z.enum(calendarConnectionStatuses);
+export const calendarSyncStatusSchema = z.enum(calendarSyncStatuses);
+
+const timezoneSchema = z
+  .string()
+  .min(1)
+  .max(100)
+  .refine((value) => {
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: value });
+      return true;
+    } catch {
+      return false;
+    }
+  }, "Timezone must be a valid IANA time zone");
+
+const calendarCompanySchema = z.object({
+  id: databaseUuidSchema,
+  name: z.string().min(1),
+  slug: z.string().min(1),
+});
+
+export const recruitingDateSchema = z.object({
+  id: databaseUuidSchema,
+  company: calendarCompanySchema.nullable(),
+  jobId: databaseUuidSchema.nullable(),
+  schoolId: databaseUuidSchema.nullable(),
+  recruitingEventId: databaseUuidSchema.nullable(),
+  campusRecruitingEventId: databaseUuidSchema.nullable(),
+  publicRecruitingObservationId: databaseUuidSchema.nullable(),
+  publicRecruitingClaimId: databaseUuidSchema.nullable(),
+  type: recruitingDateTypeSchema,
+  title: z.string().min(1),
+  startsAt: z.iso.datetime(),
+  endsAt: z.iso.datetime().nullable(),
+  startsOn: z.iso.date().nullable(),
+  endsOn: z.iso.date().nullable(),
+  allDay: z.boolean(),
+  timezone: timezoneSchema,
+  dateCertainty: calendarDateCertaintySchema,
+  datePrecision: datePrecisionSchema,
+  confidence: z.number().min(0).max(1).nullable(),
+  source: z.object({
+    kind: z.enum([
+      "PUBLIC_OBSERVATION",
+      "PUBLIC_CLAIM",
+      "CAMPUS_EVENT",
+      "RECRUITING_EVENT",
+      "USER",
+    ]),
+    name: z.string().nullable(),
+    url: z.url().nullable(),
+    provenance: z.record(z.string(), z.unknown()),
+  }),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+
+export const calendarItemSchema = z.object({
+  id: databaseUuidSchema,
+  company: calendarCompanySchema.nullable(),
+  jobId: databaseUuidSchema.nullable(),
+  recruitingDateId: databaseUuidSchema.nullable(),
+  applicationPlanId: databaseUuidSchema.nullable(),
+  type: calendarItemTypeSchema,
+  title: z.string().min(1),
+  description: z.string().nullable(),
+  startsAt: z.iso.datetime(),
+  endsAt: z.iso.datetime().nullable(),
+  startsOn: z.iso.date().nullable(),
+  endsOn: z.iso.date().nullable(),
+  allDay: z.boolean(),
+  timezone: timezoneSchema,
+  status: calendarItemStatusSchema,
+  source: calendarItemSourceSchema,
+  syncEnabled: z.boolean(),
+  completedAt: z.iso.datetime().nullable(),
+  metadata: z.record(z.string(), z.unknown()),
+  recruitingDate: recruitingDateSchema.nullable(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+
+const calendarTimingSchema = z
+  .object({
+    startsAt: z.iso.datetime().optional(),
+    endsAt: z.iso.datetime().optional(),
+    startsOn: z.iso.date().optional(),
+    endsOn: z.iso.date().optional(),
+    allDay: z.boolean().default(false),
+    timezone: timezoneSchema,
+  })
+  .superRefine((value, context) => {
+    if (value.allDay && !value.startsOn) {
+      context.addIssue({
+        code: "custom",
+        path: ["startsOn"],
+        message: "All-day items need startsOn",
+      });
+    }
+    if (!value.allDay && !value.startsAt) {
+      context.addIssue({
+        code: "custom",
+        path: ["startsAt"],
+        message: "Timed items need startsAt",
+      });
+    }
+    if (value.endsOn && !value.startsOn) {
+      context.addIssue({ code: "custom", path: ["endsOn"], message: "endsOn requires startsOn" });
+    }
+  });
+
+export const createCalendarItemRequestSchema = calendarTimingSchema.and(
+  z.object({
+    companyId: databaseUuidSchema.optional(),
+    jobId: databaseUuidSchema.optional(),
+    type: calendarItemTypeSchema.exclude(["RECRUITING_DATE"]),
+    title: z.string().trim().min(1).max(300),
+    description: z.string().trim().max(5_000).optional(),
+    status: calendarItemStatusSchema.default("TODO"),
+    syncEnabled: z.boolean().default(false),
+    metadata: z.record(z.string(), z.unknown()).default({}),
+  }),
+);
+
+export const updateCalendarItemRequestSchema = z
+  .object({
+    title: z.string().trim().min(1).max(300).optional(),
+    description: z.string().trim().max(5_000).nullable().optional(),
+    startsAt: z.iso.datetime().optional(),
+    endsAt: z.iso.datetime().nullable().optional(),
+    startsOn: z.iso.date().nullable().optional(),
+    endsOn: z.iso.date().nullable().optional(),
+    allDay: z.boolean().optional(),
+    timezone: timezoneSchema.optional(),
+    status: calendarItemStatusSchema.optional(),
+    syncEnabled: z.boolean().optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, "At least one field is required");
+
+const calendarBoundarySchema = z.union([z.iso.datetime(), z.iso.date()]);
+export const calendarQuerySchema = z.object({
+  start: calendarBoundarySchema.optional(),
+  end: calendarBoundarySchema.optional(),
+  type: calendarItemTypeSchema.optional(),
+  company: z.string().min(1).max(200).optional(),
+  status: calendarItemStatusSchema.optional(),
+});
+
+export const applicationPlanTemplateStepSchema = z.object({
+  relativeDayOffset: z.number().int().min(-365).max(365),
+  taskType: calendarItemTypeSchema.exclude(["RECRUITING_DATE"]),
+  title: z.string().trim().min(1).max(200),
+  generatedReason: z.string().trim().min(1).max(1_000),
+});
+
+export const createApplicationPlanRequestSchema = z.object({
+  companyId: databaseUuidSchema,
+  jobId: databaseUuidSchema.optional(),
+  recruitingDateId: databaseUuidSchema.optional(),
+  title: z.string().trim().min(1).max(300),
+  targetDate: z.iso.date(),
+  timezone: timezoneSchema,
+  template: z.array(applicationPlanTemplateStepSchema).min(1).max(30).optional(),
+});
+
+export const updateApplicationPlanRequestSchema = z
+  .object({
+    title: z.string().trim().min(1).max(300).optional(),
+    targetDate: z.iso.date().optional(),
+    timezone: timezoneSchema.optional(),
+    status: applicationPlanStatusSchema.optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, "At least one field is required");
+
+export const activateApplicationPlanRequestSchema = z.object({
+  sync: z.boolean().default(false),
+});
+
+export const applicationPlanTaskSchema = z.object({
+  id: databaseUuidSchema,
+  sequence: z.number().int().nonnegative(),
+  relativeDayOffset: z.number().int().nullable(),
+  taskType: calendarItemTypeSchema,
+  generatedReason: z.string().min(1),
+  metadata: z.record(z.string(), z.unknown()),
+  createdAt: z.iso.datetime(),
+  calendarItem: calendarItemSchema,
+});
+
+export const applicationPlanSchema = z.object({
+  id: databaseUuidSchema,
+  company: calendarCompanySchema,
+  jobId: databaseUuidSchema.nullable(),
+  recruitingDateId: databaseUuidSchema.nullable(),
+  title: z.string().min(1),
+  targetDate: z.iso.date(),
+  timezone: timezoneSchema,
+  status: applicationPlanStatusSchema,
+  templateVersion: z.number().int().positive(),
+  metadata: z.record(z.string(), z.unknown()),
+  activatedAt: z.iso.datetime().nullable(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+  tasks: z.array(applicationPlanTaskSchema),
+});
+
+export const applicationPlanQuerySchema = z.object({
+  company: z.string().min(1).max(200).optional(),
+  status: applicationPlanStatusSchema.optional(),
+});
+
+export const calendarSyncPreferencesSchema = z.object({
+  syncRecruitingDates: z.boolean(),
+  syncApplicationTasks: z.boolean(),
+  syncLeetcode: z.boolean(),
+  syncInterviewPrep: z.boolean(),
+  syncCareerEvents: z.boolean(),
+});
+
+export const googleCalendarStatusSchema = z.object({
+  provider: z.literal("GOOGLE"),
+  status: calendarConnectionStatusSchema,
+  accountEmail: z.string().email().nullable(),
+  selectedCalendarId: z.string().min(1),
+  scopes: z.array(z.string()),
+  preferences: calendarSyncPreferencesSchema,
+  lastSyncAt: z.iso.datetime().nullable(),
+  lastSyncStatus: calendarSyncStatusSchema.nullable(),
+  reconnectRequired: z.boolean(),
+  errorCode: z.string().nullable(),
+});
+
+export const updateGoogleCalendarRequestSchema = z
+  .object({
+    selectedCalendarId: z.string().trim().min(1).max(1_000).optional(),
+    preferences: calendarSyncPreferencesSchema.partial().optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, "At least one field is required");
+
+export const googleCalendarAuthorizeSchema = z.object({
+  authorizeUrl: z.url(),
+  expiresAt: z.iso.datetime(),
+});
+
+export const googleCalendarOptionSchema = z.object({
+  id: z.string().min(1),
+  summary: z.string().min(1),
+  primary: z.boolean(),
+  timezone: timezoneSchema.nullable(),
+  accessRole: z.literal("owner"),
+});
+
+export const calendarSyncRequestSchema = z.object({
+  id: databaseUuidSchema,
+  connectionId: databaseUuidSchema,
+  status: z.enum(["PENDING", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"]),
+  attemptCount: z.number().int().nonnegative(),
+  requestedAt: z.iso.datetime(),
+});
+
 export type Company = z.infer<typeof companySchema>;
 export type Job = z.infer<typeof jobSchema>;
 export type RecruitingEvent = z.infer<typeof recruitingEventSchema>;
@@ -705,3 +1014,15 @@ export type RecruiterDetail = z.infer<typeof recruiterDetailSchema>;
 export type CampusRecruitingEvent = z.infer<typeof campusRecruitingEventSchema>;
 export type CreateRecruiterRequest = z.infer<typeof createRecruiterRequestSchema>;
 export type CreateRecruiterEvidenceRequest = z.infer<typeof createRecruiterEvidenceRequestSchema>;
+export type RecruitingDate = z.infer<typeof recruitingDateSchema>;
+export type CalendarItem = z.infer<typeof calendarItemSchema>;
+export type CreateCalendarItemRequest = z.infer<typeof createCalendarItemRequestSchema>;
+export type UpdateCalendarItemRequest = z.infer<typeof updateCalendarItemRequestSchema>;
+export type CalendarQuery = z.infer<typeof calendarQuerySchema>;
+export type ApplicationPlan = z.infer<typeof applicationPlanSchema>;
+export type CreateApplicationPlanRequest = z.infer<typeof createApplicationPlanRequestSchema>;
+export type UpdateApplicationPlanRequest = z.infer<typeof updateApplicationPlanRequestSchema>;
+export type GoogleCalendarStatus = z.infer<typeof googleCalendarStatusSchema>;
+export type UpdateGoogleCalendarRequest = z.infer<typeof updateGoogleCalendarRequestSchema>;
+export type CalendarSyncRequest = z.infer<typeof calendarSyncRequestSchema>;
+export type GoogleCalendarOption = z.infer<typeof googleCalendarOptionSchema>;

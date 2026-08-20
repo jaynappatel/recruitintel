@@ -6,9 +6,15 @@ from pathlib import Path
 from uuid import UUID
 
 from recruitintel_collectors.adapters import GreenhouseCollector, LeverCollector
+from recruitintel_collectors.calendar.encryption import AesGcmCredentialCipher
+from recruitintel_collectors.calendar.provider import GoogleCalendarProvider, GoogleTokenRefresher
+from recruitintel_collectors.calendar.runner import CalendarSyncWorker
 from recruitintel_collectors.config import Settings
 from recruitintel_collectors.github.client import OfficialGitHubClient
 from recruitintel_collectors.github.runner import GitHubSyncRunner
+from recruitintel_collectors.infrastructure.calendar_postgres import (
+    PostgresCalendarSyncRepository,
+)
 from recruitintel_collectors.infrastructure.github_postgres import PostgresGitHubSyncRepository
 from recruitintel_collectors.infrastructure.http import ProviderHttpClient
 from recruitintel_collectors.infrastructure.postgres import PostgresCollectorRepository
@@ -45,6 +51,10 @@ def _parser() -> argparse.ArgumentParser:
         help="Process one existing public recruiting observation without re-fetching",
     )
     recruiter_campus.add_argument("--observation-id", type=UUID, required=True)
+    calendar_sync = subcommands.add_parser(
+        "calendar-sync", help="Run one durable Google Calendar sync request"
+    )
+    calendar_sync.add_argument("--request-id", type=UUID, required=True)
     subcommands.add_parser("list-sources", help="List configured ATS source IDs")
     return parser
 
@@ -121,6 +131,30 @@ async def _execute(arguments: argparse.Namespace) -> int:
         )
         print(recruiter_stats.model_dump_json())
         return 0
+
+    if arguments.command == "calendar-sync":
+        if not settings.google_client_id or not settings.google_client_secret:
+            raise ValueError("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are required")
+        if not settings.calendar_token_encryption_key:
+            raise ValueError("CALENDAR_TOKEN_ENCRYPTION_KEY is required")
+        calendar_repository = PostgresCalendarSyncRepository(settings.database_url)
+        token_refresher = GoogleTokenRefresher(
+            client_id=settings.google_client_id,
+            client_secret=settings.google_client_secret,
+        )
+        try:
+            calendar_worker = CalendarSyncWorker(
+                repository=calendar_repository,
+                cipher=AesGcmCredentialCipher(settings.calendar_token_encryption_key),
+                token_refresher=token_refresher,
+                provider_factory=GoogleCalendarProvider,
+                app_url=settings.recruitintel_app_url,
+            )
+            calendar_stats = await calendar_worker.run(arguments.request_id)
+            print(calendar_stats.model_dump_json())
+            return 0
+        finally:
+            await token_refresher.aclose()
 
     async with ProviderHttpClient(
         user_agent=settings.user_agent,

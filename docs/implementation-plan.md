@@ -268,13 +268,26 @@ Known Milestone 4 technical debt:
 - the MVP admin bearer token should become scoped service/user authorization;
 - durable work still needs an external scheduler invocation.
 
-## Deferred milestones
+## Milestone 5 — Recruiting calendar and application planning (implemented)
 
-### Milestone 5 — Watchlists, alerts, application tracking, and activity scoring (not started)
+The user-directed Milestone 5 supersedes the earlier placeholder grouping. It adds:
 
-Multi-user-ready watchlists, database notification provider, application tracking, and an explainable score made from event aggregates.
+- provenance-preserving recruiting dates derived from public observations and campus events;
+- owner-scoped calendar items with explicit all-day/local-time semantics;
+- configurable deterministic application plans and topic-aware, caveated interview prep metadata;
+- Google web-server OAuth with single-use state, PKCE, narrow scopes, and encrypted refresh tokens;
+- provider-neutral one-way sync, durable finite-worker requests/runs, and idempotent external mapping;
+- stable typed APIs and an exact adapter handoff for Claude's existing mock-backed UI.
 
-### Milestone 6 — Analytics and ML dataset preparation
+Implementation and operating contracts are in `docs/recruiting-calendar.md` and
+`docs/google-calendar-integration.md`.
+
+## Deferred work (not started)
+
+Watchlists, alerts/notification delivery, the application-tracking CRM, activity scoring,
+multi-user authentication, and production deployment remain unsequenced and untouched.
+
+### Analytics and ML dataset preparation
 
 Point-in-time feature jobs, data quality reporting, leakage-safe labeled datasets, seasonal baselines, logistic regression baseline design, and model monitoring. Model training starts only when history and label quality justify it.
 

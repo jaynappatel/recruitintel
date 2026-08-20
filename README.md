@@ -160,7 +160,7 @@ DATABASE_URL="$TEST_DATABASE_URL" pnpm db:migrate
 uv run pytest -m integration
 ```
 
-The integration fixtures use reserved test UUIDs. They verify the full ATS lifecycle, a synthetic GitHub flow from sync through analytics, a synthetic public-web flow from search through candidate deduplication/fetch/change/no-op/observations/conflicts/events, and recruiter/campus flow from public observation through extraction, graph evidence, retry idempotency, recruiting events, and typed API projection. Never set `TEST_DATABASE_URL` to a shared or production database.
+The integration fixtures use reserved test UUIDs. They verify the full ATS lifecycle, a synthetic GitHub flow from sync through analytics, a synthetic public-web flow from search through candidate deduplication/fetch/change/no-op/observations/conflicts/events, recruiter/campus flow from public observation through typed projection, and the recruiting-date/application-plan/calendar/mock-provider path through retry-safe external mappings. Never set `TEST_DATABASE_URL` to a shared or production database.
 
 ## Environment variables
 
@@ -171,6 +171,10 @@ All supported values and local defaults are in `.env.example`:
 - `RECRUITINTEL_USER_AGENT`: identifying provider request header;
 - `GITHUB_TOKEN`: optional worker-only official GitHub API token;
 - `RECRUITINTEL_ADMIN_TOKEN`: bearer token for GitHub, public-web, and recruiter-evidence mutations;
+- `RECRUITINTEL_MVP_OWNER_ID`: server-resolved Milestone 5 owner UUID (not browser-selected);
+- `RECRUITINTEL_APP_URL`: base URL used for bounded calendar description links;
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`: Google web-server OAuth;
+- `CALENDAR_TOKEN_ENCRYPTION_KEY`: 32-byte AES-GCM key shared by web and finite worker;
 - `PUBLIC_WEB_STATIC_RESULTS_FILE`: optional JSON fixture/provider input keyed by exact generated query;
 - `PUBLIC_WEB_MAX_RESPONSE_BYTES`: independent public HTML response limit;
 - `PUBLIC_WEB_REQUESTS_PER_SECOND`: per-host public-web request rate;
@@ -185,4 +189,4 @@ All supported values and local defaults are in `.env.example`:
 - A failed, partial, malformed, or concurrent sync cannot infer mass closures.
 - Collected text must never be promoted into executable instructions for a future LLM.
 
-See the [Milestone 1 record](docs/milestone-1.md), [GitHub intelligence](docs/github-intelligence.md), [public web intelligence](docs/public-web-intelligence.md), [recruiter and campus intelligence](docs/recruiter-campus-intelligence.md), and [ML roadmap](docs/ml-roadmap.md) for implemented scope and the leakage-safe future dataset design.
+See the [Milestone 1 record](docs/milestone-1.md), [GitHub intelligence](docs/github-intelligence.md), [public web intelligence](docs/public-web-intelligence.md), [recruiter and campus intelligence](docs/recruiter-campus-intelligence.md), [recruiting calendar contracts](docs/recruiting-calendar.md), [Google Calendar setup](docs/google-calendar-integration.md), and [ML roadmap](docs/ml-roadmap.md) for implemented scope and future boundaries.

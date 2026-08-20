@@ -33,6 +33,12 @@ try {
       (select count(*) from public.campus_recruiting_events)::int as campus_recruiting_events,
       (select count(*) from public.unresolved_recruiter_observations)::int
         as unresolved_recruiter_observations,
+      (select count(*) from public.recruiting_dates)::int as recruiting_dates,
+      (select count(*) from public.calendar_items)::int as calendar_items,
+      (select count(*) from public.application_plans)::int as application_plans,
+      (select count(*) from public.calendar_connections)::int as calendar_connections,
+      (select count(*) from public.calendar_external_events)::int as calendar_external_events,
+      (select count(*) from public.calendar_sync_runs)::int as calendar_sync_runs,
       (select count(*) from public.recruiting_events)::int as events,
       (select count(*) from public.schema_migrations)::int as migrations
   `;
@@ -52,6 +58,10 @@ try {
     "recruiter_evidence_fingerprint_key",
     "campus_recruiting_events_fingerprint_key",
     "unresolved_recruiter_observations_fingerprint_key",
+    "recruiting_dates_source_fingerprint_key",
+    "application_plans_owner_id_plan_fingerprint_key",
+    "calendar_external_events_calendar_item_id_calendar_connecti_key",
+    "calendar_external_events_calendar_connection_id_external_ca_key",
   ];
   const constraints = await sql`
     select conname
@@ -59,8 +69,16 @@ try {
     where connamespace = 'public'::regnamespace
       and conname in ${sql(requiredConstraints)}
   `;
+  const requiredIndexes = [
+    "calendar_items_recruiting_date_owner_unique_idx",
+    "calendar_sync_requests_active_unique_idx",
+  ];
+  const indexes = await sql`
+    select indexname from pg_indexes
+    where schemaname = 'public' and indexname in ${sql(requiredIndexes)}
+  `;
 
-  if (!counts || counts.migrations < 4) {
+  if (!counts || counts.migrations < 5) {
     throw new Error("no applied RecruitIntel migrations were found");
   }
   if (counts.companies < 1 || counts.sources < 1 || counts.schools < 1) {
@@ -76,6 +94,9 @@ try {
   }
   if (constraints.length !== requiredConstraints.length) {
     throw new Error("database deduplication constraints are missing");
+  }
+  if (indexes.length !== requiredIndexes.length) {
+    throw new Error("calendar partial idempotency indexes are missing");
   }
 
   console.log(JSON.stringify({ status: "ok", ...counts }));
