@@ -3,7 +3,7 @@
 import { Check } from "lucide-react";
 import Link from "next/link";
 
-import type { CalendarItem } from "@/lib/types/calendar";
+import type { CalendarItemView } from "@/lib/types/calendar";
 import { formatCompactDate } from "@recruitintel/shared";
 
 import { CategoryLabel } from "./category-badge";
@@ -15,9 +15,9 @@ export function UpcomingAgenda({
   onSelectItem,
   onToggleComplete,
 }: {
-  items: CalendarItem[];
+  items: CalendarItemView[];
   onSelectItem: (id: string) => void;
-  onToggleComplete: (item: CalendarItem) => void;
+  onToggleComplete: (item: CalendarItemView) => void;
 }) {
   const actionable = items.filter((item) => item.category !== "RECRUITING_DATE");
 
@@ -71,6 +71,7 @@ export function UpcomingAgenda({
                     <span>{formatItemType(item.type)}</span>
                     <span>·</span>
                     <span>{formatCompactDate(item.date)}</span>
+                    {!item.allDay && item.time && <span>{item.time}</span>}
                     {item.companyName &&
                       (item.companySlug ? (
                         <Link

@@ -1,113 +1,92 @@
-/**
- * Frontend-owned calendar domain model. Codex has not exposed calendar/planner
- * endpoints yet, so this module is the contract the mocked API layer in
- * lib/api/calendar.ts implements. When real endpoints land, only that file
- * (and the fetch bodies inside it) should need to change — components and
- * pages consume the functions, never the mock store directly.
- */
+import type {
+  ApplicationPlan,
+  CalendarItem as CanonicalCalendarItem,
+  CalendarSyncRequest,
+  Company,
+  GoogleCalendarOption,
+  GoogleCalendarStatus,
+} from "@recruitintel/types";
 
-/** How certain RecruitIntel is about a date. Never render ESTIMATED/HISTORICAL like CONFIRMED. */
-export const calendarStatuses = ["CONFIRMED", "ESTIMATED", "HISTORICAL", "USER_SCHEDULED"] as const;
-export type CalendarStatus = (typeof calendarStatuses)[number];
-
-/** The three information families the calendar combines. */
+/** Presentation-only groupings used by the existing Calendar visual design. */
 export const calendarCategories = ["RECRUITING_DATE", "ACTION", "PREP_SESSION"] as const;
 export type CalendarCategory = (typeof calendarCategories)[number];
 
-export const calendarItemTypes = [
-  // RECRUITING_DATE
-  "INTERNSHIP_OPENING",
-  "NEW_GRAD_OPENING",
+/**
+ * Date certainty shown by the UI. Scheduling state remains available separately
+ * as `itemStatus`; it must never be rendered as intelligence certainty.
+ */
+export const calendarStatuses = [
+  "CONFIRMED",
+  "ESTIMATED",
+  "HISTORICAL",
+  "CLAIMED",
+  "USER_SCHEDULED",
+] as const;
+export type CalendarStatus = (typeof calendarStatuses)[number];
+
+export const calendarDisplayTypes = [
+  "APPLICATION_OPEN",
   "APPLICATION_DEADLINE",
+  "EXPECTED_OPENING_WINDOW",
   "CAREER_FAIR",
   "CAMPUS_EVENT",
-  // ACTION
-  "APPLY",
-  "UPDATE_RESUME",
-  "RECRUITER_OUTREACH",
-  "FOLLOW_UP",
-  "COMPLETE_OA",
-  "RESEARCH_COMPANY",
-  // PREP_SESSION
+  "INFO_SESSION",
+  "INTERVIEW_EVENT",
+  "OTHER",
+  "RECRUITING_DATE",
+  "APPLICATION_TASK",
   "LEETCODE",
+  "INTERVIEW_PREP",
   "SYSTEM_DESIGN",
   "BEHAVIORAL_PREP",
-  "INTERVIEW_PREP",
-  "MOCK_INTERVIEW",
+  "RECRUITER_OUTREACH",
   "RESUME_WORK",
+  "CAREER_EVENT",
+  "OA",
+  "CUSTOM",
+  // Backend-generated presentation metadata may use these more specific labels.
+  "APPLY",
+  "UPDATE_RESUME",
+  "FOLLOW_UP",
+  "RESEARCH_COMPANY",
 ] as const;
-export type CalendarItemType = (typeof calendarItemTypes)[number];
+export type CalendarItemType = (typeof calendarDisplayTypes)[number];
 
 export interface SourceRef {
   name: string;
   url?: string;
 }
 
-export interface CalendarItem {
+/**
+ * Read model for the existing Calendar components. `domainType`, `itemStatus`,
+ * `itemSource`, timing, timezone, and sync fields remain canonical backend data;
+ * the other fields are derived only for presentation.
+ */
+export interface CalendarItemView {
   id: string;
   title: string;
-  /** ISO date (yyyy-mm-dd) this item lands on. */
   date: string;
-  /** Present when a recruiting date is a window rather than a single day. */
   endDate?: string;
   time?: string;
+  endTime?: string;
+  allDay: boolean;
+  timezone: string;
   category: CalendarCategory;
   type: CalendarItemType;
   status: CalendarStatus;
+  domainType: CanonicalCalendarItem["type"];
+  itemStatus: CanonicalCalendarItem["status"];
+  itemSource: CanonicalCalendarItem["source"];
   companyId?: string;
   companySlug?: string;
   companyName?: string;
+  jobId?: string;
+  recruitingDateId?: string;
   source?: SourceRef;
   notes?: string;
-  completed?: boolean;
-  /** Links an action/prep item back to the plan that generated it. */
-  planId?: string;
-}
-
-export interface ApplicationPlanTask {
-  id: string;
-  title: string;
-  category: Extract<CalendarCategory, "ACTION" | "PREP_SESSION">;
-  type: CalendarItemType;
-  /** Days relative to the plan's target date. 0 = target day. */
-  offsetDays: number;
-  date: string;
   completed: boolean;
-  calendarItemId: string;
-}
-
-export interface ApplicationPlan {
-  id: string;
-  companyId?: string;
-  companySlug?: string;
-  companyName: string;
-  targetLabel: string;
-  targetDate: string;
-  createdAt: string;
-  tasks: ApplicationPlanTask[];
-}
-
-export type CalendarProviderStatus =
-  | "NOT_CONNECTED"
-  | "CONNECTING"
-  | "CONNECTED"
-  | "SYNCING"
-  | "SYNC_ERROR";
-
-export interface CalendarSyncSettings {
-  recruitingTasks: boolean;
-  leetcodeSessions: boolean;
-  applicationDeadlines: boolean;
-  careerEvents: boolean;
-}
-
-export interface CalendarIntegration {
-  provider: "google";
-  status: CalendarProviderStatus;
-  accountEmail?: string;
-  lastSyncedAt?: string;
-  errorMessage?: string;
-  sync: CalendarSyncSettings;
+  syncEnabled: boolean;
+  planId?: string;
 }
 
 export interface CreateCalendarItemInput {
@@ -115,19 +94,49 @@ export interface CreateCalendarItemInput {
   date: string;
   endDate?: string;
   time?: string;
-  category: CalendarCategory;
-  type: CalendarItemType;
-  status?: CalendarStatus;
+  endTime?: string;
+  allDay: boolean;
+  timezone: string;
+  type: Exclude<CanonicalCalendarItem["type"], "RECRUITING_DATE">;
   companyId?: string;
-  companySlug?: string;
-  companyName?: string;
+  jobId?: string;
   notes?: string;
+  syncEnabled?: boolean;
+}
+
+export interface UpdateCalendarItemInput {
+  title?: string;
+  notes?: string | null;
+  date?: string;
+  endDate?: string | null;
+  time?: string;
+  endTime?: string | null;
+  allDay?: boolean;
+  timezone?: string;
+  status?: CanonicalCalendarItem["status"];
+  syncEnabled?: boolean;
 }
 
 export interface CreateApplicationPlanInput {
   companyId?: string;
   companySlug?: string;
   companyName: string;
+  recruitingDateId?: string;
+  jobId?: string;
   targetLabel: string;
   targetDate: string;
+  timezone?: string;
 }
+
+export type CalendarProviderDisplayStatus =
+  | GoogleCalendarStatus["status"]
+  | "CONNECTING"
+  | "SYNCING";
+
+export type {
+  ApplicationPlan,
+  CalendarSyncRequest,
+  Company,
+  GoogleCalendarOption,
+  GoogleCalendarStatus,
+};

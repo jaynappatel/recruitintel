@@ -1,5 +1,11 @@
 import clsx from "clsx";
-import { CalendarCheck, CircleDashed, History, UserRound } from "lucide-react";
+import {
+  CalendarCheck,
+  CircleDashed,
+  History,
+  MessageCircleQuestion,
+  UserRound,
+} from "lucide-react";
 
 import type { CalendarStatus } from "@/lib/types/calendar";
 
@@ -22,6 +28,10 @@ const styles: Record<CalendarStatus, { className: string; icon: typeof CalendarC
   HISTORICAL: {
     className: "border-[var(--line)] bg-[var(--surface-soft)] text-[var(--muted)]",
     icon: History,
+  },
+  CLAIMED: {
+    className: "border-dashed border-violet-400 bg-violet-50 text-violet-800",
+    icon: MessageCircleQuestion,
   },
   USER_SCHEDULED: {
     className: "border-[var(--panel)] bg-[var(--panel)] text-white",
