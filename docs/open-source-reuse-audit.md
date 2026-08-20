@@ -1,4 +1,12 @@
-# Open-source reuse audit
+# Open-source reuse audit (Milestone 2 historical scope)
+
+> **Superseded for post-Milestone-5 planning.** This document records the smaller
+> Milestone 2 audit. The complete architecture-acceleration audit, including all
+> ten repositories currently present in the reference directory, is in
+> `docs/final-architecture-roadmap.md`. In particular, the old statement below
+> that no copyleft repository was present is no longer true: the later reference
+> set includes GPL-3.0-only Notchi, and HackerRank Hiring Agent bundles an
+> AGPL-licensed PyMuPDF-derived module despite its MIT root license.
 
 Audited on 2026-08-17 for the repositories present in `/Users/jaynapatel/Desktop/github repos`. The audit separates source-code licensing from dataset licensing and evaluates compatibility with RecruitIntel's MIT distribution. Architecture remains RecruitIntel-owned; an upstream adapter may feed RecruitIntel contracts but may not redefine Company, Job, RecruitingEvent, InterviewQuestion, Source, Observation, Watchlist, Calendar, or application tracking.
 
@@ -14,7 +22,9 @@ No source code or datasets from these repositories were copied into RecruitIntel
 | Simplify New Grad Positions              | No license found | No license found                                                                                     | ARCHITECTURE INSPIRATION ONLY; DO NOT USE listing data                                       |
 | LeetCode Companywise Interview Questions | No license found | No license found; authenticated/Premium origin                                                       | DO NOT USE                                                                                   |
 
-No GPL, LGPL, or AGPL reference repository was found. No copyleft reference code is proposed for incorporation.
+At the time of this narrower audit, no GPL, LGPL, or AGPL repository was in its
+five-repository inventory. That conclusion must not be applied to the expanded
+reference set. No copyleft reference code is proposed for incorporation.
 
 ## FreeHire
 
