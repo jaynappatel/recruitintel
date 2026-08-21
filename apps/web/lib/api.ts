@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
+import { redactText } from "@recruitintel/shared";
 import type { ZodError } from "zod";
 
+import { logger } from "./server/logger";
+
 export function apiError(status: number, code: string, message: string) {
-  return NextResponse.json({ error: { code, message } }, { status });
+  return NextResponse.json({ error: { code, message: redactText(message) } }, { status });
 }
 
 export function validationError(error: ZodError) {
@@ -11,6 +14,6 @@ export function validationError(error: ZodError) {
 }
 
 export function databaseApiError(error: unknown) {
-  console.error("database_request_failed", error);
+  logger.error("database_request_failed", error);
   return apiError(503, "DATABASE_UNAVAILABLE", "RecruitIntel data is temporarily unavailable");
 }

@@ -218,7 +218,8 @@ Optional query: `eventType`, `includePast=true|false`, `limit`, `offset`. Each e
 
 ### Admin writes
 
-Both routes require `Authorization: Bearer $RECRUITINTEL_ADMIN_TOKEN`. They store a `MANUAL` source and never fetch the submitted URL.
+Both routes require an authenticated admin session or an active hashed service token with the
+`ADMIN_MUTATE` scope. They store a `MANUAL` source and never fetch the submitted URL.
 
 `POST /api/companies/:identifier/recruiters` requires:
 

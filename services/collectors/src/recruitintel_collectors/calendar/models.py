@@ -22,7 +22,7 @@ class CalendarConnection(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: UUID
-    owner_id: UUID
+    user_id: UUID
     provider: CalendarProviderName
     selected_calendar_id: str
     encrypted_refresh_token: str

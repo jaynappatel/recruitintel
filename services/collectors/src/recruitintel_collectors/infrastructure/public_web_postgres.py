@@ -40,6 +40,7 @@ from recruitintel_collectors.public_web.models import (
     WebRunStats,
 )
 from recruitintel_collectors.public_web.urls import UnsafeUrlError, canonicalize_url
+from recruitintel_collectors.redaction import redact_text
 
 _SOURCE_TYPE: dict[WebSourceClassification, str] = {
     WebSourceClassification.COMPANY_CAREERS: "COMPANY_CAREERS",
@@ -989,7 +990,7 @@ class PostgresPublicWebRepository:
                             run_id,
                             stage,
                             type(error).__name__,
-                            str(error)[:2000],
+                            redact_text(str(error))[:2000],
                             retry,
                             Jsonb({"work_request_id": str(request.id)}),
                         ),
@@ -1019,7 +1020,7 @@ class PostgresPublicWebRepository:
                         """,
                         (
                             now + timedelta(seconds=min(2**request.attempt_count * 30, 3600)),
-                            str(error)[:2000],
+                            redact_text(str(error))[:2000],
                             request.id,
                         ),
                     )
@@ -1030,7 +1031,7 @@ class PostgresPublicWebRepository:
                           status = 'FAILED', finished_at = %s, error_message = %s
                         where id = %s
                         """,
-                        (now, str(error)[:2000], request.id),
+                        (now, redact_text(str(error))[:2000], request.id),
                     )
                 if request.candidate_id is not None:
                     await connection.execute(

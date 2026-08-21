@@ -33,7 +33,7 @@ export async function GET(request: Request, { params }: Context) {
 }
 
 export async function POST(request: Request, { params }: Context) {
-  const unauthorized = requireAdmin(request);
+  const unauthorized = await requireAdmin(request);
   if (unauthorized) return unauthorized;
   const { id } = await params;
   if (!isDatabaseUuid(id)) return apiError(400, "INVALID_IDENTIFIER", "Recruiter id is invalid");

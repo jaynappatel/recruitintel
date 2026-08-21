@@ -106,7 +106,7 @@ export function createPkcePair(): { verifier: string; challenge: string } {
 }
 
 export async function createGoogleCalendarAuthorization(
-  ownerId: string,
+  userId: string,
   dependencies: {
     cipher?: CredentialCipher;
     now?: Date;
@@ -120,7 +120,7 @@ export async function createGoogleCalendarAuthorization(
   const pkce = createPkcePair();
   const expiresAt = new Date(now.getTime() + 10 * 60 * 1_000);
   await (dependencies.createState ?? createGoogleOauthState)({
-    ownerId,
+    userId,
     stateHash: stateHash(state),
     encryptedCodeVerifier: cipher.encrypt(pkce.verifier),
     expiresAt: expiresAt.toISOString(),
@@ -149,7 +149,7 @@ async function parseJson<T>(response: Response): Promise<T> {
 }
 
 export async function completeGoogleCalendarAuthorization(
-  input: { code: string; state: string },
+  input: { code: string; state: string; userId: string },
   dependencies: {
     cipher?: CredentialCipher;
     fetch?: FetchLike;
@@ -164,6 +164,9 @@ export async function completeGoogleCalendarAuthorization(
   );
   if (!consumed) {
     throw new GoogleOAuthError("INVALID_OAUTH_STATE", "OAuth state is invalid, expired, or reused");
+  }
+  if (consumed.userId !== input.userId) {
+    throw new GoogleOAuthError("INVALID_OAUTH_STATE", "OAuth state does not belong to this user");
   }
   const cipher = dependencies.cipher ?? calendarCredentialCipher();
   let verifier: string;
@@ -211,7 +214,7 @@ export async function completeGoogleCalendarAuthorization(
     throw new GoogleOAuthError("GOOGLE_ACCOUNT_LOOKUP_FAILED", "Google account lookup failed");
   }
   const connection = await (dependencies.saveConnection ?? saveGoogleCalendarConnection)({
-    ownerId: consumed.ownerId,
+    userId: consumed.userId,
     providerAccountId: userInfo.sub,
     providerEmail: userInfo.email ?? null,
     encryptedRefreshToken: token.refresh_token ? cipher.encrypt(token.refresh_token) : null,
@@ -227,19 +230,25 @@ export async function completeGoogleCalendarAuthorization(
   return { connection, returnTo: consumed.returnTo };
 }
 
-export async function consumeGoogleCalendarAuthorizationFailure(state: string): Promise<string> {
+export async function consumeGoogleCalendarAuthorizationFailure(
+  state: string,
+  userId: string,
+): Promise<string> {
   const consumed = await consumeGoogleOauthState(stateHash(state));
   if (!consumed) {
     throw new GoogleOAuthError("INVALID_OAUTH_STATE", "OAuth state is invalid, expired, or reused");
+  }
+  if (consumed.userId !== userId) {
+    throw new GoogleOAuthError("INVALID_OAUTH_STATE", "OAuth state does not belong to this user");
   }
   return consumed.returnTo;
 }
 
 export async function revokeGoogleCalendarAuthorization(
-  ownerId: string,
+  userId: string,
   dependencies: { cipher?: CredentialCipher; fetch?: FetchLike } = {},
 ): Promise<void> {
-  const credential = await getGoogleRefreshCredential(ownerId);
+  const credential = await getGoogleRefreshCredential(userId);
   if (!credential?.encryptedRefreshToken) return;
   const cipher = dependencies.cipher ?? calendarCredentialCipher();
   const fetcher: FetchLike = dependencies.fetch ?? fetch;
@@ -263,11 +272,11 @@ export async function revokeGoogleCalendarAuthorization(
 }
 
 export async function listGoogleCalendarOptions(
-  ownerId: string,
+  userId: string,
   dependencies: { cipher?: CredentialCipher; fetch?: FetchLike } = {},
 ) {
   const config = googleConfig();
-  const credential = await getGoogleRefreshCredential(ownerId);
+  const credential = await getGoogleRefreshCredential(userId);
   if (!credential?.encryptedRefreshToken) {
     throw new GoogleOAuthError("GOOGLE_CALENDAR_NOT_CONNECTED", "Google Calendar is not connected");
   }
@@ -277,7 +286,7 @@ export async function listGoogleCalendarOptions(
   try {
     refreshToken = cipher.decrypt(credential.encryptedRefreshToken);
   } catch {
-    await markGoogleCalendarReauthRequired(ownerId, "REFRESH_CREDENTIAL_DECRYPT_FAILED");
+    await markGoogleCalendarReauthRequired(userId, "REFRESH_CREDENTIAL_DECRYPT_FAILED");
     throw new GoogleOAuthError("REAUTH_REQUIRED", "Google Calendar must be reconnected");
   }
   const refreshResponse = await fetcher(GOOGLE_TOKEN_ENDPOINT, {
@@ -294,7 +303,7 @@ export async function listGoogleCalendarOptions(
   const refreshed = await parseJson<TokenResponse>(refreshResponse);
   if (!refreshResponse.ok || !refreshed.access_token) {
     if (refreshed.error === "invalid_grant") {
-      await markGoogleCalendarReauthRequired(ownerId, "REFRESH_CREDENTIAL_INVALID");
+      await markGoogleCalendarReauthRequired(userId, "REFRESH_CREDENTIAL_INVALID");
       throw new GoogleOAuthError("REAUTH_REQUIRED", "Google Calendar must be reconnected");
     }
     throw new GoogleOAuthError("GOOGLE_TOKEN_REFRESH_FAILED", "Google token refresh failed");
@@ -309,7 +318,7 @@ export async function listGoogleCalendarOptions(
   const payload = await parseJson<CalendarListResponse>(response);
   if (!response.ok) {
     if ([401, 403].includes(response.status)) {
-      await markGoogleCalendarReauthRequired(ownerId, "PROVIDER_UNAUTHORIZED");
+      await markGoogleCalendarReauthRequired(userId, "PROVIDER_UNAUTHORIZED");
     }
     throw new GoogleOAuthError("GOOGLE_CALENDAR_LIST_FAILED", "Google calendar lookup failed");
   }

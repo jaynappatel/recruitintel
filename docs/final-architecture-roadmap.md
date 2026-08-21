@@ -9,6 +9,12 @@ does not replace legal review, and did not modify production code or the
 Claude-owned frontend. Root repository licenses, nested code licenses, datasets,
 models, fonts, fixtures, and provider terms are treated as separate rights.
 
+Implementation status update (2026-08-21): Gate 5.1 and Milestone 6 are complete. Milestone 6
+replaced the configured owner/static admin runtime with authenticated users, hashed scoped service
+principals, compound private ownership, privacy/audit/redaction foundations, and current-behavior
+instrumentation. The refined operational contract is in `docs/identity-privacy-audit.md`; Milestone
+7 remains the next unstarted milestone.
+
 ## 1. Current system map
 
 ### Runtime topology
@@ -38,7 +44,7 @@ startup repair.
 | 2         | Official GitHub API ingestion; commit-aware repository/path sync; Markdown/CSV/JSON job and interview parsers; canonical interview questions plus company links and commit-specific observations; unresolved records                                               | GitHub jobs are not closed when rows disappear. Interview `observation_count` counts persistence across repository commits, not independent interview reports, and must not be presented as empirical interview probability.                                                                   |
 | 3         | Search-query, candidate, discovery, document, observation, claim, and durable-work pipeline for public web intelligence; SSRF/redirect/robots/rate/size controls; deterministic relevance/date/claim extraction                                                    | The only configured search provider is static/JSON-file input. There is no live production discovery provider. HTML is fetched without script execution and raw HTML is not retained. DNS is checked before requests but is not pinned to the validated address, leaving a DNS-rebinding seam. |
 | 4         | Deterministic People, RecruiterProfile, evidence, School, recruiter-school and role-focus relationships, campus events, unresolved observations, and read APIs                                                                                                     | This is a projection of Milestone 3 evidence, not a separate crawler. Several large repository modules concentrate extraction, persistence, and projection policy.                                                                                                                             |
-| 5         | RecruitingDate, CalendarItem, deterministic ApplicationPlan/Task, Google OAuth with state and PKCE, encrypted refresh credentials, connection/preferences, provider abstraction, one-way retry-safe Google sync, external mappings, sync request/run observability | Gate 5.1 reconciles the production Calendar/Settings UI with these canonical APIs and removes browser plan generation. All calendar routes still resolve one configured MVP owner UUID rather than an authenticated user.                                                              |
+| 5         | RecruitingDate, CalendarItem, deterministic ApplicationPlan/Task, Google OAuth with state and PKCE, encrypted refresh credentials, connection/preferences, provider abstraction, one-way retry-safe Google sync, external mappings, sync request/run observability | Gate 5.1 reconciles the production Calendar/Settings UI with these canonical APIs and removes browser plan generation. All calendar routes still resolve one configured MVP owner UUID rather than an authenticated user.                                                                      |
 
 ### Existing strengths to preserve
 
@@ -420,6 +426,10 @@ listed Calendar and Google flows are green.
 
 ### Milestone 6 - Identity, ownership, privacy, audit, and instrumentation
 
+**Status (2026-08-21): complete.** The implementation follows the approved focused scope. Encrypted
+export artifact generation is deferred to Gate 6.1; the export request lifecycle and bounded account
+deletion are implemented. Browser extension grants remain schema-only security preparation.
+
 **Goal:** replace the MVP owner/admin boundary with a real single-user-first model
 that can safely evolve to multiple users and support sensitive personal data.
 
@@ -431,30 +441,37 @@ into every table and API.
 
 **Major components:** User/identity/session model; same-origin HttpOnly secure
 sessions; verified identity linking; CSRF strategy; service/admin principals;
-scoped short-lived extension grants; ownership middleware; consent, export/delete,
-retention primitives; versioned envelope encryption/key IDs; metadata-only audit
-events; secret/PII log redaction; interaction-event taxonomy with impressions.
+minimal hashed/expiring extension-grant foundation; ownership middleware; export
+request/delete contracts; metadata-only audit events; secret/PII log redaction;
+current-behavior interaction events plus future ranking impression denominators.
 
 **Reference repositories:** FreeHire auth identity-first/seizure and whitelist
 patterns (adapt with attribution); OpenClaw secret redaction and metadata audit
 events (adapt); WeSight/Notchi telemetry vocabulary (inspiration only where GPL).
 
-**Data model:** `users`, `user_identities`, `sessions` or opaque session records,
-`service_principals`, `extension_grants`, `consents`, `audit_events`,
-`user_interactions`; foreign keys from current owner columns; key-version fields.
+**Data model:** `users`, `user_profiles`, `user_identities`, `user_sessions`,
+`auth_verifications`, `service_principals`, `extension_grants`, `audit_events`,
+`product_events`, `ranking_decisions`, `recommendation_impressions`,
+`privacy_requests`, and `watchlist_items`; user and compound-owner foreign keys
+replace configured owner columns.
 
-**Workers:** privacy deletion/export finite jobs; expired session/grant cleanup.
+**Workers:** user-scoped Calendar requests bind request and connection ownership in
+the worker's database claim. Export artifact generation and generalized cleanup
+work are deferred to Gate 6.1/Milestone 7 orchestration.
 
 **APIs:** auth start/callback/session/logout, `/api/me`, privacy export/delete,
-session/grant management; existing personal APIs resolve actor context only.
+instrumentation intake for current view events; existing personal APIs resolve
+actor context only. No extension workflow is exposed.
 
 **Security:** session fixation/revocation, verified-email link rules, CSRF, rate
-limits, audit minimization, no credentials in URLs/logs, ownership-negative tests,
-key rotation and deletion semantics.
+limits at the provider/framework boundary, audit minimization, no credentials in
+URLs/logs, ownership-negative tests, encrypted Calendar credential preservation
+and deletion semantics.
 
 **Testing:** cross-user isolation, IDOR, session revocation, CSRF, account linking,
-extension redirect allowlist, deletion/export, log-redaction snapshots, migration
-of the configured MVP owner.
+hashed service token expiry/revocation, bounded deletion/export-request lifecycle,
+log-redaction golden fixtures, and realistic migration of configured-owner
+Calendar/Google state. Extension redirect testing waits for an actual workflow.
 
 **Done:** no browser-supplied owner ID is trusted; every personal row has a valid
 owner FK; sensitive future milestones have documented storage/retention paths.

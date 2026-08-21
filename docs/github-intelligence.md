@@ -51,13 +51,15 @@ GITHUB_TOKEN=github_pat_redacted
 
 It is worker-only, passed as an authorization header, never persisted, and never logged. Use the smallest GitHub permission set needed to read configured repositories.
 
-Mutation routes use a separate token:
+Mutation routes accept an authenticated admin session or a hashed service-principal token with the
+single `ADMIN_MUTATE` scope. Create the latter once:
 
-```dotenv
-RECRUITINTEL_ADMIN_TOKEN=replace-with-a-long-random-value
+```bash
+DATABASE_URL=postgresql://... pnpm --filter @recruitintel/db service-principal:create
 ```
 
-Send `Authorization: Bearer <value>`. Never use the GitHub token as the admin token.
+The command prints the opaque token once and stores only its SHA-256 hash. Send that value as
+`Authorization: Bearer <value>`. Never use the GitHub provider token as the admin credential.
 
 ## Repository configuration
 
@@ -65,7 +67,7 @@ Attach a repository to a company:
 
 ```bash
 curl -X POST http://localhost:3000/api/companies/stripe/github-repositories \
-  -H "Authorization: Bearer $RECRUITINTEL_ADMIN_TOKEN" \
+  -H "Authorization: Bearer $RECRUITINTEL_ADMIN_BEARER" \
   -H "Content-Type: application/json" \
   -d '{
     "repositoryUrl": "https://github.com/example/interview-questions",
@@ -87,7 +89,7 @@ Queue a request:
 
 ```bash
 curl -X POST http://localhost:3000/api/github/sync/REPOSITORY_UUID \
-  -H "Authorization: Bearer $RECRUITINTEL_ADMIN_TOKEN"
+  -H "Authorization: Bearer $RECRUITINTEL_ADMIN_BEARER"
 ```
 
 Execute it with the finite worker:
@@ -335,8 +337,9 @@ interface InterviewQuestionDetail {
 
 ## Troubleshooting
 
-- **401 mutation:** configure `RECRUITINTEL_ADMIN_TOKEN` and send the matching bearer value.
-- **503 `ADMIN_NOT_CONFIGURED`:** admin token is absent; read APIs remain available.
+- **401 mutation:** sign in as an active admin or send an active, unexpired hashed service token.
+- **403 mutation:** the authenticated user is not an admin or the service principal lacks
+  `ADMIN_MUTATE`.
 - **Request stays `PENDING`:** run the finite worker with the returned request/repository IDs or configure a scheduler.
 - **Rate-limit failure:** inspect repository/sync rate reset values and `collector_errors`; resume after reset or configure a permitted `GITHUB_TOKEN`.
 - **No files inspected:** verify watched paths and supported extensions.

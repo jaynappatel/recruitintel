@@ -37,7 +37,6 @@ trailing-slash behavior. The callback path is:
 
 ```dotenv
 DATABASE_URL=postgresql://...
-RECRUITINTEL_MVP_OWNER_ID=00000000-0000-0000-0000-000000000001
 RECRUITINTEL_APP_URL=http://localhost:3000
 GOOGLE_CLIENT_ID=replace-with-web-client-id
 GOOGLE_CLIENT_SECRET=replace-with-web-client-secret
@@ -45,9 +44,14 @@ GOOGLE_REDIRECT_URI=http://localhost:3000/api/integrations/google-calendar/callb
 CALENDAR_TOKEN_ENCRYPTION_KEY=replace-with-32-random-bytes-base64url
 ```
 
-`RECRUITINTEL_MVP_OWNER_ID` is optional and defaults to the shown stable MVP owner. It must be the
-same for the web API and finite worker. `RECRUITINTEL_APP_URL` is used only to build a safe link in
-event descriptions.
+The authenticated session is the only source of Calendar ownership. The web API binds queued work
+to that user in PostgreSQL; the finite worker receives only the request UUID and verifies the
+request/connection owner relationship in its database join. `RECRUITINTEL_APP_URL` is used only to
+build a safe link in event descriptions.
+
+The Calendar OAuth client must be separate from the sign-in client configured by
+`AUTH_GOOGLE_CLIENT_ID` and `AUTH_GOOGLE_CLIENT_SECRET`. Calendar grants and authentication grants
+must never be conflated.
 
 ## 7. Requested scopes
 
@@ -144,7 +148,8 @@ Google events merely because the account connection is disconnected.
 ## Security notes
 
 - OAuth state is 256 random bits, stored only as SHA-256, expires in ten minutes, and is consumed
-  atomically once.
+  atomically once. The callback also requires the initiating RecruitIntel session and rejects state
+  issued for another user.
 - PKCE S256 is used in addition to the confidential web-client secret.
 - Callback redirects use the configured redirect origin and a database-constrained relative path,
   preventing an arbitrary return URL.

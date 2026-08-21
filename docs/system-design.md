@@ -405,11 +405,27 @@ plan sequence constraints prevent projection/task duplication. External mappings
 Google event IDs make provider retries idempotent. Refresh credentials use a versioned encryption
 abstraction and access tokens remain ephemeral.
 
+## Milestone 6 identity and ownership extensions
+
+Migration `0006_identity_privacy_audit_instrumentation.sql` adds the canonical `users`,
+`user_sessions`, `user_identities`, and `auth_verifications` contract for pinned Better Auth 1.7.1.
+Every private Calendar/planning/provider row now carries a valid user foreign key, including
+denormalized owner keys on task, mapping, request, and run tables. Compound foreign keys make
+cross-user graph construction invalid at the database boundary.
+
+Shared intelligence remains unowned. Personal routes derive user identity from an HttpOnly session
+and never accept a user identifier in browser input. Operational mutation routes use an admin user
+or a hashed, scoped service principal; admin status does not bypass private owner predicates.
+
+The migration also adds append-only minimized `audit_events`, private `product_events`, future
+ranking decision/impression denominators, privacy request lifecycle, watchlist ownership, and the
+minimal hashed/expiring/revocable browser-extension grant foundation. Exact security, privacy, and
+manual auth setup are documented in `docs/identity-privacy-audit.md`.
+
 ## Future ERD extensions
 
 Later migrations add:
 
-- `watchlists`, users, and watchlist companies.
 - `alerts` and notification deliveries.
 - application tracking CRM and analytics projections.
 
@@ -429,7 +445,7 @@ Product routes are read-only except for an explicit collector-run command intend
 
 Responses use `{ data, meta? }` and errors use a stable `{ error: { code, message } }` shape. Query parameters are validated with Zod. Pagination is cursor-ready, though a bounded `limit/offset` is sufficient for the seed-sized Milestone 1 UI.
 
-Milestone 2 adds typed repository attachment/listing, durable sync requests, deterministic company question analytics, and question provenance detail. Mutation routes require `RECRUITINTEL_ADMIN_TOKEN`; `GITHUB_TOKEN` is never exposed to the web application. Exact frontend response shapes are documented in `docs/github-intelligence.md`.
+Milestone 2 adds typed repository attachment/listing, durable sync requests, deterministic company question analytics, and question provenance detail. As of Milestone 6, mutation routes require an authenticated admin or a hashed `ADMIN_MUTATE` service principal; `GITHUB_TOKEN` is never exposed to the web application. Exact frontend response shapes are documented in `docs/github-intelligence.md`.
 
 Milestone 3 adds typed public-web intelligence, observation/detail, claim, and search-state reads plus admin-authenticated durable search/fetch requests. The browser receives normalized bounded evidence and provenance, never raw HTML. Exact frontend response shapes are documented in `docs/public-web-intelligence.md`.
 
@@ -439,6 +455,13 @@ Milestone 5 adds owner-scoped recruiting-date/calendar/application-plan APIs plu
 one-way Calendar sync queue. OAuth routes retain state and refresh credentials only on the server;
 provider calls run in the finite Python worker. Exact contracts are documented in
 `docs/recruiting-calendar.md` and setup is in `docs/google-calendar-integration.md`.
+
+Milestone 6 adds pinned Better Auth session persistence, reusable user/admin/service actor
+resolution, authenticated ownership for every Milestone 5 personal route, compound ownership
+constraints, service principals, privacy request/deletion contracts, an append-only audit ledger,
+cross-language log/diagnostic redaction, and privacy-safe instrumentation for current product
+behaviors. `GET /api/me` exposes the current identity; Better Auth owns `/api/auth/*`. Public
+intelligence response shapes are otherwise unchanged.
 
 ## Local development and deployment
 
@@ -458,8 +481,13 @@ or returns an active durable request.
 - Milestone 3 arbitrary public URLs are restricted to HTTP/HTTPS, normalized, DNS-checked against private/non-routable destinations before every request and redirect, robots-checked, rate/size/time bounded, and never rendered or executed.
 - LinkedIn URLs may be retained from permitted search results or manual input, but the fetcher blocks LinkedIn hosts and redirect targets before any HTTP request. No cookies, authenticated scraping, browser automation, CAPTCHA bypass, or anti-bot circumvention exists.
 - Secrets are read from environment variables and `.env` is ignored.
+- Authentication and Google Calendar OAuth use separate clients and grants. Better Auth provider
+  tokens are removed before persistence; Calendar refresh credentials remain envelope-encrypted.
+- Structured TypeScript/Python logs, API errors, provider errors, and persisted worker diagnostics
+  pass through shared golden-tested secret/PII redaction behavior.
+- Personal route access always includes the authenticated user predicate. Admin status does not
+  imply access to another user's private content.
 - Database users can later be split into migration, collector-write, and web-read roles.
-- Collector logs redact headers, query secrets, and response bodies.
 - No collected text is passed to an LLM or treated as instructions.
 - Confidence is an internal ranking attribute, not a truth claim.
 

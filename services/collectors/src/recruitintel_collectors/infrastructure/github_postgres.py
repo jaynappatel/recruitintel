@@ -26,6 +26,7 @@ from recruitintel_collectors.github.models import (
 )
 from recruitintel_collectors.github.resolution import GitHubCompanyResolver
 from recruitintel_collectors.pipeline.memory import RunAlreadyActiveError
+from recruitintel_collectors.redaction import redact_text
 
 
 class PostgresGitHubSyncRepository:
@@ -941,7 +942,7 @@ class PostgresGitHubSyncRepository:
                     (
                         run_id,
                         type(error).__name__,
-                        str(error)[:10_000],
+                        redact_text(str(error))[:10_000],
                         retryable,
                         Jsonb({"repository_id": str(repository.id)}),
                     ),
@@ -979,5 +980,5 @@ class PostgresGitHubSyncRepository:
                           status = 'FAILED', finished_at = %s, error_message = %s
                         where id = %s and status = 'RUNNING'
                         """,
-                        (now, str(error)[:10_000], request_id),
+                        (now, redact_text(str(error))[:10_000], request_id),
                     )

@@ -24,6 +24,7 @@ from recruitintel_collectors.pipeline.transitions import (
     decide_job_transition,
     ensure_unique_external_ids,
 )
+from recruitintel_collectors.redaction import redact_text, redact_value
 
 
 def _source_from_row(row: dict[str, Any]) -> SourceConfig:
@@ -498,7 +499,14 @@ class PostgresCollectorRepository:
                   collector_run_id, stage, error_type, message, retryable, context
                 ) values (%s, %s, %s, %s, %s, %s)
                 """,
-                (run_id, stage.value, error_type, message[:10_000], retryable, Jsonb(context)),
+                (
+                    run_id,
+                    stage.value,
+                    error_type,
+                    redact_text(message)[:10_000],
+                    retryable,
+                    Jsonb(redact_value(context)),
+                ),
             )
 
     async def fail_run(self, run_id: UUID, *, discovered: int, errors: int = 1) -> None:

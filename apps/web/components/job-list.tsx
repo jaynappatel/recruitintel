@@ -5,6 +5,7 @@ import type { JobRecord } from "@recruitintel/db";
 import { formatCompactDate } from "@recruitintel/shared";
 
 import { DemoBadge, RoleBadge } from "./badges";
+import { TrackedExternalLink } from "./tracked-external-link";
 
 export function JobList({ jobs, compact = false }: { jobs: JobRecord[]; compact?: boolean }) {
   return (
@@ -43,14 +44,13 @@ export function JobList({ jobs, compact = false }: { jobs: JobRecord[]; compact?
                 No live application
               </span>
             ) : (
-              <a
+              <TrackedExternalLink
                 className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--forest)] px-3 py-2 text-xs font-bold text-white transition hover:bg-[var(--forest-bright)]"
+                entityId={job.id}
                 href={job.applicationUrl}
-                rel="noreferrer"
-                target="_blank"
               >
                 View source <ArrowUpRight aria-hidden="true" className="size-3.5" />
-              </a>
+              </TrackedExternalLink>
             )}
           </div>
         </article>

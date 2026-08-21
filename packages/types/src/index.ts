@@ -1,5 +1,18 @@
 import { z } from "zod";
 
+export const clientProductEventTypes = [
+  "JOB_VIEWED",
+  "RECRUITER_VIEWED",
+  "INTERVIEW_INTEL_VIEWED",
+] as const;
+export const clientProductEventSchema = z
+  .object({
+    eventType: z.enum(clientProductEventTypes),
+    entityId: z.uuid(),
+  })
+  .strict();
+export type ClientProductEvent = z.infer<typeof clientProductEventSchema>;
+
 export const roleFamilies = [
   "SOFTWARE_ENGINEERING",
   "AI_ML",

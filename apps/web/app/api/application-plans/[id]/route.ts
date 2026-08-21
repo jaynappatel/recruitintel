@@ -8,8 +8,8 @@ import {
 } from "@recruitintel/types";
 
 import { apiError, validationError } from "@/lib/api";
+import { authenticatedUserOrResponse } from "@/lib/server/authorization";
 import { calendarApiError } from "@/lib/server/calendar-api-errors";
-import { currentOwnerId } from "@/lib/server/current-owner";
 
 function parseId(rawId: string) {
   return databaseUuidSchema.safeParse(rawId);
@@ -17,12 +17,14 @@ function parseId(rawId: string) {
 
 type Context = { params: Promise<{ id: string }> };
 
-export async function GET(_request: Request, { params }: Context) {
+export async function GET(request: Request, { params }: Context) {
+  const actor = await authenticatedUserOrResponse(request);
+  if (actor instanceof Response) return actor;
   const { id: rawId } = await params;
   const id = parseId(rawId);
   if (!id.success) return apiError(400, "INVALID_REQUEST", "Application plan ID must be a UUID");
   try {
-    const plan = await getApplicationPlan(currentOwnerId(), id.data);
+    const plan = await getApplicationPlan(actor.user.id, id.data);
     if (!plan) return apiError(404, "NOT_FOUND", "Application plan not found");
     return NextResponse.json({ data: applicationPlanSchema.parse(plan) });
   } catch (error) {
@@ -31,6 +33,8 @@ export async function GET(_request: Request, { params }: Context) {
 }
 
 export async function PATCH(request: Request, { params }: Context) {
+  const actor = await authenticatedUserOrResponse(request, { mutation: true });
+  if (actor instanceof Response) return actor;
   const { id: rawId } = await params;
   const id = parseId(rawId);
   if (!id.success) return apiError(400, "INVALID_REQUEST", "Application plan ID must be a UUID");
@@ -43,19 +47,21 @@ export async function PATCH(request: Request, { params }: Context) {
   const patch = updateApplicationPlanRequestSchema.safeParse(body);
   if (!patch.success) return validationError(patch.error);
   try {
-    const plan = await updateApplicationPlan(currentOwnerId(), id.data, patch.data);
+    const plan = await updateApplicationPlan(actor.user.id, id.data, patch.data);
     return NextResponse.json({ data: applicationPlanSchema.parse(plan) });
   } catch (error) {
     return calendarApiError(error);
   }
 }
 
-export async function DELETE(_request: Request, { params }: Context) {
+export async function DELETE(request: Request, { params }: Context) {
+  const actor = await authenticatedUserOrResponse(request, { mutation: true });
+  if (actor instanceof Response) return actor;
   const { id: rawId } = await params;
   const id = parseId(rawId);
   if (!id.success) return apiError(400, "INVALID_REQUEST", "Application plan ID must be a UUID");
   try {
-    await deleteApplicationPlan(currentOwnerId(), id.data);
+    await deleteApplicationPlan(actor.user.id, id.data);
     return new NextResponse(null, { status: 204 });
   } catch (error) {
     return calendarApiError(error);

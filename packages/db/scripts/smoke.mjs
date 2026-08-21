@@ -39,6 +39,17 @@ try {
       (select count(*) from public.calendar_connections)::int as calendar_connections,
       (select count(*) from public.calendar_external_events)::int as calendar_external_events,
       (select count(*) from public.calendar_sync_runs)::int as calendar_sync_runs,
+      (select count(*) from public.users)::int as users,
+      (select count(*) from public.user_profiles)::int as user_profiles,
+      (select count(*) from public.service_principals)::int as service_principals,
+      (select count(*) from public.audit_events)::int as audit_events,
+      (select count(*) from public.product_events)::int as product_events,
+      (select count(*) from public.privacy_requests)::int as privacy_requests,
+      (
+        select count(*) from public.calendar_items item
+        left join public.users app_user on app_user.id = item.user_id
+        where app_user.id is null
+      )::int as private_owner_orphans,
       (select count(*) from public.recruiting_events)::int as events,
       (select count(*) from public.schema_migrations)::int as migrations
   `;
@@ -62,6 +73,10 @@ try {
     "application_plans_owner_id_plan_fingerprint_key",
     "calendar_external_events_calendar_item_id_calendar_connecti_key",
     "calendar_external_events_calendar_connection_id_external_ca_key",
+    "user_identities_no_persisted_credentials",
+    "calendar_items_plan_owner_fkey",
+    "calendar_external_events_connection_owner_fkey",
+    "calendar_sync_runs_request_owner_fkey",
   ];
   const constraints = await sql`
     select conname
@@ -78,7 +93,7 @@ try {
     where schemaname = 'public' and indexname in ${sql(requiredIndexes)}
   `;
 
-  if (!counts || counts.migrations < 5) {
+  if (!counts || counts.migrations < 6) {
     throw new Error("no applied RecruitIntel migrations were found");
   }
   if (counts.companies < 1 || counts.sources < 1 || counts.schools < 1) {
@@ -97,6 +112,9 @@ try {
   }
   if (indexes.length !== requiredIndexes.length) {
     throw new Error("calendar partial idempotency indexes are missing");
+  }
+  if (counts.users < 1 || counts.user_profiles < 1 || counts.private_owner_orphans !== 0) {
+    throw new Error("Milestone 6 user/profile seed or private ownership integrity is missing");
   }
 
   console.log(JSON.stringify({ status: "ok", ...counts }));

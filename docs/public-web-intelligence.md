@@ -147,7 +147,7 @@ Runs record start/end/status, company, provider/query where applicable, candidat
 
 ## Stable frontend API contracts
 
-All success responses use `{ "data": ..., "meta"?: ... }`. Errors use `{ "error": { "code": string, "message": string, "details"?: unknown } }`. Company identifiers accept a canonical slug or UUID. UUID path parameters are validated. Mutation routes require `Authorization: Bearer $RECRUITINTEL_ADMIN_TOKEN` and return `503 ADMIN_TOKEN_NOT_CONFIGURED` when the server token is absent.
+All success responses use `{ "data": ..., "meta"?: ... }`. Errors use `{ "error": { "code": string, "message": string, "details"?: unknown } }`. Company identifiers accept a canonical slug or UUID. UUID path parameters are validated. Mutation routes require an authenticated admin session or an active hashed service token with `ADMIN_MUTATE`; invalid credentials return `401` and insufficient scope returns `403`.
 
 ### `GET /api/companies/:identifier/web-intelligence`
 

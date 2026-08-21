@@ -317,3 +317,22 @@ select
   '{"seed":true,"live":false,"commit_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
 from public.interview_questions iq where iq.normalized_title = 'number of islands'
 on conflict (fingerprint) do nothing;
+do $$
+begin
+  if to_regclass('public.users') is not null then
+    insert into public.users (id, name, email, email_verified, status)
+    values (
+      '00000000-0000-0000-0000-000000000001',
+      'RecruitIntel Development User',
+      'legacy+00000000-0000-0000-0000-000000000001@recruitintel.invalid',
+      false,
+      'PENDING_IDENTITY'
+    )
+    on conflict (id) do nothing;
+
+    insert into public.user_profiles (user_id, timezone, locale)
+    values ('00000000-0000-0000-0000-000000000001', 'America/Chicago', 'en-US')
+    on conflict (user_id) do nothing;
+  end if;
+end;
+$$;

@@ -1,6 +1,6 @@
 # RecruitIntel
 
-RecruitIntel is a provenance-first recruiting intelligence foundation for students and new graduates. Milestones 1–4 collect public Greenhouse/Lever jobs, configured GitHub recruiting files, and permitted public recruiting pages; normalize jobs, interview questions, recruiter/school relationships, campus events, and web evidence deterministically; store current state plus source evidence; and emit immutable recruiting events. It does not use an LLM or make hiring predictions.
+RecruitIntel is a provenance-first recruiting intelligence foundation for students and new graduates. Milestones 1–6 collect and normalize public recruiting intelligence, connect it to private Calendar/application-planning actions, and protect those actions with authenticated ownership, privacy, audit, and instrumentation foundations. It does not use an LLM or make hiring predictions.
 
 ## Architecture
 
@@ -94,7 +94,7 @@ Add a provider adapter under `services/collectors/src/recruitintel_collectors/ad
 
 ## GitHub repositories and parsers
 
-Set `RECRUITINTEL_ADMIN_TOKEN`, attach a repository through `POST /api/companies/:identifier/github-repositories`, and queue it through `POST /api/github/sync/:repositoryId`. Execute the durable request with:
+Create a hashed admin service principal as described in [identity, privacy, audit, and instrumentation](docs/identity-privacy-audit.md), attach a repository through `POST /api/companies/:identifier/github-repositories`, and queue it through `POST /api/github/sync/:repositoryId`. Execute the durable request with:
 
 ```bash
 uv run recruitintel-collectors github-sync \
@@ -106,7 +106,7 @@ A direct local run may omit `--request-id`. Identical commit SHAs skip file fetc
 
 ## Public web intelligence
 
-Set `RECRUITINTEL_ADMIN_TOKEN`, queue bounded query templates through `POST /api/companies/:identifier/web-search`, and execute each returned durable request with:
+Use an admin session or hashed `ADMIN_MUTATE` service token, queue bounded query templates through `POST /api/companies/:identifier/web-search`, and execute each returned durable request with:
 
 ```bash
 uv run recruitintel-collectors public-web-work --request-id REQUEST_UUID
@@ -170,8 +170,9 @@ All supported values and local defaults are in `.env.example`:
 - `TEST_DATABASE_URL`: reserved for opt-in integration tests; never points tests at production;
 - `RECRUITINTEL_USER_AGENT`: identifying provider request header;
 - `GITHUB_TOKEN`: optional worker-only official GitHub API token;
-- `RECRUITINTEL_ADMIN_TOKEN`: bearer token for GitHub, public-web, and recruiter-evidence mutations;
-- `RECRUITINTEL_MVP_OWNER_ID`: server-resolved Milestone 5 owner UUID (not browser-selected);
+- `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, and `BETTER_AUTH_TRUSTED_ORIGINS`: session security and trusted application origins;
+- `AUTH_GOOGLE_CLIENT_ID` and `AUTH_GOOGLE_CLIENT_SECRET`: authentication-only Google OAuth client;
+- `AUDIT_IP_HASH_KEY`: optional secret salt for privacy-safe audit IP hashes;
 - `RECRUITINTEL_APP_URL`: base URL used for bounded calendar description links;
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`: Google web-server OAuth;
 - `CALENDAR_TOKEN_ENCRYPTION_KEY`: 32-byte AES-GCM key shared by web and finite worker;
@@ -189,4 +190,4 @@ All supported values and local defaults are in `.env.example`:
 - A failed, partial, malformed, or concurrent sync cannot infer mass closures.
 - Collected text must never be promoted into executable instructions for a future LLM.
 
-See the [Milestone 1 record](docs/milestone-1.md), [GitHub intelligence](docs/github-intelligence.md), [public web intelligence](docs/public-web-intelligence.md), [recruiter and campus intelligence](docs/recruiter-campus-intelligence.md), [recruiting calendar contracts](docs/recruiting-calendar.md), [Google Calendar setup](docs/google-calendar-integration.md), and [ML roadmap](docs/ml-roadmap.md) for implemented scope and future boundaries.
+See the [Milestone 1 record](docs/milestone-1.md), [GitHub intelligence](docs/github-intelligence.md), [public web intelligence](docs/public-web-intelligence.md), [recruiter and campus intelligence](docs/recruiter-campus-intelligence.md), [recruiting calendar contracts](docs/recruiting-calendar.md), [Google Calendar setup](docs/google-calendar-integration.md), [identity/privacy operations](docs/identity-privacy-audit.md), and [ML roadmap](docs/ml-roadmap.md) for implemented scope and future boundaries.

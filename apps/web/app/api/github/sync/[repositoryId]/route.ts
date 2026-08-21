@@ -10,7 +10,7 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ repositoryId: string }> },
 ) {
-  const unauthorized = requireAdmin(request);
+  const unauthorized = await requireAdmin(request);
   if (unauthorized) return unauthorized;
   const { repositoryId } = await params;
   if (!databaseUuidSchema.safeParse(repositoryId).success) {

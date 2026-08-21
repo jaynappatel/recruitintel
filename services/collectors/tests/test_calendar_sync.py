@@ -131,7 +131,7 @@ class FakeRepository:
 def connection(cipher: AesGcmCredentialCipher) -> CalendarConnection:
     return CalendarConnection(
         id=uuid4(),
-        owner_id=uuid4(),
+        user_id=uuid4(),
         provider=CalendarProviderName.GOOGLE,
         selected_calendar_id="primary",
         encrypted_refresh_token=cipher.encrypt("refresh-token"),

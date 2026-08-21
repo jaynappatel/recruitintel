@@ -1,15 +1,15 @@
 # Recruiting calendar and application planning
 
-Milestone 5 connects date-bearing recruiting intelligence to owner-scoped actions and optional
-one-way Google Calendar synchronization. It does not add alerts, an application-tracking CRM,
-analytics, ML, multi-user authentication, or two-way calendar sync.
+Milestone 5 connects date-bearing recruiting intelligence to user-owned actions and optional
+one-way Google Calendar synchronization. Milestone 6 subsequently added authenticated ownership;
+alerts, an application-tracking CRM, analytics, ML, and two-way calendar sync remain out of scope.
 
 ## Domain and ownership
 
-`RECRUITINTEL_MVP_OWNER_ID` is the current-owner abstraction. Route handlers resolve it on the
-server and never accept an owner ID from the browser. The default is the stable UUID
-`00000000-0000-0000-0000-000000000001`. This isolates all calendar, plan, OAuth, and sync reads
-without pretending Milestone 5 has implemented user authentication.
+Calendar items, application plans, Calendar connections, OAuth states, external mappings, and sync
+requests are owned by the authenticated `users.id`. Route handlers derive that ID only from the
+HttpOnly Better Auth session. Browser requests never accept `userId` or `ownerId`; another user's
+resource is indistinguishable from a missing resource and returns `404`.
 
 `RecruitingDate` is source intelligence. It retains certainty, precision, confidence, source URL,
 source ID, source-specific identity, and provenance JSON. `materializeRecruitingDates()` projects

@@ -1,3 +1,4 @@
+import re
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -14,6 +15,13 @@ from recruitintel_collectors.calendar.models import (
     ExternalEventMapping,
     ExternalSyncStatus,
 )
+from recruitintel_collectors.redaction import redact_value
+
+_SAFE_ERROR_CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,99}$")
+
+
+def _safe_error_code(value: str) -> str:
+    return value if _SAFE_ERROR_CODE.fullmatch(value) else "PROVIDER_ERROR"
 
 
 class PostgresCalendarSyncRepository:
@@ -30,10 +38,11 @@ class PostgresCalendarSyncRepository:
             async with connection.transaction():
                 cursor = await connection.execute(
                     """
-                    select r.*, c.owner_id, c.provider, c.selected_calendar_id,
+                    select r.*, c.user_id, c.provider, c.selected_calendar_id,
                            c.encrypted_refresh_token, c.connection_status
                     from public.calendar_sync_requests r
-                    join public.calendar_connections c on c.id = r.calendar_connection_id
+                    join public.calendar_connections c
+                      on c.id = r.calendar_connection_id and c.user_id = r.user_id
                     where r.id = %s
                     for update of r
                     """,
@@ -58,10 +67,10 @@ class PostgresCalendarSyncRepository:
                 cursor = await connection.execute(
                     """
                     insert into public.calendar_sync_runs (
-                      calendar_sync_request_id, calendar_connection_id
-                    ) values (%s, %s) returning id
+                      calendar_sync_request_id, calendar_connection_id, user_id
+                    ) values (%s, %s, %s) returning id
                     """,
-                    (request_id, row["calendar_connection_id"]),
+                    (request_id, row["calendar_connection_id"], row["user_id"]),
                 )
                 run = await cursor.fetchone()
                 if run is None:
@@ -69,7 +78,7 @@ class PostgresCalendarSyncRepository:
         return (
             CalendarConnection(
                 id=row["calendar_connection_id"],
-                owner_id=row["owner_id"],
+                user_id=row["user_id"],
                 provider=CalendarProviderName(row["provider"]),
                 selected_calendar_id=row["selected_calendar_id"],
                 encrypted_refresh_token=row["encrypted_refresh_token"],
@@ -100,7 +109,7 @@ class PostgresCalendarSyncRepository:
                     end
                   ) as should_sync
                 from public.calendar_connections cc
-                join public.calendar_items ci on ci.owner_id = cc.owner_id
+                join public.calendar_items ci on ci.user_id = cc.user_id
                 left join public.companies c on c.id = ci.company_id
                 left join public.jobs j on j.id = ci.job_id
                 left join public.recruiting_dates rd on rd.id = ci.recruiting_date_id
@@ -170,10 +179,13 @@ class PostgresCalendarSyncRepository:
             await connection.execute(
                 """
                 insert into public.calendar_external_events (
-                  calendar_item_id, calendar_connection_id, provider,
+                  calendar_item_id, calendar_connection_id, user_id, provider,
                   external_calendar_id, external_event_id, last_synced_hash,
                   last_synced_at, sync_status, provider_metadata, last_error_code
-                ) values (%s, %s, 'GOOGLE', %s, %s, %s, now(), 'SYNCED', %s, null)
+                ) values (
+                  %s, %s, (select user_id from public.calendar_items where id = %s),
+                  'GOOGLE', %s, %s, %s, now(), 'SYNCED', %s, null
+                )
                 on conflict (calendar_item_id, calendar_connection_id) do update set
                   external_calendar_id = excluded.external_calendar_id,
                   external_event_id = excluded.external_event_id,
@@ -186,6 +198,7 @@ class PostgresCalendarSyncRepository:
                 (
                     item_id,
                     connection_id,
+                    item_id,
                     calendar_id,
                     external_event_id,
                     content_hash,
@@ -201,6 +214,7 @@ class PostgresCalendarSyncRepository:
         content_hash: str | None = None,
         error_code: str | None = None,
     ) -> None:
+        safe_error_code = _safe_error_code(error_code) if error_code else None
         async with await self._connect() as connection:
             await connection.execute(
                 """
@@ -210,7 +224,7 @@ class PostgresCalendarSyncRepository:
                   last_error_code = %s
                 where id = %s
                 """,
-                (status.value, content_hash, status.value, error_code, mapping_id),
+                (status.value, content_hash, status.value, safe_error_code, mapping_id),
             )
 
     async def complete(self, stats: CalendarSyncStats) -> None:
@@ -232,7 +246,7 @@ class PostgresCalendarSyncRepository:
                         stats.unchanged,
                         stats.failed,
                         stats.duration_ms,
-                        Jsonb(stats.errors),
+                        Jsonb(redact_value(stats.errors)),
                         stats.run_id,
                     ),
                 )
@@ -268,6 +282,7 @@ class PostgresCalendarSyncRepository:
         max_attempts: int,
     ) -> None:
         should_retry = retryable and not reconnect_required and attempt_count < max_attempts
+        safe_error_code = _safe_error_code(error_code)
         async with await self._connect() as connection:
             async with connection.transaction():
                 await connection.execute(
@@ -286,7 +301,7 @@ class PostgresCalendarSyncRepository:
                         stats.unchanged,
                         stats.failed,
                         stats.duration_ms,
-                        Jsonb(stats.errors),
+                        Jsonb(redact_value(stats.errors)),
                         stats.run_id,
                     ),
                 )
@@ -299,7 +314,7 @@ class PostgresCalendarSyncRepository:
                         where id = %s
                         """,
                         (
-                            error_code,
+                            safe_error_code,
                             datetime.now(UTC)
                             + timedelta(seconds=min(30 * (2**attempt_count), 3600)),
                             stats.request_id,
@@ -311,7 +326,7 @@ class PostgresCalendarSyncRepository:
                         update public.calendar_sync_requests set status = 'FAILED',
                           finished_at = now(), error_code = %s where id = %s
                         """,
-                        (error_code, stats.request_id),
+                        (safe_error_code, stats.request_id),
                     )
                 await connection.execute(
                     """
@@ -324,5 +339,5 @@ class PostgresCalendarSyncRepository:
                     from public.calendar_sync_requests r
                     where r.id = %s and c.id = r.calendar_connection_id
                     """,
-                    (reconnect_required, should_retry, error_code, stats.request_id),
+                    (reconnect_required, should_retry, safe_error_code, stats.request_id),
                 )
