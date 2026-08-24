@@ -356,11 +356,12 @@ begin
         else 'ALLOWED_WITH_LIMITS'::public.source_policy_status end,
       case when provider in ('greenhouse', 'lever', 'github')
         then 'OFFICIAL_API'::public.collection_method
-        when provider = 'manual' then 'MANUAL_REFERENCE_ONLY'::public.collection_method
+        when provider in ('manual', 'static')
+          then 'MANUAL_REFERENCE_ONLY'::public.collection_method
         else 'ROBOTS_PERMITTED_HTTP'::public.collection_method end,
       provider in ('greenhouse', 'lever', 'github'),
       case when provider = 'github' then 'API_TOKEN' else 'NONE' end,
-      case when provider in ('greenhouse', 'lever', 'github', 'manual')
+      case when provider in ('greenhouse', 'lever', 'github', 'manual', 'static')
         then 'NOT_APPLICABLE'::public.robots_policy_mode
         else 'RESPECT_REQUIRED'::public.robots_policy_mode end,
       '{"development_only":true,"requests_per_second":1}'::jsonb,
@@ -372,9 +373,10 @@ begin
     from (
       select distinct provider from public.sources
       union select provider from (values
-        ('greenhouse'), ('lever'), ('github'), ('web_search'), ('public_web'), ('manual')
+        ('greenhouse'), ('lever'), ('github'), ('web_search'), ('public_web'), ('manual'),
+        ('static')
       ) known(provider)
-    ) providers
+    ) providers where provider <> 'you'
     on conflict (provider) do update set
       status = excluded.status,
       collection_method = excluded.collection_method,
@@ -394,6 +396,15 @@ begin
     update public.sources source set source_policy_id = policy.id
     from public.source_policies policy
     where source.provider = policy.provider
+      and not exists (
+        select 1 from public.public_web_search_queries query where query.source_id = source.id
+      )
+      and source.source_policy_id is distinct from policy.id;
+
+    update public.sources source set source_policy_id = policy.id
+    from public.public_web_search_queries query
+    join public.source_policies policy on policy.provider = query.provider
+    where query.source_id = source.id
       and source.source_policy_id is distinct from policy.id;
 
     insert into public.source_policy_host_rules (

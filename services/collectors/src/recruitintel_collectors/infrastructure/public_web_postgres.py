@@ -33,11 +33,16 @@ from recruitintel_collectors.public_web.models import (
     NormalizedWebObservation,
     PublicWebWorkRequest,
     RelevanceDecision,
+    SearchBatch,
     SearchQueryConfig,
-    SearchResult,
     SourceAssessment,
     StoredDocument,
     WebRunStats,
+)
+from recruitintel_collectors.public_web.search import (
+    SearchProviderAuthRequiredError,
+    SearchProviderPermanentError,
+    SearchProviderRateLimitedError,
 )
 from recruitintel_collectors.public_web.urls import UnsafeUrlError, canonicalize_url
 from recruitintel_collectors.redaction import redact_text
@@ -240,7 +245,7 @@ class PostgresPublicWebRepository:
         run_id: UUID,
         request: PublicWebWorkRequest,
         query: SearchQueryConfig,
-        results: Sequence[SearchResult],
+        batch: SearchBatch,
     ) -> tuple[int, tuple[UUID, ...]]:
         now = datetime.now(UTC)
         candidates: list[tuple[UUID, str]] = []
@@ -251,7 +256,7 @@ class PostgresPublicWebRepository:
                     "select pg_advisory_xact_lock(hashtextextended(%s, 0))",
                     (f"web-query:{query.id}",),
                 )
-                for result in results[: query.max_results]:
+                for result in batch.results[: query.max_results]:
                     try:
                         canonical = canonicalize_url(result.url)
                     except UnsafeUrlError:
@@ -325,7 +330,22 @@ class PostgresPublicWebRepository:
                         ) values (%s, %s, %s, %s)
                         on conflict (candidate_id, search_query_id) do nothing
                         """,
-                        (candidate["id"], query.id, result.rank, Jsonb(result.metadata)),
+                        (
+                            candidate["id"],
+                            query.id,
+                            result.rank,
+                            Jsonb(
+                                {
+                                    "result_kind": result.result_kind.value,
+                                    "published_at": (
+                                        result.published_at.isoformat()
+                                        if result.published_at is not None
+                                        else None
+                                    ),
+                                    **result.metadata.model_dump(mode="json", exclude_none=True),
+                                }
+                            ),
+                        ),
                     )
                     candidates.append((candidate["id"], candidate["fetch_status"]))
                 fetch_ids = tuple(
@@ -368,10 +388,29 @@ class PostgresPublicWebRepository:
                 await connection.execute(
                     """
                     update public.public_web_runs set provider = %s, query = %s,
-                      candidate_count = %s
+                      candidate_count = %s, metadata = metadata || %s
                     where collector_run_id = %s
                     """,
-                    (query.provider, query.query, len(candidates), run_id),
+                    (
+                        query.provider,
+                        query.query,
+                        len(candidates),
+                        Jsonb(
+                            {
+                                "provider_calls": batch.provider_calls,
+                                "cost_units": batch.cost_units,
+                                "estimated_cost_micros": batch.estimated_cost_micros,
+                                "quota_remaining": batch.quota_remaining,
+                                "quota_reset_at": (
+                                    batch.quota_reset_at.isoformat()
+                                    if batch.quota_reset_at is not None
+                                    else None
+                                ),
+                                "truncated": batch.truncated,
+                            }
+                        ),
+                        run_id,
+                    ),
                 )
         return len(candidates), fetch_ids
 
@@ -1004,7 +1043,11 @@ class PostgresPublicWebRepository:
     ) -> None:
         now = datetime.now(UTC)
         blocked = isinstance(error, (UnsafeUrlError, RobotsDeniedError))
-        retry = not blocked and request.attempt_count < request.max_attempts
+        permanent = isinstance(
+            error,
+            (SearchProviderAuthRequiredError, SearchProviderPermanentError),
+        )
+        retry = not blocked and not permanent and request.attempt_count < request.max_attempts
         stage = {
             WebWorkType.SEARCH: "DISCOVER",
             WebWorkType.FETCH: "FETCH",
@@ -1080,12 +1123,30 @@ class PostgresPublicWebRepository:
                         ),
                     )
                 if request.search_query_id is not None:
+                    rate_limited = isinstance(error, SearchProviderRateLimitedError)
+                    provider_retry_after = (
+                        error.retry_after_seconds
+                        if isinstance(error, SearchProviderRateLimitedError)
+                        else None
+                    )
                     await connection.execute(
                         """
                         update public.public_web_search_queries set
-                          status = 'FAILED', last_run_at = %s,
+                          status = %s, last_run_at = %s,
                           next_allowed_run_at = %s
                         where id = %s
                         """,
-                        (now, now + timedelta(minutes=5), request.search_query_id),
+                        (
+                            "RATE_LIMITED" if rate_limited else "FAILED",
+                            now,
+                            now
+                            + timedelta(
+                                seconds=(
+                                    provider_retry_after
+                                    if provider_retry_after is not None
+                                    else 300
+                                )
+                            ),
+                            request.search_query_id,
+                        ),
                     )

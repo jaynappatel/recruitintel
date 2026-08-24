@@ -9,8 +9,9 @@ from recruitintel_collectors.recruiter_campus.protocols import (
 from .classification import DeterministicRelevanceClassifier, classify_source
 from .extraction import DeterministicHtmlExtractor, normalized_content_hash
 from .information import DeterministicRecruitingInformationExtractor
-from .models import PublicWebWorkRequest, WebRunStats
-from .protocols import PublicWebFetcher, PublicWebRepository, SearchProvider
+from .models import PublicWebWorkRequest, SearchRequest, WebRunStats
+from .protocols import PublicWebFetcher, PublicWebRepository
+from .search import SearchProviderRegistry
 
 
 class SearchFrequencyLimitError(RuntimeError):
@@ -22,7 +23,7 @@ class PublicWebWorker:
         self,
         *,
         repository: PublicWebRepository,
-        search_providers: dict[str, SearchProvider],
+        search_registry: SearchProviderRegistry,
         fetcher: PublicWebFetcher,
         extractor: DeterministicHtmlExtractor | None = None,
         relevance_classifier: DeterministicRelevanceClassifier | None = None,
@@ -30,7 +31,7 @@ class PublicWebWorker:
         recruiter_campus_processor: RecruiterCampusObservationProcessor | None = None,
     ) -> None:
         self._repository = repository
-        self._search_providers = search_providers
+        self._search_registry = search_registry
         self._fetcher = fetcher
         self._extractor = extractor or DeterministicHtmlExtractor()
         self._relevance = relevance_classifier or DeterministicRelevanceClassifier()
@@ -52,22 +53,24 @@ class PublicWebWorker:
                     raise SearchFrequencyLimitError(
                         f"query cannot run before {query.next_allowed_run_at.isoformat()}"
                     )
-                try:
-                    provider = self._search_providers[query.provider]
-                except KeyError as exc:
-                    raise KeyError(f"search provider {query.provider!r} is not configured") from exc
+                provider = self._search_registry.get(query.provider)
                 run_id = await self._repository.start_run(request, query.source_id)
-                results = await provider.search(query.query, max_results=query.max_results)
+                batch = await provider.search(
+                    SearchRequest(query=query.query, max_results=query.max_results)
+                )
                 count, _fetch_ids = await self._repository.persist_search_results(
                     run_id=run_id,
                     request=request,
                     query=query,
-                    results=results,
+                    batch=batch,
                 )
                 stats = WebRunStats(
                     request_id=request.id,
                     work_type=request.work_type,
                     candidates=count,
+                    provider_calls=batch.provider_calls,
+                    cost_units=batch.cost_units,
+                    estimated_cost_micros=batch.estimated_cost_micros,
                     duration_ms=int((monotonic() - started) * 1000),
                 )
             elif request.work_type.value == "WEB_FETCH":

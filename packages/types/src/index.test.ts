@@ -82,6 +82,8 @@ describe("API query schemas", () => {
       maxFetches: 3,
     });
     expect(() => webSearchRequestSchema.parse({ maxResults: 2, maxFetches: 3 })).toThrow();
+    expect(() => webSearchRequestSchema.parse({ provider: "unreviewed-vendor" })).toThrow();
+    expect(() => webSearchRequestSchema.parse({ provider: "you" })).toThrow();
   });
 
   it("validates public-web provenance and claim conflicts", () => {

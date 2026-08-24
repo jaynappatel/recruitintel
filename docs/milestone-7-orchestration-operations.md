@@ -68,6 +68,18 @@ pg_restore --clean --if-exists --no-owner --dbname=recruitintel_restore \
 There is no formal DOWN migration because dropping orchestration tables would discard new attempt
 history. Operational restore is the reversible recovery path.
 
+## Gate 7.1A migration 0008
+
+Migration 0008 changes search-query/source policy linkage and adds provider budget tables/functions,
+so deploy it with the matching TypeScript query writer and Python search contracts while web writes,
+schedulers, and workers are stopped. Take and verify a protected pre-0008 custom-format backup using
+the procedure above. Run `pnpm --filter @recruitintel/db smoke:migration-0008`, apply the migration,
+and verify every search query's `provider_policy_id` matches both its provider and source policy.
+Confirm the `you/default` budget is disabled and the You policy remains `REVIEW_REQUIRED` and
+`NOT_REVIEWED`. Run the development seed only outside production. Restore the pre-0008 backup into
+a replacement database if linkage/count, role, or budget checks fail; do not drop new history from a
+partially used database as an ad hoc rollback.
+
 ## Routine recovery
 
 The scheduler calls the lease reaper on every tick. A stopped heartbeat makes a long handler lose

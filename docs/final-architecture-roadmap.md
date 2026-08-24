@@ -9,7 +9,8 @@ does not replace legal review, and did not modify production code or the
 Claude-owned frontend. Root repository licenses, nested code licenses, datasets,
 models, fonts, fixtures, and provider terms are treated as separate rights.
 
-Implementation status update (2026-08-23): Gate 5.1, Milestone 6, and Milestone 7 are complete.
+Implementation status update (2026-08-24): Gate 5.1, Milestone 6, Milestone 7, and Gate 7.1A are
+complete.
 Milestone 6 replaced the configured owner/static admin runtime with authenticated users, hashed
 scoped service principals, compound private ownership, privacy/audit/redaction foundations, and
 current-behavior instrumentation. Milestone 7 replaced manually dispatched durable requests with a
@@ -17,8 +18,9 @@ small PostgreSQL scheduler/lease/attempt/dead-letter control plane, fail-closed 
 lane-bound workers, deterministic source health, and an address-pinned outbound web transport. The
 current operational contracts are `docs/identity-privacy-audit.md`,
 `docs/orchestration-source-governance.md`, and
-`docs/milestone-7-orchestration-operations.md`. Gate 7.1 remains separate; no live general-web
-search provider was introduced.
+`docs/milestone-7-orchestration-operations.md`. Gate 7.1A adds provider-neutral search contracts,
+an offline-only You.com adapter, provider-policy linkage, and transactional budgets. Gate 7.1B
+remains separate; no live general-web search provider or schedule is enabled.
 
 ## 1. Current system map
 
@@ -52,7 +54,7 @@ are intentionally limited to `INTERVAL` and `DAILY_AT`.
 | 4         | Deterministic People, RecruiterProfile, evidence, School, recruiter-school and role-focus relationships, campus events, unresolved observations, and read APIs                                                                                                     | This is a projection of Milestone 3 evidence, not a separate crawler. Several large repository modules concentrate extraction, persistence, and projection policy.                                                                                                        |
 | 5         | RecruitingDate, CalendarItem, deterministic ApplicationPlan/Task, Google OAuth with state and PKCE, encrypted refresh credentials, connection/preferences, provider abstraction, one-way retry-safe Google sync, external mappings, sync request/run observability | Gate 5.1 reconciled the production Calendar/Settings UI with these canonical APIs and removed browser plan generation. Milestone 6 subsequently replaced the MVP owner with authenticated ownership.                                                                      |
 | 6         | Authenticated identity/session persistence, private ownership, scoped service principals, audit/privacy/redaction foundations, and privacy-safe product instrumentation                                                                                            | Admin authority is not universal private-data access. Browser APIs derive ownership only from trusted session context.                                                                                                                                                    |
-| 7         | PostgreSQL scheduling, typed WorkItems/attempts, fenced leases/recovery, deterministic retry/dead letters, source policy and health, lane-bound workers, distributed provider/host throttles, and DNS-pinned public fetching                                       | Domain lifecycle and idempotency remain in subsystem tables. General-web discovery still uses only the static development provider pending Gate 7.1 policy/vendor review.                                                                                                 |
+| 7         | PostgreSQL scheduling, typed WorkItems/attempts, fenced leases/recovery, deterministic retry/dead letters, source policy and health, lane-bound workers, distributed provider/host throttles, and DNS-pinned public fetching                                       | Domain lifecycle and idempotency remain in subsystem tables. Gate 7.1A supplies offline production-adapter infrastructure; live discovery remains disabled pending Gate 7.1B authorization, quality, policy, credential, and schedule activation.                           |
 
 ### Existing strengths to preserve
 
@@ -488,7 +490,8 @@ owner FK; sensitive future milestones have documented storage/retention paths.
 
 **Status:** Complete on 2026-08-23. See `docs/orchestration-source-governance.md` and
 `docs/milestone-7-orchestration-operations.md` for the implemented contract and cutover procedure.
-Gate 7.1 remains unstarted.
+Gate 7.1A is implemented as a production-disabled provider foundation. Gate 7.1B remains blocked on
+the authorization and activation checklist in `docs/search-provider-integration.md`.
 
 **Goal:** make discovery work continuously, recoverably, and legally observable.
 

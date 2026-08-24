@@ -84,8 +84,9 @@ source's hostname/scheme/port rule before DNS. Development seed policies are vis
 
 The search registry currently contains only the credential-free, non-production `static` provider.
 No live general-web vendor was selected. A provider descriptor must state capabilities, hosts,
-credentials, budget, cost metadata, retry behavior, and terms status. Gate 7.1 requires an actual
-provider/legal review before implementation.
+credentials, budget, cost metadata, retry behavior, and terms status. Gate 7.1A adds the canonical
+offline adapter and transactional provider budgets; Gate 7.1B requires an actual
+provider/legal review before production activation.
 
 ## Fetch safety
 

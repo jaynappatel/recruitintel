@@ -40,15 +40,17 @@ Candidate identity is `(company_id, canonical_url)`. Document identity is `(cand
 
 ## Search provider and query templates
 
-`SearchProvider` exposes only:
+Gate 7.1A replaces the original tuple contract with one canonical `SearchProvider`:
 
 ```python
 name: str
-async search(query: str, *, max_results: int) -> Sequence[SearchResult]
+async search(request: SearchRequest) -> SearchBatch
 ```
 
-Business logic never reads provider-specific response shapes. Milestone 7 adds a capability/terms/
-quota descriptor registry but intentionally still registers only the `static` provider:
+`SearchRequest` carries bounded query/result/country/language/freshness/domain-filter inputs.
+`SearchBatch` carries bounded canonical results and aggregate provider call/cost/quota metadata.
+Business logic never reads provider-specific response shapes. The production runtime still
+registers only the `static` provider:
 
 - with `PUBLIC_WEB_STATIC_RESULTS_FILE=/absolute/path/results.json`, it loads deterministic results from a JSON object keyed by exact query text;
 - without the variable, it remains a valid inert provider that returns no results;
@@ -72,13 +74,11 @@ The JSON shape is:
 
 Generated queries cover early career, university/campus recruiting, application deadlines, interview experiences, role focus, internship/new-grad focus, optional school and graduation year, and bounded `site:reddit.com`/`site:github.com` references. Search parameters configure `minimumIntervalSeconds` (60–2,592,000), `maxResults` (1–100), and `maxFetches` (0–`maxResults`). The API skips queries whose `nextAllowedRunAt` is still in the future.
 
-Adding a live provider is Gate 7.1 and requires an actual terms/policy review. At that gate:
-
-1. Implement `SearchProvider` under `public_web` and map its response to `SearchResult`.
-2. Keep credentials, pagination, quota/rate handling, and provider errors inside the adapter.
-3. Register the provider by name in the CLI composition root.
-4. Add offline fixtures for empty, duplicate, malformed, paginated, and rate-limited responses.
-5. Verify the provider's API terms before enabling it. Do not scrape search-result HTML.
+Gate 7.1A includes an offline-testable `YouSearchProvider`, explicit provider-policy linkage, and
+transactional usage budgets, but does not register or approve it for production. Gate 7.1B owns
+written authorization, retained-field permission, a manual quality benchmark, policy approval,
+secret provisioning, runtime registration, and schedule activation. See
+`docs/search-provider-integration.md`. Do not scrape search-result HTML.
 
 ## URL normalization and safe fetching
 
@@ -292,7 +292,8 @@ Admin-authenticated. Returns HTTP `202 { data: PublicWebWorkRequest }`, `400` fo
 
 ## Troubleshooting
 
-- `search provider 'x' is not configured`: use `provider: "static"` or register a reviewed adapter in the CLI.
+- `search provider 'x' is not configured`: Gate 7.1A runtime supports only the development/test
+  `static` provider; complete Gate 7.1B before registering a live adapter.
 - Static searches return zero candidates: set `PUBLIC_WEB_STATIC_RESULTS_FILE` and ensure its keys exactly match the generated query strings shown by the search-query API.
 - `UnsafeUrlError`: the URL is malformed, contains credentials, or resolves to a non-public address.
 - `RobotsDeniedError`: the candidate remains blocked; do not bypass the policy.

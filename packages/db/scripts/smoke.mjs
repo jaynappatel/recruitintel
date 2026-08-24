@@ -50,6 +50,7 @@ try {
       (select count(*) from public.work_items)::int as work_items,
       (select count(*) from public.work_attempts)::int as work_attempts,
       (select count(*) from public.worker_role_bindings)::int as worker_role_bindings,
+      (select count(*) from public.search_provider_budgets)::int as search_provider_budgets,
       (
         select count(*) from public.calendar_items item
         left join public.users app_user on app_user.id = item.user_id
@@ -82,6 +83,14 @@ try {
     "calendar_items_plan_owner_fkey",
     "calendar_external_events_connection_owner_fkey",
     "calendar_sync_runs_request_owner_fkey",
+    "public_web_search_queries_provider_policy_fkey",
+    "public_web_search_queries_source_policy_fkey",
+    "source_policies_provider_id_key",
+    "sources_id_source_policy_id_key",
+    "work_items_no_search_api_key_diagnostics",
+    "work_attempts_no_search_api_key_diagnostics",
+    "dead_letters_no_search_api_key_diagnostics",
+    "public_web_runs_no_raw_search_payload",
   ];
   const constraints = await sql`
     select conname
@@ -97,13 +106,15 @@ try {
     "work_items_lease_expiry_idx",
     "source_incidents_one_open_idx",
     "public_web_runs_request_idx",
+    "public_web_search_queries_provider_policy_idx",
+    "search_provider_usage_month_idx",
   ];
   const indexes = await sql`
     select indexname from pg_indexes
     where schemaname = 'public' and indexname in ${sql(requiredIndexes)}
   `;
 
-  if (!counts || counts.migrations < 7) {
+  if (!counts || counts.migrations < 8) {
     throw new Error("no applied RecruitIntel migrations were found");
   }
   if (counts.companies < 1 || counts.sources < 1 || counts.schools < 1) {
@@ -128,6 +139,9 @@ try {
   }
   if (counts.source_policies < 1 || counts.schedules < 1 || counts.worker_role_bindings < 1) {
     throw new Error("Milestone 7 policy, schedule, or worker binding seed is missing");
+  }
+  if (counts.search_provider_budgets < 1) {
+    throw new Error("Gate 7.1A search-provider budgets are missing");
   }
 
   console.log(JSON.stringify({ status: "ok", ...counts }));

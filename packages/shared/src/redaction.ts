@@ -2,14 +2,14 @@ export const REDACTED = "[REDACTED]";
 export const REDACTED_EMAIL = "[REDACTED_EMAIL]";
 
 const SENSITIVE_KEY =
-  /^(?:authorization|proxy-authorization|cookie|set-cookie|access_?token|refresh_?token|id_?token|session_?token|oauth_?code|client_?secret|password|secret|private_?key|encrypted_?refresh_?token|code_?verifier|resume_?text|dom|dom_?html|form_?values|raw_?payload)$/i;
+  /^(?:authorization|proxy-authorization|x-api-key|api[_-]?key|cookie|set-cookie|access_?token|refresh_?token|id_?token|session_?token|oauth_?code|client_?secret|password|secret|private_?key|encrypted_?refresh_?token|code_?verifier|resume_?text|dom|dom_?html|form_?values|raw_?payload)$/i;
 const URL_KEY = /(?:url|uri|href)$/i;
 const EMAIL = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
 const AUTHORIZATION_HEADER =
-  /\b(?:authorization|proxy-authorization)\s*:\s*(?:(?:bearer|basic)\s+)?[^\s,;]+/gi;
+  /\b(?:authorization|proxy-authorization|x-api-key)\s*:\s*(?:(?:bearer|basic)\s+)?[^\s,;]+/gi;
 const COOKIE_HEADER = /\b(?:cookie|set-cookie)\s*:\s*[^\r\n]+/gi;
 const NAMED_SECRET =
-  /\b(access_?token|refresh_?token|id_?token|session_?token|oauth_?code|client_?secret|code_?verifier|password)\s*[=:]\s*(?:"[^"]*"|'[^']*'|[^\s&,;]+)/gi;
+  /\b(api[_-]?key|access_?token|refresh_?token|id_?token|session_?token|oauth_?code|client_?secret|code_?verifier|password)\s*[=:]\s*(?:"[^"]*"|'[^']*'|[^\s&,;]+)/gi;
 const HTTP_URL = /https?:\/\/[^\s<>"']+/gi;
 
 function stripUrlQuery(value: string): string {

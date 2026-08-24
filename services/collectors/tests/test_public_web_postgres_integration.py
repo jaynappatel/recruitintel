@@ -8,7 +8,7 @@ from psycopg.rows import dict_row
 from recruitintel_collectors.infrastructure.public_web_postgres import PostgresPublicWebRepository
 from recruitintel_collectors.public_web.models import FetchedDocument, SearchResult
 from recruitintel_collectors.public_web.runner import PublicWebWorker
-from recruitintel_collectors.public_web.search import StaticSearchProvider
+from recruitintel_collectors.public_web.search import SearchProviderRegistry, StaticSearchProvider
 
 FIXTURES = Path(__file__).parent / "fixtures"
 COMPANY_ID = UUID("c1000000-0000-0000-0000-000000000001")
@@ -56,7 +56,7 @@ async def _seed(database_url: str) -> None:
             update public.source_policies set
               status = 'ALLOWED_WITH_LIMITS', terms_status = 'REVIEWED',
               reviewed_at = now(), reviewed_by = 'integration-test'
-            where provider in ('web_search', 'public_web')
+            where provider in ('static', 'public_web')
             """
         )
         await connection.execute(
@@ -92,7 +92,7 @@ async def _seed(database_url: str) -> None:
             ) values (
               %s, %s, 'PUBLIC_WEB', 'web_search',
               'static:web-integration-stripe', 'Synthetic static search', 0.500,
-              (select id from public.source_policies where provider = 'web_search')
+              (select id from public.source_policies where provider = 'static')
             )
             """,
             (SEARCH_SOURCE_ID, COMPANY_ID),
@@ -188,18 +188,23 @@ async def test_public_web_end_to_end_change_conflict_and_retry_idempotency() -> 
                     title="UT Austin career fair",
                     rank=3,
                 ),
+                SearchResult(
+                    url="https://unreviewed-destination.example/internships",
+                    title="Unreviewed destination retained only as provenance",
+                    rank=4,
+                ),
             ]
         }
     )
     worker = PublicWebWorker(
         repository=repository,
-        search_providers={provider.name: provider},
+        search_registry=SearchProviderRegistry([provider]),
         fetcher=fetcher,
     )
     try:
         search = await worker.run(SEARCH_REQUEST_ID)
         await _retire_domain_test_work(database_url, SEARCH_REQUEST_ID)
-        assert search.candidates == 2
+        assert search.candidates == 3
 
         fetch_requests = await _pending_requests(database_url, "WEB_FETCH")
         assert len(fetch_requests) == 2
@@ -263,7 +268,7 @@ async def test_public_web_end_to_end_change_conflict_and_retry_idempotency() -> 
             )
             counts = await cursor.fetchone()
             assert counts is not None
-            assert counts["candidates"] == 2
+            assert counts["candidates"] == 3
             assert counts["documents"] == 3
             assert counts["observations"] >= 5
             event_count = counts["events"]

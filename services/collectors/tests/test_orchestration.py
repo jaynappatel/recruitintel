@@ -74,6 +74,23 @@ async def test_dispatcher_fails_closed_before_handler_when_policy_changes() -> N
 
 
 @pytest.mark.asyncio
+async def test_search_provider_policy_changed_after_enqueue_never_calls_adapter() -> None:
+    repository = repository_mock()
+    repository.assert_source_policy.side_effect = SourcePolicyBlockedError
+    handler = AsyncMock(return_value=WorkExecutionResult())
+    dispatcher = TypedWorkDispatcher(repository=repository, handlers=handlers(handler))
+    work = claimed(WorkType.PUBLIC_WEB_SEARCH).model_copy(
+        update={"source_id": uuid4(), "public_web_work_request_id": uuid4()}
+    )
+
+    await dispatcher.execute(work)
+
+    handler.assert_not_awaited()
+    failure = repository.finish_failure.await_args.args[1]
+    assert failure.classification is FailureClassification.POLICY_BLOCKED
+
+
+@pytest.mark.asyncio
 async def test_heartbeat_failure_cancels_long_running_handler() -> None:
     repository = repository_mock()
     repository.heartbeat.side_effect = RuntimeError("fenced lease lost")

@@ -7,7 +7,7 @@ REDACTED = "[REDACTED]"
 REDACTED_EMAIL = "[REDACTED_EMAIL]"
 
 _SENSITIVE_KEY = re.compile(
-    r"^(?:authorization|proxy-authorization|cookie|set-cookie|access_?token|"
+    r"^(?:authorization|proxy-authorization|x-api-key|api[_-]?key|cookie|set-cookie|access_?token|"
     r"refresh_?token|id_?token|session_?token|oauth_?code|client_?secret|password|"
     r"secret|private_?key|encrypted_?refresh_?token|code_?verifier|resume_?text|dom|"
     r"dom_?html|form_?values|raw_?payload)$",
@@ -16,12 +16,13 @@ _SENSITIVE_KEY = re.compile(
 _URL_KEY = re.compile(r"(?:url|uri|href)$", re.IGNORECASE)
 _EMAIL = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 _AUTHORIZATION_HEADER = re.compile(
-    r"\b(authorization|proxy-authorization)\s*:\s*(?:(?:bearer|basic)\s+)?[^\s,;]+",
+    r"\b(authorization|proxy-authorization|x-api-key)\s*:\s*"
+    r"(?:(?:bearer|basic)\s+)?[^\s,;]+",
     re.IGNORECASE,
 )
 _COOKIE_HEADER = re.compile(r"\b(cookie|set-cookie)\s*:\s*[^\r\n]+", re.IGNORECASE)
 _NAMED_SECRET = re.compile(
-    r"\b(access_?token|refresh_?token|id_?token|session_?token|oauth_?code|"
+    r"\b(api[_-]?key|access_?token|refresh_?token|id_?token|session_?token|oauth_?code|"
     r"client_?secret|code_?verifier|password)\s*[=:]\s*(?:\"[^\"]*\"|'[^']*'|[^\s&,;]+)",
     re.IGNORECASE,
 )

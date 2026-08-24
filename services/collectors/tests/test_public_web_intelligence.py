@@ -36,6 +36,7 @@ from recruitintel_collectors.public_web.models import (
     CompanyWebConfig,
     FetchedDocument,
     SearchContext,
+    SearchRequest,
 )
 from recruitintel_collectors.public_web.query_templates import generate_search_queries
 from recruitintel_collectors.public_web.search import (
@@ -376,9 +377,10 @@ def test_information_extraction_keeps_page_title_without_headings() -> None:
 @pytest.mark.asyncio
 async def test_static_search_provider_preserves_independent_results() -> None:
     provider = JsonFileSearchProvider(FIXTURES / "web_static_search_results.json")
-    results = await provider.search('"Stripe" internship 2027', max_results=10)
-    assert len(results) == 3
-    assert results[0].rank == 1
+    batch = await provider.search(SearchRequest(query='"Stripe" internship 2027', max_results=10))
+    assert len(batch.results) == 2
+    assert batch.results[0].rank == 1
+    assert batch.provider_calls == 0
 
 
 def test_search_registry_requires_an_explicit_descriptor_for_every_provider() -> None:

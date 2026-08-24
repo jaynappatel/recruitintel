@@ -23,6 +23,12 @@
       "input": "access_token=access-secret refresh_token=refresh-secret client_secret=client-secret",
       "expected": "access_token=[REDACTED] refresh_token=[REDACTED] client_secret=[REDACTED]",
       "forbidden": ["access-secret", "refresh-secret", "client-secret"]
+    },
+    {
+      "name": "search_provider_api_key",
+      "input": "X-API-Key: you-search-secret api_key=second-search-secret",
+      "expected": "X-API-Key=[REDACTED] api_key=[REDACTED]",
+      "forbidden": ["you-search-secret", "second-search-secret"]
     }
   ],
   "objectCase": {

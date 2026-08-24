@@ -12,6 +12,7 @@ from .enums import (
     PublicObservationType,
     RelevanceStatus,
     ReliabilityLevel,
+    SearchResultKind,
     WebSourceClassification,
     WebWorkStatus,
     WebWorkType,
@@ -46,14 +47,115 @@ class SearchQuerySpec(BaseModel):
     query: str = Field(min_length=1, max_length=1000)
 
 
+class SearchRequest(BaseModel):
+    """Provider-neutral, bounded search input."""
+
+    model_config = ConfigDict(frozen=True)
+
+    query: str = Field(min_length=1, max_length=1000)
+    max_results: int = Field(ge=1, le=100)
+    country_code: str | None = Field(default=None, pattern=r"^[A-Z]{2}$")
+    language: str | None = Field(default=None, pattern=r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")
+    freshness: str | None = Field(
+        default=None,
+        pattern=r"^(?:day|week|month|year|\d{4}-\d{2}-\d{2}to\d{4}-\d{2}-\d{2})$",
+    )
+    include_domains: tuple[str, ...] = Field(default=(), max_length=500)
+    exclude_domains: tuple[str, ...] = Field(default=(), max_length=500)
+
+    @field_validator("query")
+    @classmethod
+    def normalize_query(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("query must not be blank")
+        return normalized
+
+    @field_validator("include_domains", "exclude_domains")
+    @classmethod
+    def normalize_domains(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            candidate = value.strip().casefold().rstrip(".")
+            if not candidate or any(character in candidate for character in "/:@* "):
+                raise ValueError("search domains must be bare hostnames")
+            try:
+                candidate = candidate.encode("idna").decode("ascii")
+            except UnicodeError as exc:
+                raise ValueError("search domain is invalid") from exc
+            labels = candidate.split(".")
+            if (
+                len(candidate) > 253
+                or any(not label or len(label) > 63 for label in labels)
+                or any(label.startswith("-") or label.endswith("-") for label in labels)
+                or any(
+                    not all(character.isalnum() or character == "-" for character in label)
+                    for label in labels
+                )
+            ):
+                raise ValueError("search domain is invalid")
+            if candidate not in seen:
+                seen.add(candidate)
+                normalized.append(candidate)
+        return tuple(normalized)
+
+    @model_validator(mode="after")
+    def mutually_exclusive_domains(self) -> "SearchRequest":
+        if self.include_domains and self.exclude_domains:
+            raise ValueError("include_domains and exclude_domains cannot be combined")
+        return self
+
+
+class SearchResultMetadata(BaseModel):
+    """Strictly allowlisted search-result provenance."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    page_offset: int | None = Field(default=None, ge=0, le=9)
+    section_rank: int | None = Field(default=None, ge=1, le=100)
+
+
 class SearchResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    url: str
-    title: str = ""
-    snippet: str = ""
+    url: str = Field(min_length=1, max_length=8192)
+    title: str = Field(default="", max_length=500)
+    snippet: str = Field(default="", max_length=2000)
     rank: int = Field(ge=1)
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    result_kind: SearchResultKind = SearchResultKind.WEB
+    published_at: datetime | None = None
+    metadata: SearchResultMetadata = Field(default_factory=SearchResultMetadata)
+
+    @field_validator("published_at")
+    @classmethod
+    def normalize_result_published_at(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+
+class SearchBatch(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    results: tuple[SearchResult, ...] = Field(max_length=100)
+    provider_calls: int = Field(ge=0)
+    cost_units: int = Field(ge=0)
+    estimated_cost_micros: int = Field(ge=0)
+    quota_remaining: int | None = Field(default=None, ge=0)
+    quota_reset_at: datetime | None = None
+    truncated: bool = False
+
+    @field_validator("quota_reset_at")
+    @classmethod
+    def normalize_quota_reset_at(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
 
 
 class SearchQueryConfig(BaseModel):
@@ -201,6 +303,9 @@ class WebRunStats(BaseModel):
     request_id: UUID
     work_type: WebWorkType
     candidates: int = Field(default=0, ge=0)
+    provider_calls: int = Field(default=0, ge=0)
+    cost_units: int = Field(default=0, ge=0)
+    estimated_cost_micros: int = Field(default=0, ge=0)
     fetched: int = Field(default=0, ge=0)
     relevant: int = Field(default=0, ge=0)
     observations_created: int = Field(default=0, ge=0)

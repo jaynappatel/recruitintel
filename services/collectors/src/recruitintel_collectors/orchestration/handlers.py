@@ -140,7 +140,7 @@ class RuntimeWorkHandlers:
         ) as fetcher:
             stats = await PublicWebWorker(
                 repository=repository,
-                search_providers={provider.name: search_registry.get(provider.name)},
+                search_registry=search_registry,
                 fetcher=fetcher,
                 recruiter_campus_processor=None,
             ).run(work.public_web_work_request_id)
@@ -154,7 +154,12 @@ class RuntimeWorkHandlers:
             discovered=stats.candidates,
             processed=(stats.fetched + stats.observations_created + stats.events_created),
             failed=0,
-            diagnostics={"unchangedContent": stats.unchanged},
+            diagnostics={
+                "unchangedContent": stats.unchanged,
+                "providerCalls": stats.provider_calls,
+                "costUnits": stats.cost_units,
+                "estimatedCostMicros": stats.estimated_cost_micros,
+            },
         )
 
     async def recruiter_campus(self, work: ClaimedWork) -> WorkExecutionResult:

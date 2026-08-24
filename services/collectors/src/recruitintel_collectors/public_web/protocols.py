@@ -9,19 +9,12 @@ from .models import (
     NormalizedWebObservation,
     PublicWebWorkRequest,
     RelevanceDecision,
+    SearchBatch,
     SearchQueryConfig,
-    SearchResult,
     SourceAssessment,
     StoredDocument,
     WebRunStats,
 )
-
-
-class SearchProvider(Protocol):
-    @property
-    def name(self) -> str: ...
-
-    async def search(self, query: str, *, max_results: int) -> Sequence[SearchResult]: ...
 
 
 class PublicWebFetcher(Protocol):
@@ -69,7 +62,7 @@ class PublicWebRepository(Protocol):
         run_id: UUID,
         request: PublicWebWorkRequest,
         query: SearchQueryConfig,
-        results: Sequence[SearchResult],
+        batch: SearchBatch,
     ) -> tuple[int, tuple[UUID, ...]]: ...
 
     async def persist_fetched_document(

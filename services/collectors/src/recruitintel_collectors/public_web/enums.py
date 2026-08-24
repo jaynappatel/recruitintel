@@ -81,6 +81,11 @@ class WebWorkType(StrEnum):
     PROCESS = "WEB_PROCESS"
 
 
+class SearchResultKind(StrEnum):
+    WEB = "WEB"
+    NEWS = "NEWS"
+
+
 class WebWorkStatus(StrEnum):
     PENDING = "PENDING"
     RUNNING = "RUNNING"

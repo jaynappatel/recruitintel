@@ -383,10 +383,10 @@ export async function createWebSearchRequests(
         ${company.id}::uuid, 'PUBLIC_WEB', 'web_search', ${`${input.provider}:${company.id}`},
         ${`Web search: ${input.provider} / ${company.canonicalName}`}, 0.500,
         ${transaction.json({ provider: input.provider })},
-        (select id from public.source_policies where provider = 'web_search')
+        (select id from public.source_policies where provider = ${input.provider})
       )
       on conflict (provider, external_key) do update set enabled = true,
-        source_policy_id = coalesce(excluded.source_policy_id, public.sources.source_policy_id)
+        source_policy_id = excluded.source_policy_id
       returning id
     `;
     if (!source) throw new Error("Web search source upsert returned no row");
@@ -408,13 +408,14 @@ export async function createWebSearchRequests(
         insert into public.public_web_search_queries (
           company_id, source_id, provider, template_key, query, role_family,
           school_id, graduation_year, focus, minimum_interval_seconds,
-          max_results, max_fetches, metadata
+          max_results, max_fetches, metadata, provider_policy_id
         ) values (
           ${company.id}::uuid, ${stringValue(source.id)}::uuid, ${input.provider},
           ${value.key}, ${value.query}, ${input.roleFamily ?? null}, ${schoolId}::uuid,
           ${input.graduationYear ?? null}, ${input.focus}, ${input.minimumIntervalSeconds},
           ${input.maxResults}, ${input.maxFetches},
-          ${transaction.json({ school_name: input.school ?? null })}
+          ${transaction.json({ school_name: input.school ?? null })},
+          (select id from public.source_policies where provider = ${input.provider})
         )
         on conflict (company_id, provider, query) do update set
           role_family = excluded.role_family, school_id = excluded.school_id,

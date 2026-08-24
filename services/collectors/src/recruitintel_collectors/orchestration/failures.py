@@ -18,6 +18,12 @@ from recruitintel_collectors.public_web.fetcher import (
     RobotsDeniedError,
     RobotsUnavailableError,
 )
+from recruitintel_collectors.public_web.search import (
+    SearchProviderAuthRequiredError,
+    SearchProviderPermanentError,
+    SearchProviderRateLimitedError,
+    SearchProviderRetryableError,
+)
 from recruitintel_collectors.public_web.urls import UnsafeUrlError
 
 from .enums import FailureClassification
@@ -31,6 +37,28 @@ def _seconds_until(value: datetime | None) -> int | None:
 
 
 def classify_failure(error: Exception) -> WorkFailure:
+    if isinstance(error, SearchProviderRateLimitedError):
+        return WorkFailure(
+            classification=FailureClassification.RATE_LIMITED,
+            code=error.code,
+            retry_after_seconds=error.retry_after_seconds,
+            diagnostics=({"budgetPeriod": error.period} if hasattr(error, "period") else {}),
+        )
+    if isinstance(error, SearchProviderAuthRequiredError):
+        return WorkFailure(
+            classification=FailureClassification.AUTH_REQUIRED,
+            code=error.code,
+        )
+    if isinstance(error, SearchProviderPermanentError):
+        return WorkFailure(
+            classification=FailureClassification.NON_RETRYABLE,
+            code=error.code,
+        )
+    if isinstance(error, SearchProviderRetryableError):
+        return WorkFailure(
+            classification=FailureClassification.RETRYABLE,
+            code=error.code,
+        )
     if isinstance(error, PublicWebRateLimitedError):
         return WorkFailure(
             classification=FailureClassification.RATE_LIMITED,
