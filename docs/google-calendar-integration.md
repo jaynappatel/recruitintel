@@ -45,9 +45,9 @@ CALENDAR_TOKEN_ENCRYPTION_KEY=replace-with-32-random-bytes-base64url
 ```
 
 The authenticated session is the only source of Calendar ownership. The web API binds queued work
-to that user in PostgreSQL; the finite worker receives only the request UUID and verifies the
-request/connection owner relationship in its database join. `RECRUITINTEL_APP_URL` is used only to
-build a safe link in event descriptions.
+to that user in PostgreSQL; the Calendar-lane typed worker receives only an orchestration reference
+to the owner-bound domain request and verifies the request/connection owner relationship in its
+database join. `RECRUITINTEL_APP_URL` is used only to build a safe link in event descriptions.
 
 The Calendar OAuth client must be separate from the sign-in client configured by
 `AUTH_GOOGLE_CLIENT_ID` and `AUTH_GOOGLE_CLIENT_SECRET`. Calendar grants and authentication grants
@@ -126,10 +126,12 @@ never returned to the browser or written to logs.
 - `GOOGLE_SCOPE_NOT_GRANTED`: reconnect and grant all requested Calendar permissions.
 - Connection is `REAUTH_REQUIRED`: Google rejected the refresh credential (revocation, expiration,
   password/security event, or session policy). Reconnect through the authorize endpoint.
-- Request remains `PENDING`: run the finite worker with the returned request ID or configure an
-  external scheduler. HTTP routes intentionally do not spawn provider work.
-- Provider returns 403: confirm the Calendar API is enabled, required scope is granted, and the
-  selected calendar is owned by the connected account.
+- Request remains `PENDING`: verify the Calendar worker lane is running, its database role is bound
+  to `CALENDAR`, and the Google provider policy is reviewed/executable. HTTP routes intentionally do
+  not spawn provider work.
+- Provider returns 403: quota/rate-limit reasons become retryable durable work and honor
+  `Retry-After`; authorization/scope reasons transition to `REAUTH_REQUIRED`. Confirm the Calendar
+  API is enabled, required scope is granted, and the selected calendar is owned by the account.
 - All-day item appears shifted: verify `startsOn`, `allDay`, and IANA `timezone`; do not replace the
   date with a browser-generated UTC timestamp.
 

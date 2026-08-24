@@ -7,6 +7,7 @@ export * from "./recruiter-campus";
 export * from "./calendar";
 export * from "./identity";
 export * from "./instrumentation";
+export * from "./orchestration";
 
 export interface CompanyRecord {
   id: string;

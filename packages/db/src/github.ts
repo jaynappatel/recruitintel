@@ -163,14 +163,17 @@ export async function attachCompanyGitHubRepository(
   return sql.begin(async (transaction) => {
     const [source] = await transaction`
       insert into public.sources (
-        source_type, provider, external_key, name, base_url, reliability, metadata
+        source_type, provider, external_key, name, base_url, reliability, metadata,
+        source_policy_id
       ) values (
         'GITHUB', 'github', ${`${coordinates.owner}/${coordinates.repositoryName}`},
         ${`GitHub: ${coordinates.owner}/${coordinates.repositoryName}`},
-        ${coordinates.repositoryUrl}, 0.650, ${transaction.json({ official_api: true })}
+        ${coordinates.repositoryUrl}, 0.650, ${transaction.json({ official_api: true })},
+        (select id from public.source_policies where provider = 'github')
       )
       on conflict (provider, external_key) do update set
-        base_url = excluded.base_url, enabled = true
+        base_url = excluded.base_url, enabled = true,
+        source_policy_id = coalesce(excluded.source_policy_id, public.sources.source_policy_id)
       returning id
     `;
     if (!source) throw new Error("GitHub source upsert returned no row");
@@ -191,6 +194,16 @@ export async function attachCompanyGitHubRepository(
     `;
     if (!repository) throw new Error("GitHub repository upsert returned no row");
     const repositoryId = stringValue(repository.id);
+    await transaction`
+      insert into public.schedules (
+        name, work_type, work_class, github_repository_id, enabled,
+        schedule_kind, interval_seconds, anchor_at, next_run_at,
+        jitter_seconds, priority, max_attempts
+      ) values (
+        ${`github:${repositoryId}`}, 'GITHUB_SYNC', 'GITHUB', ${repositoryId}::uuid,
+        false, 'INTERVAL', 21600, now(), now() + interval '6 hours', 900, 45, 3
+      ) on conflict (name) do nothing
+    `;
     await transaction`
       insert into public.github_repository_company_links (
         company_id, github_repository_id, watched_paths, company_mapping_rules, enabled

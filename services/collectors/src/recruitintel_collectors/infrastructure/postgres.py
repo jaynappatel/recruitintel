@@ -42,10 +42,11 @@ def _source_from_row(row: dict[str, Any]) -> SourceConfig:
 
 
 class PostgresCollectorRepository:
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, *, work_attempt_id: UUID | None = None) -> None:
         if not database_url.startswith(("postgresql://", "postgres://")):
             raise ValueError("DATABASE_URL must be a PostgreSQL URL")
         self.database_url = database_url
+        self.work_attempt_id = work_attempt_id
 
     async def _connect(self) -> psycopg.AsyncConnection[dict[str, Any]]:
         return await psycopg.AsyncConnection.connect(self.database_url, row_factory=dict_row)
@@ -90,11 +91,11 @@ class PostgresCollectorRepository:
             async with await self._connect() as connection:
                 cursor = await connection.execute(
                     """
-                    insert into public.collector_runs (source_id, collector)
-                    values (%s, %s)
+                    insert into public.collector_runs (source_id, collector, work_attempt_id)
+                    values (%s, %s, %s)
                     returning id
                     """,
-                    (source.id, collector),
+                    (source.id, collector, self.work_attempt_id),
                 )
                 row = await cursor.fetchone()
                 if row is None:

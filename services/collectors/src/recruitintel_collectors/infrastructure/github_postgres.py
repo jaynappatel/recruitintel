@@ -30,10 +30,11 @@ from recruitintel_collectors.redaction import redact_text
 
 
 class PostgresGitHubSyncRepository:
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, *, work_attempt_id: UUID | None = None) -> None:
         if not database_url.startswith(("postgresql://", "postgres://")):
             raise ValueError("DATABASE_URL must be a PostgreSQL URL")
         self.database_url = database_url
+        self.work_attempt_id = work_attempt_id
 
     async def _connect(self) -> psycopg.AsyncConnection[dict[str, Any]]:
         return await psycopg.AsyncConnection.connect(self.database_url, row_factory=dict_row)
@@ -136,11 +137,16 @@ class PostgresGitHubSyncRepository:
                             raise ValueError("sync request is not pending for this repository")
                     cursor = await connection.execute(
                         """
-                        insert into public.collector_runs (source_id, collector, metadata)
-                        values (%s, 'github', %s)
+                        insert into public.collector_runs (
+                          source_id, collector, metadata, work_attempt_id
+                        ) values (%s, 'github', %s, %s)
                         returning id
                         """,
-                        (repository.source_id, Jsonb({"repository_id": str(repository.id)})),
+                        (
+                            repository.source_id,
+                            Jsonb({"repository_id": str(repository.id)}),
+                            self.work_attempt_id,
+                        ),
                     )
                     row = await cursor.fetchone()
                     if row is None:
@@ -150,10 +156,16 @@ class PostgresGitHubSyncRepository:
                         """
                         insert into public.github_sync_runs (
                           collector_run_id, github_repository_id, sync_request_id,
-                          previous_commit_sha
-                        ) values (%s, %s, %s, %s)
+                          previous_commit_sha, work_attempt_id
+                        ) values (%s, %s, %s, %s, %s)
                         """,
-                        (run_id, repository.id, request_id, repository.last_processed_commit_sha),
+                        (
+                            run_id,
+                            repository.id,
+                            request_id,
+                            repository.last_processed_commit_sha,
+                            self.work_attempt_id,
+                        ),
                     )
                     return run_id
         except UniqueViolation as exc:

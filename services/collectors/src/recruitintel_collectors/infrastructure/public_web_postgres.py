@@ -73,10 +73,11 @@ _EVENT_TYPE: dict[PublicObservationType, RecruitingEventType] = {
 
 
 class PostgresPublicWebRepository:
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, *, work_attempt_id: UUID | None = None) -> None:
         if not database_url.startswith(("postgresql://", "postgres://")):
             raise ValueError("DATABASE_URL must be a PostgreSQL URL")
         self.database_url = database_url
+        self.work_attempt_id = work_attempt_id
 
     async def _connect(self) -> psycopg.AsyncConnection[dict[str, Any]]:
         return await psycopg.AsyncConnection.connect(self.database_url, row_factory=dict_row)
@@ -201,8 +202,9 @@ class PostgresPublicWebRepository:
                 async with connection.transaction():
                     cursor = await connection.execute(
                         """
-                        insert into public.collector_runs (source_id, collector, metadata)
-                        values (%s, 'public_web', %s)
+                        insert into public.collector_runs (
+                          source_id, collector, metadata, work_attempt_id
+                        ) values (%s, 'public_web', %s, %s)
                         returning id
                         """,
                         (
@@ -213,6 +215,7 @@ class PostgresPublicWebRepository:
                                     "work_type": request.work_type.value,
                                 }
                             ),
+                            self.work_attempt_id,
                         ),
                     )
                     row = await cursor.fetchone()
@@ -222,10 +225,10 @@ class PostgresPublicWebRepository:
                     await connection.execute(
                         """
                         insert into public.public_web_runs (
-                          collector_run_id, work_request_id, company_id
-                        ) values (%s, %s, %s)
+                          collector_run_id, work_request_id, company_id, work_attempt_id
+                        ) values (%s, %s, %s, %s)
                         """,
-                        (run_id, request.id, request.company_id),
+                        (run_id, request.id, request.company_id, self.work_attempt_id),
                     )
                     return run_id
         except UniqueViolation as exc:
@@ -262,10 +265,16 @@ class PostgresPublicWebRepository:
                         """
                         insert into public.sources (
                           company_id, source_type, provider, external_key, name,
-                          base_url, reliability, metadata
-                        ) values (%s, 'PUBLIC_WEB', 'public_web', %s, %s, %s, 0.500, %s)
+                          base_url, reliability, metadata, source_policy_id
+                        ) values (
+                          %s, 'PUBLIC_WEB', 'public_web', %s, %s, %s, 0.500, %s,
+                          public.executable_source_policy_for_hostname(%s)
+                        )
                         on conflict (provider, external_key) do update set
-                          name = excluded.name, base_url = excluded.base_url, enabled = true
+                          name = excluded.name, base_url = excluded.base_url, enabled = true,
+                          source_policy_id = coalesce(
+                            excluded.source_policy_id, public.sources.source_policy_id
+                          )
                         returning id
                         """,
                         (
@@ -274,6 +283,7 @@ class PostgresPublicWebRepository:
                             (result.title or f"Public page on {hostname}")[:500],
                             canonical,
                             Jsonb({"discovered_by": query.provider}),
+                            hostname,
                         ),
                     )
                     source = await cursor.fetchone()
@@ -329,7 +339,10 @@ class PostgresPublicWebRepository:
                         insert into public.public_web_work_requests (
                           work_type, company_id, candidate_id, requested_by,
                           metadata
-                        ) values ('WEB_FETCH', %s, %s, 'web-search', %s)
+                        ) select 'WEB_FETCH', %s, %s, 'web-search', %s
+                        where public.source_policy_is_executable(
+                          (select source_id from public.public_web_candidates where id = %s)
+                        )
                         on conflict (work_type, candidate_id)
                           where status in ('PENDING', 'RUNNING')
                             and work_type in ('WEB_FETCH', 'WEB_PROCESS')
@@ -339,6 +352,7 @@ class PostgresPublicWebRepository:
                             query.company.id,
                             candidate_id,
                             Jsonb({"parent_request_id": str(request.id)}),
+                            candidate_id,
                         ),
                     )
                 await connection.execute(
@@ -965,6 +979,25 @@ class PostgresPublicWebRepository:
                     """,
                     (now, stats.request_id),
                 )
+
+    async def observation_ids_for_request(self, request_id: UUID) -> tuple[UUID, ...]:
+        async with await self._connect() as connection:
+            cursor = await connection.execute(
+                """
+                select observation.id
+                from public.public_web_work_requests request
+                join public.public_web_candidates candidate on candidate.id = request.candidate_id
+                join public.public_web_documents document on document.candidate_id = candidate.id
+                  and document.content_hash = candidate.content_hash
+                join public.public_recruiting_observations observation
+                  on observation.document_id = document.id
+                where request.id = %s
+                order by observation.id
+                """,
+                (request_id,),
+            )
+            rows = await cursor.fetchall()
+        return tuple(UUID(str(row["id"])) for row in rows)
 
     async def fail_run(
         self, run_id: UUID | None, request: PublicWebWorkRequest, error: Exception

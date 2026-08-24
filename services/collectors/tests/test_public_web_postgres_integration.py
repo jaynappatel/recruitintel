@@ -53,6 +53,25 @@ async def _seed(database_url: str) -> None:
     async with await psycopg.AsyncConnection.connect(database_url) as connection:
         await connection.execute(
             """
+            update public.source_policies set
+              status = 'ALLOWED_WITH_LIMITS', terms_status = 'REVIEWED',
+              reviewed_at = now(), reviewed_by = 'integration-test'
+            where provider in ('web_search', 'public_web')
+            """
+        )
+        await connection.execute(
+            """
+            insert into public.source_policy_host_rules (
+              source_policy_id, hostname_suffix, allow_subdomains
+            )
+            select id, host, false from public.source_policies
+            cross join (values ('stripe.com'), ('careerengagement.utexas.edu')) fixture(host)
+            where provider = 'public_web'
+            on conflict (source_policy_id, hostname_suffix) do nothing
+            """
+        )
+        await connection.execute(
+            """
             insert into public.companies (id, canonical_name, slug, website, careers_url)
             values (
               %s, 'Stripe Integration', 'web-integration-stripe',
@@ -68,10 +87,12 @@ async def _seed(database_url: str) -> None:
         await connection.execute(
             """
             insert into public.sources (
-              id, company_id, source_type, provider, external_key, name, reliability
+              id, company_id, source_type, provider, external_key, name, reliability,
+              source_policy_id
             ) values (
               %s, %s, 'PUBLIC_WEB', 'web_search',
-              'static:web-integration-stripe', 'Synthetic static search', 0.500
+              'static:web-integration-stripe', 'Synthetic static search', 0.500,
+              (select id from public.source_policies where provider = 'web_search')
             )
             """,
             (SEARCH_SOURCE_ID, COMPANY_ID),
@@ -131,6 +152,15 @@ async def _enqueue_fetch(database_url: str, candidate_id: UUID) -> UUID:
         return UUID(str(row["id"]))
 
 
+async def _retire_domain_test_work(database_url: str, request_id: UUID) -> None:
+    """Domain-worker tests do not bypass orchestration in production."""
+    async with await psycopg.AsyncConnection.connect(database_url) as connection:
+        await connection.execute(
+            "delete from public.work_items where public_web_work_request_id = %s",
+            (request_id,),
+        )
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_public_web_end_to_end_change_conflict_and_retry_idempotency() -> None:
@@ -168,16 +198,19 @@ async def test_public_web_end_to_end_change_conflict_and_retry_idempotency() -> 
     )
     try:
         search = await worker.run(SEARCH_REQUEST_ID)
+        await _retire_domain_test_work(database_url, SEARCH_REQUEST_ID)
         assert search.candidates == 2
 
         fetch_requests = await _pending_requests(database_url, "WEB_FETCH")
         assert len(fetch_requests) == 2
         for request_id in fetch_requests:
             result = await worker.run(request_id)
+            await _retire_domain_test_work(database_url, request_id)
             assert result.fetched == 1
             assert not result.unchanged
         for request_id in await _pending_requests(database_url, "WEB_PROCESS"):
             await worker.run(request_id)
+            await _retire_domain_test_work(database_url, request_id)
 
         async with await psycopg.AsyncConnection.connect(
             database_url, row_factory=dict_row
@@ -196,14 +229,17 @@ async def test_public_web_end_to_end_change_conflict_and_retry_idempotency() -> 
         fetcher.official_fixture = "web_official_internship_v2.html"
         changed_fetch = await _enqueue_fetch(database_url, official_id)
         await worker.run(changed_fetch)
+        await _retire_domain_test_work(database_url, changed_fetch)
         changed_process = await _pending_requests(database_url, "WEB_PROCESS")
         assert len(changed_process) == 1
         changed = await worker.run(changed_process[0])
+        await _retire_domain_test_work(database_url, changed_process[0])
         assert changed.observations_created >= 1
         assert changed.events_created >= 2
 
         unchanged_fetch = await _enqueue_fetch(database_url, official_id)
         unchanged = await worker.run(unchanged_fetch)
+        await _retire_domain_test_work(database_url, unchanged_fetch)
         assert unchanged.unchanged
         assert not await _pending_requests(database_url, "WEB_PROCESS")
 
@@ -267,6 +303,7 @@ async def test_public_web_end_to_end_change_conflict_and_retry_idempotency() -> 
 
         second_unchanged = await _enqueue_fetch(database_url, official_id)
         await worker.run(second_unchanged)
+        await _retire_domain_test_work(database_url, second_unchanged)
         async with await psycopg.AsyncConnection.connect(
             database_url, row_factory=dict_row
         ) as connection:

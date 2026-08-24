@@ -1,4 +1,5 @@
 import base64
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -84,3 +85,30 @@ async def test_rate_limit_exhaustion_stops_before_another_request() -> None:
         with pytest.raises(GitHubRateLimitError):
             await client.get_repository("example", "questions")
     assert requests == 1
+
+
+@pytest.mark.asyncio
+async def test_expired_github_reset_timestamp_allows_next_request() -> None:
+    requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        headers = _rate_headers(remaining=0 if requests == 1 else 100)
+        headers["X-RateLimit-Reset"] = str(int(datetime.now(UTC).timestamp()) - 1)
+        return httpx.Response(
+            200,
+            json={"default_branch": "main", "archived": False, "disabled": False},
+            headers=headers,
+            request=request,
+        )
+
+    async with OfficialGitHubClient(
+        user_agent="RecruitIntel tests",
+        requests_per_second=100_000,
+        transport=httpx.MockTransport(handler),
+        sleep=_no_sleep,
+    ) as client:
+        await client.get_repository("example", "questions")
+        await client.get_repository("example", "questions")
+    assert requests == 2

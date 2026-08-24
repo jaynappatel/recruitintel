@@ -2,6 +2,7 @@ import httpx
 import pytest
 from recruitintel_collectors.infrastructure.http import (
     ProviderHttpClient,
+    ProviderRateLimitError,
     ResponseTooLargeError,
     UnsafeProviderUrlError,
 )
@@ -47,6 +48,24 @@ async def test_retryable_status_is_retried() -> None:
         )
     assert result == {"ok": True}
     assert attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_long_retry_after_is_deferred_to_durable_orchestration() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, headers={"Retry-After": "900"}, request=request)
+
+    async with ProviderHttpClient(
+        user_agent="RecruitIntel tests",
+        requests_per_second=100_000,
+        transport=httpx.MockTransport(handler),
+        sleep=_no_sleep,
+    ) as client:
+        with pytest.raises(ProviderRateLimitError) as caught:
+            await client.get_json(
+                "https://api.lever.co/example", allowed_hosts=frozenset({"api.lever.co"})
+            )
+    assert caught.value.retry_after_seconds == 900
 
 
 @pytest.mark.asyncio

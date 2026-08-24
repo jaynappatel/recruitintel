@@ -16,7 +16,11 @@ document -> source/reliability rules -> relevance rules -> date/information extr
          -> source observation -> lightweight claim -> RecruitingEvent
 ```
 
-PostgreSQL is the coordination boundary. Each CLI invocation claims and completes one durable request, so cron, GitHub Actions, Supabase scheduling, or a later queue can invoke the same finite worker. External HTTP, pure extraction, and persistence remain separate interfaces.
+PostgreSQL is the coordination boundary. Milestone 7 maps each domain request to a generic WorkItem,
+then the typed worker claims it with a fenced lease and records every attempt. The scheduler enqueues
+eligible queries and recovers expired leases. Domain requests, runs, content hashes, observations,
+and processing state remain in their Milestone 3 tables; the orchestration layer does not duplicate
+them. External HTTP, pure extraction, and persistence remain separate interfaces.
 
 ## Data model
 
@@ -43,7 +47,8 @@ name: str
 async search(query: str, *, max_results: int) -> Sequence[SearchResult]
 ```
 
-Business logic never reads provider-specific response shapes. Milestone 3 registers the `static` provider:
+Business logic never reads provider-specific response shapes. Milestone 7 adds a capability/terms/
+quota descriptor registry but intentionally still registers only the `static` provider:
 
 - with `PUBLIC_WEB_STATIC_RESULTS_FILE=/absolute/path/results.json`, it loads deterministic results from a JSON object keyed by exact query text;
 - without the variable, it remains a valid inert provider that returns no results;
@@ -67,7 +72,7 @@ The JSON shape is:
 
 Generated queries cover early career, university/campus recruiting, application deadlines, interview experiences, role focus, internship/new-grad focus, optional school and graduation year, and bounded `site:reddit.com`/`site:github.com` references. Search parameters configure `minimumIntervalSeconds` (60–2,592,000), `maxResults` (1–100), and `maxFetches` (0–`maxResults`). The API skips queries whose `nextAllowedRunAt` is still in the future.
 
-To add a live provider:
+Adding a live provider is Gate 7.1 and requires an actual terms/policy review. At that gate:
 
 1. Implement `SearchProvider` under `public_web` and map its response to `SearchResult`.
 2. Keep credentials, pagination, quota/rate handling, and provider errors inside the adapter.
@@ -81,10 +86,17 @@ Canonicalization lowercases/IDNA-normalizes hosts, removes fragments and default
 
 `SafePublicWebFetcher`:
 
-- permits HTTP/HTTPS only and rejects credentials, malformed ports, localhost, private, loopback, link-local, multicast, reserved, and otherwise non-global destinations;
-- resolves every requested URL and every redirect target before fetching;
+- permits HTTP/HTTPS on approved ports only and rejects credentials, malformed ports, localhost,
+  private, loopback, link-local, multicast, reserved, transition-address, and otherwise non-global
+  destinations;
+- resolves once, rejects the entire destination if the address set mixes safe and unsafe addresses,
+  and connects only to an address from that approved set;
+- retains the original hostname for HTTP `Host`, TLS SNI, and certificate hostname verification;
+- disables ambient proxy configuration so a proxy cannot bypass address pinning;
+- independently repeats source policy, DNS, and pinning checks for every redirect target;
 - uses manual redirects with a configured maximum;
-- checks cached `robots.txt` policy and treats `401`/`403` robots responses as disallow-all;
+- fetches `robots.txt` through the same pinned transport and treats `401`/`403` or fetch failures as
+  disallow-all;
 - uses explicit timeouts, bounded retries/backoff, a per-host rate limiter, and an identifying user agent;
 - accepts HTML/XHTML only and enforces both declared and streamed response-size limits;
 - retains only safe response headers and normalized extracted data, never raw HTML;
@@ -129,10 +141,12 @@ New evidence emits the applicable existing event type: `RECRUITING_ARTICLE_DISCO
 
 ## Worker operation
 
-Queue searches with the admin API, then run each returned request:
+Queue searches with the admin API or an enabled reviewed schedule. Run the supervised scheduler and
+public worker lanes:
 
 ```bash
-uv run recruitintel-collectors public-web-work --request-id REQUEST_UUID
+uv run recruitintel-collectors scheduler
+uv run recruitintel-collectors worker --classes WEB_SEARCH,WEB_FETCH,PROJECTION
 ```
 
 The three work types are:
@@ -143,7 +157,13 @@ The three work types are:
 
 After a successful `WEB_PROCESS`, Milestone 4 consumes the just-created observations through the recruiter/campus processor. Existing observation IDs can be replayed with `recruiter-campus-process` without fetching their pages again. See `docs/recruiter-campus-intelligence.md`.
 
-Runs record start/end/status, company, provider/query where applicable, candidates, fetched/relevant counts, observations/events created, duration, and errors. Work claims increment attempt count atomically. Retryable failures return to `PENDING` with bounded exponential delay until `maxAttempts`; SSRF/robots denials become blocked/terminal. A PostgreSQL one-running-run-per-source constraint prevents concurrent processing of the same source.
+Runs record start/end/status, company, provider/query where applicable, candidates,
+fetched/relevant counts, observations/events created, duration, and safe errors. Work claims create
+an attempt atomically. Retryable failures return to durable eligibility with bounded exponential
+jitter until `maxAttempts`; provider `Retry-After` takes precedence. Policy/robots denials are
+classified `POLICY_BLOCKED` and do not spin. Multiple retry attempts retain multiple
+`public_web_runs`; content, observation, and event fingerprints prevent duplicate domain output.
+An active exclusive key prevents concurrent processing of the same target.
 
 ## Stable frontend API contracts
 

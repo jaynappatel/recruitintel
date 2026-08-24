@@ -8,7 +8,7 @@ Create a new monorepo at the current workspace root. The directory is empty and 
 - Python for collection, normalization, change detection orchestration, and future analytics.
 - PostgreSQL as the system of record and coordination boundary.
 - Plain versioned SQL migrations compatible with PostgreSQL/Supabase.
-- Run-once Python collector commands for Milestone 1; cron or GitHub Actions can schedule the same commands later.
+- A small PostgreSQL scheduler plus typed Python dispatcher for continuous collection and recovery.
 - Provider adapters over a shared async HTTP client. External services never write directly to database tables.
 
 Milestone 1 deliberately has no Redis, Celery, message broker, vector search, LLM, authentication, recruiter intelligence, GitHub watcher, alert engine, or ML runtime.
@@ -422,6 +422,29 @@ ranking decision/impression denominators, privacy request lifecycle, watchlist o
 minimal hashed/expiring/revocable browser-extension grant foundation. Exact security, privacy, and
 manual auth setup are documented in `docs/identity-privacy-audit.md`.
 
+## Milestone 7 orchestration and source-governance extensions
+
+Migration `0007_durable_orchestration_source_governance.sql` adds `schedules`, `work_items`,
+`work_attempts`, `dead_letters`, `source_policies`, `source_policy_host_rules`, pragmatic shared
+`rate_limit_states`, source-health samples/state/incidents, and database-role-to-service-principal
+bindings. WorkItems deliberately contain orchestration coordinates rather than domain payloads.
+Existing GitHub, public-web, Calendar, collector, and external-event tables remain the source of
+domain state, history, ownership, and side-effect idempotency.
+
+The scheduler transactionally enqueues one fingerprinted occurrence using PostgreSQL-authoritative
+time. Workers claim eligible lanes with `FOR UPDATE SKIP LOCKED`; every claim has an attempt row and
+fenced lease token. Short tasks use a bounded timeout and long lease. ATS, GitHub, search, and
+Calendar tasks may heartbeat. The scheduler reaper recovers expired leases and reconciles linked
+legacy request/run status. Retry classification is deterministic and respects a bounded provider
+`Retry-After`; exhausted or permanent failures become dead letters with redacted diagnostics.
+
+Source policy is fail-closed at enqueue and again immediately before outbound execution. Unknown,
+`REVIEW_REQUIRED`, and `BLOCKED` providers cannot run automatically. General public-web requests
+use an exact-version `httpx`/`httpcore` transport that resolves once, rejects mixed unsafe address
+sets, connects only to a validated address, retains the original HTTP Host and HTTPS SNI/certificate
+hostname, disables ambient proxies, and independently resolves every redirect and robots request.
+The complete contract is documented in `docs/orchestration-source-governance.md`.
+
 ## Future ERD extensions
 
 Later migrations add:
@@ -463,22 +486,32 @@ cross-language log/diagnostic redaction, and privacy-safe instrumentation for cu
 behaviors. `GET /api/me` exposes the current identity; Better Auth owns `/api/auth/*`. Public
 intelligence response shapes are otherwise unchanged.
 
+Milestone 7 adds authenticated internal/admin read APIs for safe orchestration metadata, schedules,
+source policies, source health, and incidents. Only global dead letters may be administratively
+requeued; private Calendar work cannot be inspected or requeued through these APIs. Existing
+product/public response shapes are unchanged.
+
 ## Local development and deployment
 
 Docker Compose runs PostgreSQL only. The web app and Python collector run on the host for fast feedback. Migrations and seed SQL are explicit scripts. Seed data includes recognizable companies and synthetic local jobs/events, clearly labeled as seed/demo records. Basic UI development therefore needs no network or provider credentials.
 
-Scheduling is an interface at the process boundary: `python -m recruitintel_collectors run --source <uuid>` performs one finite sync and returns a meaningful exit code. Local cron, GitHub Actions, Supabase scheduling, Celery, Temporal, or another orchestrator can invoke that command later without changing collector domain code.
-
-Calendar synchronization uses the same boundary:
-`python -m recruitintel_collectors calendar-sync --request-id <uuid>`. The HTTP route only creates
-or returns an active durable request.
+Continuous work uses two finite commands suitable for a supervised service: `scheduler` enqueues
+due `INTERVAL`/`DAILY_AT` occurrences and reaps expired leases; `worker` claims configured lanes and
+dispatches enumerated WorkTypes to typed handlers. Product routes still only enqueue durable domain
+requests. The scheduler and worker can also run `--once` for deterministic local and smoke tests.
+Deployment, role binding, backup, reconciliation, and recovery are documented in
+`docs/milestone-7-orchestration-operations.md`.
 
 ## Security and trust boundaries
 
 - External payloads are untrusted and validated with Pydantic.
 - Raw HTML is sanitized; the UI renders normalized text, not provider HTML.
 - Fixed provider hosts and validated tenant slugs prevent arbitrary URL fetching in Milestone 1.
-- Milestone 3 arbitrary public URLs are restricted to HTTP/HTTPS, normalized, DNS-checked against private/non-routable destinations before every request and redirect, robots-checked, rate/size/time bounded, and never rendered or executed.
+- Arbitrary public URLs are restricted to HTTP/HTTPS and approved ports; resolved address sets must
+  be entirely public. The actual socket is pinned to the approved address while Host, SNI, and TLS
+  certificate validation retain the original hostname. Every redirect and robots request repeats
+  policy and resolution checks. Ambient proxies are disabled, requests are rate/size/time bounded,
+  and content is never rendered or executed.
 - LinkedIn URLs may be retained from permitted search results or manual input, but the fetcher blocks LinkedIn hosts and redirect targets before any HTTP request. No cookies, authenticated scraping, browser automation, CAPTCHA bypass, or anti-bot circumvention exists.
 - Secrets are read from environment variables and `.env` is ignored.
 - Authentication and Google Calendar OAuth use separate clients and grants. Better Auth provider
@@ -487,7 +520,8 @@ or returns an active durable request.
   pass through shared golden-tested secret/PII redaction behavior.
 - Personal route access always includes the authenticated user predicate. Admin status does not
   imply access to another user's private content.
-- Database users can later be split into migration, collector-write, and web-read roles.
+- Scheduler, global collector, Calendar, privacy-cleanup, and trusted web-app database capability
+  roles are explicit and bound to active service principals and allowed work lanes.
 - No collected text is passed to an LLM or treated as instructions.
 - Confidence is an internal ranking attribute, not a truth claim.
 

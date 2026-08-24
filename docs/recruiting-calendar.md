@@ -245,17 +245,18 @@ frontend types need an adapter update when Claude switches off mocks:
 
 ## Sync lifecycle and observability
 
-Run one queued request with:
+Run the owner-isolated Calendar worker lane (or add `--once` for a local smoke):
 
 ```bash
-uv run recruitintel-collectors calendar-sync --request-id REQUEST_UUID
+uv run recruitintel-collectors worker --classes CALENDAR
 ```
 
-The worker refreshes an access token in memory, selects eligible items by item opt-in and connection
-preferences, then creates, updates, deletes, or no-ops. It records attempted/created/updated/deleted/
-unchanged/failed counts, duration, sanitized item error codes, request attempt state, connection
-status, and mapping status. Partial failures retry with bounded exponential backoff. Revoked or
-invalid refresh credentials transition the connection to `REAUTH_REQUIRED` without repeated retry.
+The typed handler claims an owner-bound request with a fenced lease, refreshes an access token in
+memory, selects eligible items by item opt-in and connection preferences, then creates, updates,
+deletes, or no-ops. It records attempted/created/updated/deleted/unchanged/failed counts, duration,
+sanitized item error codes, request/attempt state, connection status, and mapping status. Partial
+provider failures retry with durable exponential backoff and quota `Retry-After`. Authorization
+failures transition the connection/work to `REAUTH_REQUIRED` without repeated retry.
 
 Every external event has a unique database mapping and a deterministic provider event ID derived
 from connection and item IDs. If Google accepts a create but local persistence fails, a retry gets

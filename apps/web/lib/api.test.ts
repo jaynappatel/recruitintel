@@ -27,4 +27,27 @@ describe("API error redaction", () => {
     expect(serialized).not.toContain("refresh_token=secret");
     spy.mockRestore();
   });
+
+  it("maps governance and privilege failures without exposing database details", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const policyError = Object.assign(new Error("SOURCE_POLICY_NOT_EXECUTABLE"), {
+      code: "P0001",
+    });
+    const policyResponse = databaseApiError(policyError);
+    expect(policyResponse.status).toBe(409);
+    expect(await policyResponse.json()).toEqual({
+      error: {
+        code: "SOURCE_POLICY_REVIEW_REQUIRED",
+        message: "Source policy does not allow execution",
+      },
+    });
+    const privilegeResponse = databaseApiError(
+      Object.assign(new Error("private database detail"), { code: "42501" }),
+    );
+    expect(privilegeResponse.status).toBe(403);
+    expect(await privilegeResponse.json()).toEqual({
+      error: { code: "FORBIDDEN", message: "This operation is not permitted" },
+    });
+    spy.mockRestore();
+  });
 });

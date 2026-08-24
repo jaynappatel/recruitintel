@@ -99,6 +99,15 @@ async def enqueue(database_url: str) -> UUID:
         return row["id"]
 
 
+async def retire_domain_test_work(database_url: str, request_id: UUID) -> None:
+    """Domain-worker tests do not bypass orchestration in production."""
+    async with await connect(database_url) as connection:
+        await connection.execute(
+            "delete from public.work_items where calendar_sync_request_id = %s",
+            (request_id,),
+        )
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_postgres_mock_provider_retry_update_delete_no_duplicates() -> None:
@@ -150,8 +159,12 @@ async def test_postgres_mock_provider_retry_update_delete_no_duplicates() -> Non
         app_url="https://recruitintel.example",
     )
 
-    first = await worker.run(await enqueue(test_database_url))
-    retry = await worker.run(await enqueue(test_database_url))
+    first_request = await enqueue(test_database_url)
+    first = await worker.run(first_request)
+    await retire_domain_test_work(test_database_url, first_request)
+    unchanged_request = await enqueue(test_database_url)
+    retry = await worker.run(unchanged_request)
+    await retire_domain_test_work(test_database_url, unchanged_request)
     assert first.created == 1
     assert retry.unchanged == 1
     assert provider.created == 1
@@ -161,7 +174,9 @@ async def test_postgres_mock_provider_retry_update_delete_no_duplicates() -> Non
             "update public.calendar_items set title = 'Changed sync contract' where id = %s",
             (ITEM_ID,),
         )
-    changed = await worker.run(await enqueue(test_database_url))
+    changed_request = await enqueue(test_database_url)
+    changed = await worker.run(changed_request)
+    await retire_domain_test_work(test_database_url, changed_request)
     assert changed.updated == 1
     assert provider.updated == 1
 
@@ -173,7 +188,9 @@ async def test_postgres_mock_provider_retry_update_delete_no_duplicates() -> Non
             """,
             (ITEM_ID,),
         )
-    deleted = await worker.run(await enqueue(test_database_url))
+    deleted_request = await enqueue(test_database_url)
+    deleted = await worker.run(deleted_request)
+    await retire_domain_test_work(test_database_url, deleted_request)
     assert deleted.deleted == 1
     assert provider.deleted == 1
 

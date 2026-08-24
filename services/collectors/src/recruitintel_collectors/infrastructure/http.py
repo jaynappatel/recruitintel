@@ -10,6 +10,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from .rate_limit import DistributedRateLimiter
+
 _JITTER = random.SystemRandom()
 
 
@@ -19,6 +21,12 @@ class UnsafeProviderUrlError(ValueError):
 
 class ResponseTooLargeError(RuntimeError):
     pass
+
+
+class ProviderRateLimitError(RuntimeError):
+    def __init__(self, retry_after_seconds: int | None) -> None:
+        super().__init__("provider requested durable rate-limit backoff")
+        self.retry_after_seconds = retry_after_seconds
 
 
 class ProviderHttpClient:
@@ -34,6 +42,7 @@ class ProviderHttpClient:
         max_attempts: int = 3,
         transport: httpx.AsyncBaseTransport | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        distributed_limiter: DistributedRateLimiter | None = None,
     ) -> None:
         if not user_agent.strip():
             raise ValueError("an identifying user agent is required")
@@ -43,6 +52,7 @@ class ProviderHttpClient:
         self._max_response_bytes = max_response_bytes
         self._max_attempts = max_attempts
         self._sleep = sleep
+        self._distributed_limiter = distributed_limiter
         self._locks: dict[str, asyncio.Lock] = {}
         self._last_request: dict[str, float] = {}
         self._client = httpx.AsyncClient(
@@ -75,6 +85,8 @@ class ProviderHttpClient:
         return host
 
     async def _pace(self, host: str) -> None:
+        if self._distributed_limiter is not None:
+            await self._distributed_limiter.wait("HOST", host, self._interval)
         lock = self._locks.setdefault(host, asyncio.Lock())
         async with lock:
             now = time.monotonic()
@@ -89,13 +101,16 @@ class ProviderHttpClient:
         if not value:
             return None
         try:
-            return max(0, min(float(value), 60))
+            return max(0, min(float(value), 604800))
         except ValueError:
             try:
                 retry_at = email.utils.parsedate_to_datetime(value)
                 if retry_at.tzinfo is None:
                     retry_at = retry_at.replace(tzinfo=UTC)
-                return max(0, min((retry_at - datetime.now(UTC)).total_seconds(), 60))
+                return max(
+                    0,
+                    min((retry_at - datetime.now(UTC)).total_seconds(), 604800),
+                )
             except (TypeError, ValueError, OverflowError):
                 return None
 
@@ -107,11 +122,19 @@ class ProviderHttpClient:
             await self._pace(host)
             try:
                 async with self._client.stream("GET", url) as response:
+                    retry_after = self._retry_after(response)
+                    if response.status_code == 429 and (
+                        attempt == self._max_attempts
+                        or (retry_after is not None and retry_after > 5)
+                    ):
+                        await response.aread()
+                        raise ProviderRateLimitError(
+                            int(retry_after) if retry_after is not None else None
+                        )
                     if (
                         response.status_code in self.RETRYABLE_STATUSES
                         and attempt < self._max_attempts
                     ):
-                        retry_after = self._retry_after(response)
                         await response.aread()
                         delay = retry_after if retry_after is not None else 2 ** (attempt - 1)
                         await self._sleep(delay + _JITTER.uniform(0, 0.25))

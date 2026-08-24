@@ -5,6 +5,8 @@ from urllib.parse import quote
 
 import httpx
 
+from recruitintel_collectors.infrastructure.rate_limit import DistributedRateLimiter
+
 from .models import ProviderEvent
 
 
@@ -23,6 +25,17 @@ class RefreshCredentialInvalidError(CalendarProviderError):
 class ProviderUnauthorizedError(CalendarProviderError):
     def __init__(self) -> None:
         super().__init__("PROVIDER_UNAUTHORIZED", retryable=False)
+
+
+class ProviderForbiddenError(CalendarProviderError):
+    def __init__(self) -> None:
+        super().__init__("PROVIDER_FORBIDDEN", retryable=False)
+
+
+class ProviderRateLimitedError(CalendarProviderError):
+    def __init__(self, retry_after_seconds: int | None = None) -> None:
+        super().__init__("PROVIDER_RATE_LIMITED", retryable=True)
+        self.retry_after_seconds = retry_after_seconds
 
 
 class EventAlreadyExistsError(CalendarProviderError):
@@ -51,13 +64,17 @@ class GoogleTokenRefresher:
         client_id: str,
         client_secret: str,
         client: httpx.AsyncClient | None = None,
+        distributed_limiter: DistributedRateLimiter | None = None,
     ) -> None:
         self._client_id = client_id
         self._client_secret = client_secret
         self._client = client or httpx.AsyncClient(timeout=20)
         self._owns_client = client is None
+        self._distributed_limiter = distributed_limiter
 
     async def refresh(self, refresh_token: str) -> str:
+        if self._distributed_limiter is not None:
+            await self._distributed_limiter.wait("PROVIDER", "google-oauth", 0.1)
         response = await self._client.post(
             "https://oauth2.googleapis.com/token",
             data={
@@ -110,10 +127,21 @@ def _google_event(event: ProviderEvent) -> dict[str, Any]:
 
 
 class GoogleCalendarProvider:
-    def __init__(self, access_token: str, *, client: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self,
+        access_token: str,
+        *,
+        client: httpx.AsyncClient | None = None,
+        distributed_limiter: DistributedRateLimiter | None = None,
+    ) -> None:
         self._client = client or httpx.AsyncClient(timeout=20)
         self._owns_client = client is None
         self._headers = {"authorization": f"Bearer {access_token}", "accept": "application/json"}
+        self._distributed_limiter = distributed_limiter
+
+    async def _pace(self) -> None:
+        if self._distributed_limiter is not None:
+            await self._distributed_limiter.wait("PROVIDER", "google-calendar", 0.1)
 
     @staticmethod
     def _url(calendar_id: str, event_id: str | None = None) -> str:
@@ -127,14 +155,42 @@ class GoogleCalendarProvider:
             return
         if create and response.status_code == 409:
             raise EventAlreadyExistsError
-        if response.status_code in (401, 403):
+        if response.status_code == 401:
             raise ProviderUnauthorizedError
+        if response.status_code in (403, 429):
+            retry_after: int | None = None
+            try:
+                retry_after = max(0, int(float(response.headers.get("Retry-After", ""))))
+            except ValueError:
+                pass
+            reasons: set[str] = set()
+            try:
+                payload = response.json()
+                error_payload = payload.get("error") if isinstance(payload, dict) else None
+                errors = error_payload.get("errors", []) if isinstance(error_payload, dict) else []
+                reasons = {
+                    str(item.get("reason"))
+                    for item in errors
+                    if isinstance(item, dict) and item.get("reason")
+                }
+            except (TypeError, ValueError):
+                pass
+            quota_reasons = {
+                "rateLimitExceeded",
+                "userRateLimitExceeded",
+                "quotaExceeded",
+                "dailyLimitExceeded",
+            }
+            if response.status_code == 429 or retry_after is not None or reasons & quota_reasons:
+                raise ProviderRateLimitedError(retry_after)
+            raise ProviderForbiddenError
         if response.is_error:
             raise CalendarProviderError(
                 f"GOOGLE_HTTP_{response.status_code}", retryable=response.status_code >= 429
             )
 
     async def create_event(self, calendar_id: str, event: ProviderEvent) -> str:
+        await self._pace()
         response = await self._client.post(
             self._url(calendar_id),
             params={"sendUpdates": "none"},
@@ -151,6 +207,7 @@ class GoogleCalendarProvider:
     async def update_event(
         self, calendar_id: str, external_event_id: str, event: ProviderEvent
     ) -> None:
+        await self._pace()
         body = _google_event(event)
         body["id"] = external_event_id
         response = await self._client.put(
@@ -162,6 +219,7 @@ class GoogleCalendarProvider:
         self._check(response)
 
     async def delete_event(self, calendar_id: str, external_event_id: str) -> None:
+        await self._pace()
         response = await self._client.delete(
             self._url(calendar_id, external_event_id),
             params={"sendUpdates": "none"},
@@ -170,6 +228,7 @@ class GoogleCalendarProvider:
         self._check(response, deleting=True)
 
     async def get_event(self, calendar_id: str, external_event_id: str) -> Mapping[str, Any]:
+        await self._pace()
         response = await self._client.get(
             self._url(calendar_id, external_event_id), headers=self._headers
         )

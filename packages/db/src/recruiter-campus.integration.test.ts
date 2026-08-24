@@ -19,6 +19,7 @@ const integration = databaseUrl ? describe : describe.skip;
 const companyId = "e1000000-0000-0000-0000-000000000001";
 const schoolId = "e2000000-0000-0000-0000-000000000001";
 const observationId = "e3000000-0000-0000-0000-000000000001";
+const workerPrincipalId = "e7000000-0000-0000-0000-000000000001";
 
 async function reset() {
   if (!databaseUrl) return;
@@ -31,6 +32,9 @@ async function reset() {
     `;
     await sql`delete from public.companies where id = ${companyId}::uuid`;
     await sql`delete from public.schools where id = ${schoolId}::uuid`;
+    await sql`
+      delete from public.service_principals where id = ${workerPrincipalId}::uuid
+    `;
   } finally {
     await sql.end();
   }
@@ -117,6 +121,27 @@ integration("PostgreSQL recruiter/campus API projection", () => {
           '2026-09-15', 'EXACT', 'CONFIRMED', now(), now(), 0.9, ${"a".repeat(64)},
           '{"integration_test":true}', ${"b".repeat(64)}
         )
+      `;
+      await sql`
+        insert into public.service_principals (
+          id, name, kind, token_prefix, token_hash, scopes, status
+        ) values (
+          ${workerPrincipalId}::uuid, 'Recruiter projection integration worker',
+          'WORKER', 'ri_worker_M4Test001',
+          encode(digest('m4-integration-worker', 'sha256'), 'hex'),
+          array['WORKER_INGEST', 'WORKER_GLOBAL']::public.service_scope[], 'ACTIVE'
+        )
+      `;
+      await sql`
+        insert into public.worker_role_bindings (
+          database_role, service_principal_id, allowed_work_classes, can_schedule
+        ) values (
+          current_user, ${workerPrincipalId}::uuid,
+          array['PROJECTION']::public.work_class[], false
+        ) on conflict (database_role) do update set
+          service_principal_id = excluded.service_principal_id,
+          allowed_work_classes = excluded.allowed_work_classes,
+          can_schedule = excluded.can_schedule
       `;
     } finally {
       await sql.end();

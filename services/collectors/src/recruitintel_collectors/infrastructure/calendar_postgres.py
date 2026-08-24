@@ -25,10 +25,11 @@ def _safe_error_code(value: str) -> str:
 
 
 class PostgresCalendarSyncRepository:
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, *, work_attempt_id: UUID | None = None) -> None:
         if not database_url.startswith(("postgresql://", "postgres://")):
             raise ValueError("DATABASE_URL must be a PostgreSQL URL")
         self.database_url = database_url
+        self.work_attempt_id = work_attempt_id
 
     async def _connect(self) -> psycopg.AsyncConnection[dict[str, Any]]:
         return await psycopg.AsyncConnection.connect(self.database_url, row_factory=dict_row)
@@ -67,10 +68,16 @@ class PostgresCalendarSyncRepository:
                 cursor = await connection.execute(
                     """
                     insert into public.calendar_sync_runs (
-                      calendar_sync_request_id, calendar_connection_id, user_id
-                    ) values (%s, %s, %s) returning id
+                      calendar_sync_request_id, calendar_connection_id, user_id,
+                      work_attempt_id
+                    ) values (%s, %s, %s, %s) returning id
                     """,
-                    (request_id, row["calendar_connection_id"], row["user_id"]),
+                    (
+                        request_id,
+                        row["calendar_connection_id"],
+                        row["user_id"],
+                        self.work_attempt_id,
+                    ),
                 )
                 run = await cursor.fetchone()
                 if run is None:

@@ -45,6 +45,11 @@ try {
       (select count(*) from public.audit_events)::int as audit_events,
       (select count(*) from public.product_events)::int as product_events,
       (select count(*) from public.privacy_requests)::int as privacy_requests,
+      (select count(*) from public.source_policies)::int as source_policies,
+      (select count(*) from public.schedules)::int as schedules,
+      (select count(*) from public.work_items)::int as work_items,
+      (select count(*) from public.work_attempts)::int as work_attempts,
+      (select count(*) from public.worker_role_bindings)::int as worker_role_bindings,
       (
         select count(*) from public.calendar_items item
         left join public.users app_user on app_user.id = item.user_id
@@ -87,13 +92,18 @@ try {
   const requiredIndexes = [
     "calendar_items_recruiting_date_owner_unique_idx",
     "calendar_sync_requests_active_unique_idx",
+    "work_items_exclusive_active_idx",
+    "work_items_eligible_idx",
+    "work_items_lease_expiry_idx",
+    "source_incidents_one_open_idx",
+    "public_web_runs_request_idx",
   ];
   const indexes = await sql`
     select indexname from pg_indexes
     where schemaname = 'public' and indexname in ${sql(requiredIndexes)}
   `;
 
-  if (!counts || counts.migrations < 6) {
+  if (!counts || counts.migrations < 7) {
     throw new Error("no applied RecruitIntel migrations were found");
   }
   if (counts.companies < 1 || counts.sources < 1 || counts.schools < 1) {
@@ -115,6 +125,9 @@ try {
   }
   if (counts.users < 1 || counts.user_profiles < 1 || counts.private_owner_orphans !== 0) {
     throw new Error("Milestone 6 user/profile seed or private ownership integrity is missing");
+  }
+  if (counts.source_policies < 1 || counts.schedules < 1 || counts.worker_role_bindings < 1) {
+    throw new Error("Milestone 7 policy, schedule, or worker binding seed is missing");
   }
 
   console.log(JSON.stringify({ status: "ok", ...counts }));

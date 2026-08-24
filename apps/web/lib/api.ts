@@ -15,5 +15,12 @@ export function validationError(error: ZodError) {
 
 export function databaseApiError(error: unknown) {
   logger.error("database_request_failed", error);
+  const code =
+    typeof error === "object" && error !== null && "code" in error ? String(error.code) : null;
+  const message = error instanceof Error ? error.message : "";
+  if (code === "42501") return apiError(403, "FORBIDDEN", "This operation is not permitted");
+  if (code === "P0001" && message === "SOURCE_POLICY_NOT_EXECUTABLE") {
+    return apiError(409, "SOURCE_POLICY_REVIEW_REQUIRED", "Source policy does not allow execution");
+  }
   return apiError(503, "DATABASE_UNAVAILABLE", "RecruitIntel data is temporarily unavailable");
 }

@@ -22,6 +22,7 @@ from .provider import (
     CalendarProviderError,
     EventAlreadyExistsError,
     GoogleTokenRefresher,
+    ProviderRateLimitedError,
     ProviderUnauthorizedError,
     RefreshCredentialInvalidError,
 )
@@ -127,9 +128,11 @@ class CalendarSyncWorker:
                 stats.attempted_items += 1
                 try:
                     await self._sync_item(provider, connection, item, stats)
-                except ProviderUnauthorizedError:
+                except (ProviderUnauthorizedError, ProviderRateLimitedError):
                     raise
                 except CalendarProviderError as error:
+                    if not error.retryable:
+                        raise
                     stats.failed += 1
                     stats.errors.append({"itemId": str(item.id), "code": error.code})
                     if item.mapping:
@@ -162,6 +165,30 @@ class CalendarSyncWorker:
                 error_code=error.code,
                 reconnect_required=True,
                 retryable=False,
+                attempt_count=connection.attempt_count,
+                max_attempts=connection.max_attempts,
+            )
+            raise
+        except ProviderRateLimitedError as error:
+            stats.duration_ms = int((monotonic() - started) * 1000)
+            stats.errors.append({"code": error.code})
+            await self._repository.fail(
+                stats,
+                error_code=error.code,
+                reconnect_required=False,
+                retryable=True,
+                attempt_count=connection.attempt_count,
+                max_attempts=connection.max_attempts,
+            )
+            raise
+        except CalendarProviderError as error:
+            stats.duration_ms = int((monotonic() - started) * 1000)
+            stats.errors.append({"code": error.code})
+            await self._repository.fail(
+                stats,
+                error_code=error.code,
+                reconnect_required=False,
+                retryable=error.retryable,
                 attempt_count=connection.attempt_count,
                 max_attempts=connection.max_attempts,
             )

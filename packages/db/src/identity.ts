@@ -5,7 +5,15 @@ import { redactValue } from "@recruitintel/shared";
 import { getDatabase } from "./index";
 
 export type ActorKind = "USER" | "ADMIN" | "SERVICE" | "SYSTEM";
-export type ServiceScope = "ADMIN_MUTATE" | "WORKER_INGEST" | "WORKER_CALENDAR_SYNC";
+export type ServiceScope =
+  | "ADMIN_MUTATE"
+  | "WORKER_INGEST"
+  | "WORKER_CALENDAR_SYNC"
+  | "ORCHESTRATION_READ"
+  | "ORCHESTRATION_MUTATE"
+  | "WORKER_SCHEDULER"
+  | "WORKER_GLOBAL"
+  | "WORKER_PRIVACY";
 
 export interface UserActorRecord {
   id: string;

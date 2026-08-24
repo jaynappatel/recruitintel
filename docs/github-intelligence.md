@@ -5,7 +5,7 @@ Milestone 2 adds commit-aware GitHub ingestion without coupling GitHub HTTP, par
 ## Architecture
 
 ```text
-Next.js mutation API                     finite Python worker
+Next.js mutation API                  PostgreSQL WorkItem + typed worker
 POST sync -> github_sync_requests        GitHubSyncRunner
                                                   |
                                      OfficialGitHubClient
@@ -27,7 +27,11 @@ POST sync -> github_sync_requests        GitHubSyncRunner
                          typed APIs and analytics
 ```
 
-PostgreSQL is the scheduler boundary. `POST /api/github/sync/:repositoryId` creates or returns one durable active request; it does not spawn Python inside a web request. A local process, cron job, GitHub Action, Supabase scheduler, or future queue worker invokes the finite `github-sync` command. This keeps scheduling replaceable and avoids hidden always-on infrastructure.
+PostgreSQL is the scheduler and orchestration boundary. `POST /api/github/sync/:repositoryId`
+creates or returns one durable domain request; its trigger enqueues an orchestration WorkItem without
+moving repository/SHA state out of GitHub tables. The supervised worker claims the GitHub lane with
+a fenced lease and typed handler. Scheduled repository syncs use the same path. The web request
+never starts provider work.
 
 ## Data model and identity boundaries
 
@@ -92,18 +96,18 @@ curl -X POST http://localhost:3000/api/github/sync/REPOSITORY_UUID \
   -H "Authorization: Bearer $RECRUITINTEL_ADMIN_BEARER"
 ```
 
-Execute it with the finite worker:
+The continuous worker executes it:
 
 ```bash
-uv run recruitintel-collectors github-sync \
-  --repository-id REPOSITORY_UUID \
-  --request-id REQUEST_UUID
+uv run recruitintel-collectors scheduler
+uv run recruitintel-collectors worker --classes GITHUB
 ```
 
-For direct local use without an API request:
+For a deterministic local smoke, use `--once`; direct production execution that bypasses a durable
+request is intentionally unavailable:
 
 ```bash
-uv run recruitintel-collectors github-sync --repository-id REPOSITORY_UUID
+uv run recruitintel-collectors worker --classes GITHUB --once
 ```
 
 Each run creates `collector_runs` and `github_sync_runs` records with previous/current SHA, files inspected, parsed/new/updated/unchanged/unresolved counts, duration, errors, and last known rate limit.
@@ -340,8 +344,11 @@ interface InterviewQuestionDetail {
 - **401 mutation:** sign in as an active admin or send an active, unexpired hashed service token.
 - **403 mutation:** the authenticated user is not an admin or the service principal lacks
   `ADMIN_MUTATE`.
-- **Request stays `PENDING`:** run the finite worker with the returned request/repository IDs or configure a scheduler.
-- **Rate-limit failure:** inspect repository/sync rate reset values and `collector_errors`; resume after reset or configure a permitted `GITHUB_TOKEN`.
+- **Request stays `PENDING`:** verify the GitHub worker lane and scheduler are running, the repository
+  policy is reviewed/executable, and the worker database role is bound to `GITHUB`.
+- **Rate-limit failure:** inspect safe attempt/source-health reset metadata and `collector_errors`;
+  the durable retry eligibility respects GitHub's reset timestamp rather than sleeping a worker.
+  Configure a permitted `GITHUB_TOKEN` when appropriate.
 - **No files inspected:** verify watched paths and supported extensions.
 - **Too many files:** narrow paths or deliberately set `metadata.max_files_per_sync`, up to 200.
 - **Unresolved company:** add a reviewed global alias or link-local alias; never add fuzzy guesses.

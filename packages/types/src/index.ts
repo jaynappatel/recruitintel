@@ -154,6 +154,65 @@ export const databaseUuidSchema = z
   .string()
   .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
 
+export const orchestrationWorkTypes = [
+  "ATS_COLLECT",
+  "GITHUB_SYNC",
+  "PUBLIC_WEB_SEARCH",
+  "PUBLIC_WEB_FETCH",
+  "PUBLIC_WEB_PROCESS",
+  "RECRUITER_CAMPUS_PROJECT",
+  "CALENDAR_SYNC",
+  "PRIVACY_RETENTION_CLEANUP",
+  "SOURCE_HEALTH_ROLLUP",
+] as const;
+export const orchestrationWorkStatuses = [
+  "READY",
+  "LEASED",
+  "RUNNING",
+  "RETRY_WAIT",
+  "SUCCEEDED",
+  "CANCELLED",
+  "DEAD_LETTERED",
+  "AUTH_REQUIRED",
+  "POLICY_BLOCKED",
+] as const;
+export const sourcePolicyStatuses = [
+  "ALLOWED",
+  "ALLOWED_WITH_LIMITS",
+  "MANUAL_ONLY",
+  "BLOCKED",
+  "REVIEW_REQUIRED",
+] as const;
+export const orchestrationWorkTypeSchema = z.enum(orchestrationWorkTypes);
+export const orchestrationWorkStatusSchema = z.enum(orchestrationWorkStatuses);
+export const sourcePolicyStatusSchema = z.enum(sourcePolicyStatuses);
+export const orchestrationListQuerySchema = z.object({
+  status: orchestrationWorkStatusSchema.optional(),
+  workType: orchestrationWorkTypeSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  offset: z.coerce.number().int().min(0).max(10_000).default(0),
+});
+export const scheduleUpdateSchema = z.object({ enabled: z.boolean() }).strict();
+export const sourcePolicyUpdateSchema = z
+  .object({
+    status: sourcePolicyStatusSchema,
+    reviewedBy: z.string().trim().min(1).max(200).optional(),
+    notes: z.string().trim().max(2000).optional(),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      !["ALLOWED", "ALLOWED_WITH_LIMITS"].includes(value.status) || Boolean(value.reviewedBy),
+    { message: "Approved source policy requires a named reviewer", path: ["reviewedBy"] },
+  );
+export const sourceIncidentStatusSchema = z.enum(["OPEN", "ACKNOWLEDGED", "RESOLVED"]);
+export const sourceIncidentListQuerySchema = z.object({
+  status: sourceIncidentStatusSchema.optional(),
+});
+export const sourceIncidentUpdateSchema = z
+  .object({ status: z.enum(["ACKNOWLEDGED", "RESOLVED"]) })
+  .strict();
+
 export const companySchema = z.object({
   id: databaseUuidSchema,
   canonicalName: z.string().min(1),
