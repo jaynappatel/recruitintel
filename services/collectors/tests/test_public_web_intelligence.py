@@ -15,6 +15,7 @@ from recruitintel_collectors.public_web.enums import (
     PublicObservationType,
     RelevanceStatus,
     ReliabilityLevel,
+    SearchProviderCostCategory,
     WebSourceClassification,
 )
 from recruitintel_collectors.public_web.extraction import (
@@ -397,6 +398,8 @@ def test_search_registry_requires_an_explicit_descriptor_for_every_provider() ->
                     official_api=False,
                     minimum_interval_seconds=60,
                     maximum_daily_queries=0,
+                    cost_category=SearchProviderCostCategory.FREE,
+                    zero_cost_eligible=True,
                     terms_status="REVIEW_REQUIRED",
                 )
             ],

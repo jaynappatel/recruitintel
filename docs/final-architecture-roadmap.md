@@ -9,8 +9,8 @@ does not replace legal review, and did not modify production code or the
 Claude-owned frontend. Root repository licenses, nested code licenses, datasets,
 models, fonts, fixtures, and provider terms are treated as separate rights.
 
-Implementation status update (2026-08-24): Gate 5.1, Milestone 6, Milestone 7, and Gate 7.1A are
-complete.
+Implementation status update (2026-08-24): Gate 5.1, Milestone 6, Milestone 7, Gate 7.1A, and
+corrective Gate 7.1A.1 are complete.
 Milestone 6 replaced the configured owner/static admin runtime with authenticated users, hashed
 scoped service principals, compound private ownership, privacy/audit/redaction foundations, and
 current-behavior instrumentation. Milestone 7 replaced manually dispatched durable requests with a
@@ -19,8 +19,11 @@ lane-bound workers, deterministic source health, and an address-pinned outbound 
 current operational contracts are `docs/identity-privacy-audit.md`,
 `docs/orchestration-source-governance.md`, and
 `docs/milestone-7-orchestration-operations.md`. Gate 7.1A adds provider-neutral search contracts,
-an offline-only You.com adapter, provider-policy linkage, and transactional budgets. Gate 7.1B
-remains separate; no live general-web search provider or schedule is enabled.
+provider-policy linkage, transactional budgets, and isolated offline adapters. Gate 7.1A.1 makes
+the canonical path zero-cost and direct-source-first: configured career/company pages and detected
+ATS links become durable source knowledge, while optional SearXNG and commercial adapters remain
+fail-closed. Gate 7.1B is an optional provider authorization/activation gate, not a dependency for
+normal operation or Milestone 8. No live general-web search schedule is enabled.
 
 ## 1. Current system map
 
@@ -32,7 +35,7 @@ RecruitIntel is a PostgreSQL-centered monorepo with three implementation layers:
   shared Zod schemas and return `{data, meta?}` or
   `{error: {code, message}}` envelopes.
 - `packages/db`, `packages/types`, and `packages/shared`: hand-written SQL access,
-  TypeScript contracts, shared normalization, and five sequential SQL migrations.
+  TypeScript contracts, shared normalization, and nine sequential SQL migrations.
 - `services/collectors`: finite Python commands for ATS, GitHub, public-web,
   recruiter/campus processing, and Google Calendar synchronization. PostgreSQL is
   both the system of record and the durable-work coordination store.
@@ -46,15 +49,15 @@ are intentionally limited to `INTERVAL` and `DAILY_AT`.
 
 ### What Milestones 1-7 actually provide
 
-| Milestone | Implemented capability                                                                                                                                                                                                                                             | Important boundary                                                                                                                                                                                                                                                        |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1         | Company/alias/domain identity; Sources; collector runs/errors; current Jobs; immutable snapshots, observations, and recruiting events; Greenhouse and Lever collection; deterministic normalization/classification/fingerprints; complete-batch close/reopen       | The ATS enum names more providers than the two implemented adapters. A Job is a source posting, unique only by `(source_id, external_id)`; there is no cross-source opportunity identity.                                                                                 |
-| 2         | Official GitHub API ingestion; commit-aware repository/path sync; Markdown/CSV/JSON job and interview parsers; canonical interview questions plus company links and commit-specific observations; unresolved records                                               | GitHub jobs are not closed when rows disappear. Interview `observation_count` counts persistence across repository commits, not independent interview reports, and must not be presented as empirical interview probability.                                              |
-| 3         | Search-query, candidate, discovery, document, observation, claim, and durable-work pipeline for public web intelligence; SSRF/redirect/robots/rate/size controls; deterministic relevance/date/claim extraction                                                    | The only configured search provider is static/JSON-file input. There is no live production discovery provider. HTML is fetched without script execution and raw HTML is not retained. Milestone 7 closed the original DNS-rebinding seam with address-pinned connections. |
-| 4         | Deterministic People, RecruiterProfile, evidence, School, recruiter-school and role-focus relationships, campus events, unresolved observations, and read APIs                                                                                                     | This is a projection of Milestone 3 evidence, not a separate crawler. Several large repository modules concentrate extraction, persistence, and projection policy.                                                                                                        |
-| 5         | RecruitingDate, CalendarItem, deterministic ApplicationPlan/Task, Google OAuth with state and PKCE, encrypted refresh credentials, connection/preferences, provider abstraction, one-way retry-safe Google sync, external mappings, sync request/run observability | Gate 5.1 reconciled the production Calendar/Settings UI with these canonical APIs and removed browser plan generation. Milestone 6 subsequently replaced the MVP owner with authenticated ownership.                                                                      |
-| 6         | Authenticated identity/session persistence, private ownership, scoped service principals, audit/privacy/redaction foundations, and privacy-safe product instrumentation                                                                                            | Admin authority is not universal private-data access. Browser APIs derive ownership only from trusted session context.                                                                                                                                                    |
-| 7         | PostgreSQL scheduling, typed WorkItems/attempts, fenced leases/recovery, deterministic retry/dead letters, source policy and health, lane-bound workers, distributed provider/host throttles, and DNS-pinned public fetching                                       | Domain lifecycle and idempotency remain in subsystem tables. Gate 7.1A supplies offline production-adapter infrastructure; live discovery remains disabled pending Gate 7.1B authorization, quality, policy, credential, and schedule activation.                           |
+| Milestone | Implemented capability                                                                                                                                                                                                                                             | Important boundary                                                                                                                                                                                                                                                                          |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1         | Company/alias/domain identity; Sources; collector runs/errors; current Jobs; immutable snapshots, observations, and recruiting events; Greenhouse and Lever collection; deterministic normalization/classification/fingerprints; complete-batch close/reopen       | The ATS enum names more providers than the two implemented adapters. A Job is a source posting, unique only by `(source_id, external_id)`; there is no cross-source opportunity identity.                                                                                                   |
+| 2         | Official GitHub API ingestion; commit-aware repository/path sync; Markdown/CSV/JSON job and interview parsers; canonical interview questions plus company links and commit-specific observations; unresolved records                                               | GitHub jobs are not closed when rows disappear. Interview `observation_count` counts persistence across repository commits, not independent interview reports, and must not be presented as empirical interview probability.                                                                |
+| 3         | Search-query, candidate, discovery, document, observation, claim, and durable-work pipeline for public web intelligence; SSRF/redirect/robots/rate/size controls; deterministic relevance/date/claim extraction                                                    | Core discovery is known-source/direct-domain/ATS/GitHub/university first and needs no paid search API. Static fixtures and optional reviewed local SearXNG are supplemental; no live commercial provider is enabled. HTML is fetched without script execution and raw HTML is not retained. |
+| 4         | Deterministic People, RecruiterProfile, evidence, School, recruiter-school and role-focus relationships, campus events, unresolved observations, and read APIs                                                                                                     | This is a projection of Milestone 3 evidence, not a separate crawler. Several large repository modules concentrate extraction, persistence, and projection policy.                                                                                                                          |
+| 5         | RecruitingDate, CalendarItem, deterministic ApplicationPlan/Task, Google OAuth with state and PKCE, encrypted refresh credentials, connection/preferences, provider abstraction, one-way retry-safe Google sync, external mappings, sync request/run observability | Gate 5.1 reconciled the production Calendar/Settings UI with these canonical APIs and removed browser plan generation. Milestone 6 subsequently replaced the MVP owner with authenticated ownership.                                                                                        |
+| 6         | Authenticated identity/session persistence, private ownership, scoped service principals, audit/privacy/redaction foundations, and privacy-safe product instrumentation                                                                                            | Admin authority is not universal private-data access. Browser APIs derive ownership only from trusted session context.                                                                                                                                                                      |
+| 7         | PostgreSQL scheduling, typed WorkItems/attempts, fenced leases/recovery, deterministic retry/dead letters, source policy and health, lane-bound workers, distributed provider/host throttles, DNS-pinned fetching, and the zero-cost direct source graph           | Domain lifecycle and idempotency remain in subsystem tables. General search is supplemental. SearXNG needs operator/engine review; You.com remains an optional disabled adapter; commercial activation is never required for core discovery.                                                |
 
 ### Existing strengths to preserve
 
@@ -77,24 +80,23 @@ are intentionally limited to `INTERVAL` and `DAILY_AT`.
 ### Current trust and ownership model
 
 - Most intelligence reads are public and unauthenticated.
-- A small set of mutation routes uses one static administrator bearer token.
-- Calendar and application-plan routes use `RECRUITINTEL_MVP_OWNER_ID`; owner UUIDs
-  have no User foreign key and do not establish authorization.
-- There is no account, identity, session, user preference, export/delete, consent,
-  or row-level access model.
-- Structured logs have no global secret/PII redaction layer. Next.js database
-  failures log the raw error object server-side.
+- Better Auth sessions resolve browser identity; personal routes derive ownership only from that
+  trusted actor and return `404` for another user's private resource.
+- Admin authority does not grant universal private-data access. Hashed, scoped service principals
+  authorize internal/admin and worker operations.
+- User/profile FKs, compound owner constraints, privacy requests/deletion contracts, audit events,
+  and privacy-safe product instrumentation are implemented.
+- Structured TypeScript/Python logs, provider errors, persisted diagnostics, and API errors use the
+  shared golden-tested redaction contract.
 - The Calendar token cipher has authenticated encryption and AAD, but only one
   unversioned key, so rotation requires an operational migration rather than a
   normal multi-key decrypt/re-encrypt path.
 
-### Milestone 5.1 release gate
+### Milestone 5.1 release gate (complete)
 
-Before calling Calendar product-complete, reconcile the existing visual UI with
-the canonical APIs. Remove production mock use, keep type adaptation at the API
-boundary, remove browser plan generation, model asynchronous sync as queued, and
-test real all-day/timezone/certainty states. This is a bounded integration gate,
-not the next backend milestone and not permission to redesign the UI.
+The Calendar UI now uses canonical APIs, keeps type adaptation at the API boundary, uses backend
+plan generation, and presents synchronization as queued. The Claude-owned visual design remains
+intact.
 
 ## 2. Reference repository capability matrix
 
@@ -490,8 +492,10 @@ owner FK; sensitive future milestones have documented storage/retention paths.
 
 **Status:** Complete on 2026-08-23. See `docs/orchestration-source-governance.md` and
 `docs/milestone-7-orchestration-operations.md` for the implemented contract and cutover procedure.
-Gate 7.1A is implemented as a production-disabled provider foundation. Gate 7.1B remains blocked on
-the authorization and activation checklist in `docs/search-provider-integration.md`.
+Gate 7.1A is implemented as a provider-neutral foundation. Corrective Gate 7.1A.1 adds the
+zero-cost/direct-source operating path and migration 0009. Gate 7.1B is optional and remains blocked
+on the provider-specific authorization and activation checklist in
+`docs/search-provider-integration.md`; it is not a Milestone 8 prerequisite.
 
 **Goal:** make discovery work continuously, recoverably, and legally observable.
 
@@ -502,9 +506,9 @@ request IDs, and broader collection needs explicit source policy before scale.
 
 **Major components:** generic WorkItem/Attempt/Schedule contracts; PostgreSQL
 claim with lease/heartbeat; retry/backoff/jitter; dead-letter/cancel; startup
-repair; concurrency/fairness; cron/timezone/stagger; source policy registry; source
-health counts and deterministic anomaly rules; DNS-pinned safe fetch; live search
-provider abstraction.
+repair; concurrency/fairness; interval/daily scheduling; source policy registry; source
+health counts and deterministic anomaly rules; DNS-pinned safe fetch; provider-neutral search;
+direct source discovery and durable source graph.
 
 **Reference repositories:** OpenClaw scheduler invariants/SSRF tests (inspiration
 and attributed adaptation); FreeHire outbox/worker health (inspiration); JBA

@@ -82,11 +82,14 @@ queued. The worker checks policy again immediately before a handler, and public 
 source's hostname/scheme/port rule before DNS. Development seed policies are visibly marked
 `DEVELOPMENT_FIXTURE_ONLY` and are not legal/terms determinations.
 
-The search registry currently contains only the credential-free, non-production `static` provider.
-No live general-web vendor was selected. A provider descriptor must state capabilities, hosts,
-credentials, budget, cost metadata, retry behavior, and terms status. Gate 7.1A adds the canonical
-offline adapter and transactional provider budgets; Gate 7.1B requires an actual
-provider/legal review before production activation.
+The search registry always contains the credential-free, non-production `static` provider and may
+contain an operator-configured SearXNG adapter. No live commercial vendor is selected. A provider
+descriptor states capabilities, hosts, credentials, budget, cost category, zero-cost eligibility,
+retry behavior, and terms status. Gate 7.1A adds the canonical offline adapter and transactional
+provider budgets. Corrective Gate 7.1A.1 makes known/direct ATS/company/GitHub/university sources
+the canonical path and sets `ZERO_COST_MODE=true` by default. Paid providers are rejected by both
+the runtime registry and database reservation. SearXNG and each enabled upstream engine need an
+explicit review; Gate 7.1B commercial authorization is optional, not required for core operation.
 
 ## Fetch safety
 

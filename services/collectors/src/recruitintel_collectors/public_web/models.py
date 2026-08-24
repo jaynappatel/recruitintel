@@ -13,6 +13,7 @@ from .enums import (
     RelevanceStatus,
     ReliabilityLevel,
     SearchResultKind,
+    SourceDiscoveryMethod,
     WebSourceClassification,
     WebWorkStatus,
     WebWorkType,
@@ -144,6 +145,7 @@ class SearchBatch(BaseModel):
     provider_calls: int = Field(ge=0)
     cost_units: int = Field(ge=0)
     estimated_cost_micros: int = Field(ge=0)
+    paid_spend_micros: int = Field(default=0, ge=0)
     quota_remaining: int | None = Field(default=None, ge=0)
     quota_reset_at: datetime | None = None
     truncated: bool = False
@@ -157,6 +159,12 @@ class SearchBatch(BaseModel):
             return value.replace(tzinfo=UTC)
         return value.astimezone(UTC)
 
+    @model_validator(mode="after")
+    def paid_spend_cannot_exceed_estimate(self) -> "SearchBatch":
+        if self.paid_spend_micros > self.estimated_cost_micros:
+            raise ValueError("paid spend cannot exceed estimated cost")
+        return self
+
 
 class SearchQueryConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -165,6 +173,7 @@ class SearchQueryConfig(BaseModel):
     company: CompanyWebConfig
     source_id: UUID
     provider: str = Field(pattern=r"^[a-z0-9_-]+$")
+    template_key: str = Field(pattern=r"^[a-z0-9_-]+$")
     query: str = Field(min_length=1)
     minimum_interval_seconds: int = Field(ge=60)
     max_results: int = Field(ge=1, le=100)
@@ -196,6 +205,44 @@ class FetchedDocument(BaseModel):
     body: str
     fetched_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     headers: dict[str, str] = Field(default_factory=dict)
+
+
+class DirectSourceEndpoint(BaseModel):
+    """Bounded durable source knowledge derived from an already permitted page."""
+
+    model_config = ConfigDict(frozen=True)
+
+    url: str = Field(min_length=1, max_length=8192)
+    source_type: str = Field(pattern=r"^(ATS|COMPANY_CAREERS|UNIVERSITY|GITHUB)$")
+    provider: str = Field(pattern=r"^[a-z0-9_-]+$")
+    external_key: str = Field(min_length=1, max_length=500)
+    name: str = Field(min_length=1, max_length=500)
+    discovery_method: SourceDiscoveryMethod
+    confidence: float = Field(ge=0, le=1)
+    discovered_from_url: str = Field(min_length=1, max_length=8192)
+    evidence: str = Field(min_length=1, max_length=500)
+    ats_type: str | None = Field(
+        default=None,
+        pattern=r"^(GREENHOUSE|LEVER|ASHBY|WORKDAY|SMARTRECRUITERS|ICIMS|SUCCESSFACTORS|BAMBOOHR|OTHER)$",
+    )
+    collector_supported: bool = False
+    fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class KnownSourceCoverage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    url: str
+    source_type: str = Field(pattern=r"^(ATS|COMPANY_CAREERS|UNIVERSITY|GITHUB)$")
+    enabled: bool = True
+
+
+class DirectDiscoveryPlan(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    probe_urls: tuple[str, ...] = Field(max_length=5)
+    general_search_recommended: bool
+    reason: str = Field(min_length=1, max_length=100)
 
 
 class ExtractedDocument(BaseModel):
@@ -306,6 +353,9 @@ class WebRunStats(BaseModel):
     provider_calls: int = Field(default=0, ge=0)
     cost_units: int = Field(default=0, ge=0)
     estimated_cost_micros: int = Field(default=0, ge=0)
+    paid_spend_micros: int = Field(default=0, ge=0)
+    direct_sources_discovered: int = Field(default=0, ge=0)
+    general_search_skipped: bool = False
     fetched: int = Field(default=0, ge=0)
     relevant: int = Field(default=0, ge=0)
     observations_created: int = Field(default=0, ge=0)

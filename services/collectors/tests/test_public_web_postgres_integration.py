@@ -1,4 +1,5 @@
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -6,7 +7,13 @@ import psycopg
 import pytest
 from psycopg.rows import dict_row
 from recruitintel_collectors.infrastructure.public_web_postgres import PostgresPublicWebRepository
-from recruitintel_collectors.public_web.models import FetchedDocument, SearchResult
+from recruitintel_collectors.public_web.direct_discovery import DirectSourceDiscovery
+from recruitintel_collectors.public_web.models import (
+    CandidateConfig,
+    CompanyWebConfig,
+    FetchedDocument,
+    SearchResult,
+)
 from recruitintel_collectors.public_web.runner import PublicWebWorker
 from recruitintel_collectors.public_web.search import SearchProviderRegistry, StaticSearchProvider
 
@@ -103,7 +110,7 @@ async def _seed(database_url: str) -> None:
               id, company_id, source_id, provider, template_key, query,
               graduation_year, focus, minimum_interval_seconds, max_results, max_fetches
             ) values (
-              %s, %s, %s, 'static', 'internship', %s,
+              %s, %s, %s, 'static', 'career-fair', %s,
               2027, 'INTERNSHIP', 86400, 10, 5
             )
             """,
@@ -159,6 +166,114 @@ async def _retire_domain_test_work(database_url: str, request_id: UUID) -> None:
             "delete from public.work_items where public_web_work_request_id = %s",
             (request_id,),
         )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_direct_source_graph_is_durable_deduplicated_and_policy_gated() -> None:
+    database_url = _database_url()
+    await _reset(database_url)
+    await _seed(database_url)
+    repository = PostgresPublicWebRepository(database_url)
+    company = CompanyWebConfig(
+        id=COMPANY_ID,
+        canonical_name="Stripe Integration",
+        slug="web-integration-stripe",
+        website="https://stripe.com",
+        careers_url="https://stripe.com/jobs",
+        domains=("stripe.com",),
+    )
+    candidate = CandidateConfig(
+        id=UUID("c5000000-0000-0000-0000-000000000001"),
+        company=company,
+        source_id=SEARCH_SOURCE_ID,
+        canonical_url="https://stripe.com",
+        original_url="https://stripe.com",
+        source_provider="direct",
+        fetch_status="PENDING",
+    )
+    async with await psycopg.AsyncConnection.connect(database_url) as connection:
+        await connection.execute(
+            """
+            insert into public.public_web_candidates (
+              id, company_id, source_id, source_provider, original_url, canonical_url
+            ) values (%s, %s, %s, 'direct', 'https://stripe.com', 'https://stripe.com')
+            """,
+            (candidate.id, COMPANY_ID, SEARCH_SOURCE_ID),
+        )
+        await connection.execute(
+            """
+            update public.source_policies set
+              status = 'ALLOWED_WITH_LIMITS', terms_status = 'REVIEWED',
+              reviewed_at = now(), reviewed_by = 'integration-test'
+            where provider = 'greenhouse'
+            """
+        )
+
+    fetched = FetchedDocument(
+        requested_url="https://stripe.com",
+        final_url="https://stripe.com",
+        status_code=200,
+        content_type="text/html",
+        body="""
+          <a href="/jobs/students">Students</a>
+          <a href="https://boards.greenhouse.io/stripe">Greenhouse jobs</a>
+          <a href="https://stripe.wd5.myworkdayjobs.com/External/jobs">Workday jobs</a>
+        """,
+        fetched_at=datetime(2026, 8, 24, tzinfo=UTC),
+    )
+    discoveries = DirectSourceDiscovery().discover(company, fetched)
+    try:
+        assert (
+            await repository.persist_direct_sources(
+                candidate=candidate,
+                discoveries=discoveries,
+                verified_at=fetched.fetched_at,
+            )
+            == 3
+        )
+        assert (
+            await repository.persist_direct_sources(
+                candidate=candidate,
+                discoveries=discoveries,
+                verified_at=fetched.fetched_at,
+            )
+            == 0
+        )
+
+        async with await psycopg.AsyncConnection.connect(
+            database_url, row_factory=dict_row
+        ) as connection:
+            cursor = await connection.execute(
+                """
+                select provider, external_key, enabled, discovery_method::text,
+                  discovery_fingerprint
+                from public.sources
+                where company_id = %s and provider in ('public_web', 'greenhouse', 'workday')
+                order by provider, external_key
+                """,
+                (COMPANY_ID,),
+            )
+            rows = await cursor.fetchall()
+            direct_rows = [row for row in rows if row["discovery_method"] != "CONFIGURED"]
+            assert len(direct_rows) == 3
+            assert len({row["discovery_fingerprint"] for row in direct_rows}) == 3
+            greenhouse = next(row for row in direct_rows if row["provider"] == "greenhouse")
+            workday = next(row for row in direct_rows if row["provider"] == "workday")
+            assert greenhouse["enabled"]
+            assert not workday["enabled"]
+
+            cursor = await connection.execute(
+                """
+                select count(*)::int from public.schedules schedule
+                join public.sources source on source.id = schedule.source_id
+                where source.company_id = %s and source.provider in ('greenhouse', 'workday')
+                """,
+                (COMPANY_ID,),
+            )
+            assert (await cursor.fetchone())["count"] == 2
+    finally:
+        await _reset(database_url)
 
 
 @pytest.mark.integration
@@ -268,7 +383,7 @@ async def test_public_web_end_to_end_change_conflict_and_retry_idempotency() -> 
             )
             counts = await cursor.fetchone()
             assert counts is not None
-            assert counts["candidates"] == 3
+            assert counts["candidates"] == 4  # three search candidates plus configured careers
             assert counts["documents"] == 3
             assert counts["observations"] >= 5
             event_count = counts["events"]

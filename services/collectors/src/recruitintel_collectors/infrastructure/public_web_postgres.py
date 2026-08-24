@@ -28,6 +28,7 @@ from recruitintel_collectors.public_web.fingerprints import (
 from recruitintel_collectors.public_web.models import (
     CandidateConfig,
     CompanyWebConfig,
+    DirectSourceEndpoint,
     ExtractedDocument,
     FetchedDocument,
     NormalizedWebObservation,
@@ -41,6 +42,7 @@ from recruitintel_collectors.public_web.models import (
 )
 from recruitintel_collectors.public_web.search import (
     SearchProviderAuthRequiredError,
+    SearchProviderCostBlockedError,
     SearchProviderPermanentError,
     SearchProviderRateLimitedError,
 )
@@ -163,12 +165,37 @@ class PostgresPublicWebRepository:
             company=self._company(row),
             source_id=row["source_id"],
             provider=row["provider"],
+            template_key=row["template_key"],
             query=row["query"],
             minimum_interval_seconds=row["minimum_interval_seconds"],
             max_results=row["max_results"],
             max_fetches=row["max_fetches"],
             next_allowed_run_at=row["next_allowed_run_at"],
         )
+
+    async def has_direct_source_coverage(self, query: SearchQueryConfig) -> bool:
+        if query.template_key not in {
+            "early-career",
+            "internship",
+            "internship-role",
+            "new-grad",
+            "role",
+        }:
+            return False
+        async with await self._connect() as connection:
+            cursor = await connection.execute(
+                """
+                select exists (
+                  select 1 from public.sources source
+                  where source.company_id = %s
+                    and source.source_type in ('ATS', 'COMPANY_CAREERS')
+                    and public.source_policy_is_executable(source.id)
+                ) as covered
+                """,
+                (query.company.id,),
+            )
+            row = await cursor.fetchone()
+        return bool(row and row["covered"])
 
     async def get_candidate(self, candidate_id: UUID) -> CandidateConfig:
         async with await self._connect() as connection:
@@ -400,6 +427,7 @@ class PostgresPublicWebRepository:
                                 "provider_calls": batch.provider_calls,
                                 "cost_units": batch.cost_units,
                                 "estimated_cost_micros": batch.estimated_cost_micros,
+                                "paid_spend_micros": batch.paid_spend_micros,
                                 "quota_remaining": batch.quota_remaining,
                                 "quota_reset_at": (
                                     batch.quota_reset_at.isoformat()
@@ -539,6 +567,219 @@ class PostgresPublicWebRepository:
             ),
             False,
         )
+
+    async def persist_direct_sources(
+        self,
+        *,
+        candidate: CandidateConfig,
+        discoveries: Sequence[DirectSourceEndpoint],
+        verified_at: datetime,
+    ) -> int:
+        if not discoveries:
+            async with await self._connect() as connection:
+                await connection.execute(
+                    "update public.sources set last_verified_at = %s where id = %s",
+                    (verified_at, candidate.source_id),
+                )
+            return 0
+        created = 0
+        async with await self._connect() as connection:
+            async with connection.transaction():
+                await connection.execute(
+                    "select pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (f"direct-source:{candidate.company.id}",),
+                )
+                await connection.execute(
+                    "update public.sources set last_verified_at = %s where id = %s",
+                    (verified_at, candidate.source_id),
+                )
+                for discovery in discoveries:
+                    cursor = await connection.execute(
+                        """
+                        select id from public.sources
+                        where discovery_fingerprint = %s
+                           or (provider = %s and external_key = %s)
+                        limit 1
+                        """,
+                        (
+                            discovery.fingerprint,
+                            discovery.provider,
+                            discovery.external_key,
+                        ),
+                    )
+                    existed = await cursor.fetchone() is not None
+                    hostname = (urlsplit(discovery.url).hostname or "").casefold()
+                    if discovery.source_type == "ATS":
+                        policy_cursor = await connection.execute(
+                            "select id from public.source_policies where provider = %s",
+                            (discovery.provider,),
+                        )
+                    else:
+                        policy_cursor = await connection.execute(
+                            "select public.executable_source_policy_for_hostname(%s) as id",
+                            (hostname,),
+                        )
+                    policy_row = await policy_cursor.fetchone()
+                    policy_id = policy_row["id"] if policy_row is not None else None
+                    cursor = await connection.execute(
+                        """
+                        insert into public.sources (
+                          company_id, source_type, provider, external_key, name, base_url,
+                          reliability, enabled, metadata, source_policy_id,
+                          discovery_method, first_seen_at, last_verified_at,
+                          discovery_confidence, discovered_from_source_id,
+                          discovery_fingerprint, discovery_provenance
+                        ) values (
+                          %s, %s::public.source_type, %s, %s, %s, %s, %s, %s, %s,
+                          %s, %s::public.source_discovery_method,
+                          %s, %s, %s, %s, %s, %s
+                        )
+                        on conflict (provider, external_key) do update set
+                          source_type = excluded.source_type,
+                          name = excluded.name,
+                          base_url = excluded.base_url,
+                          reliability = greatest(public.sources.reliability, excluded.reliability),
+                          enabled = public.sources.enabled or excluded.enabled,
+                          metadata = public.sources.metadata || excluded.metadata,
+                          source_policy_id = coalesce(
+                            excluded.source_policy_id, public.sources.source_policy_id
+                          ),
+                          last_verified_at = excluded.last_verified_at,
+                          discovery_confidence = greatest(
+                            public.sources.discovery_confidence,
+                            excluded.discovery_confidence
+                          ),
+                          discovery_provenance = public.sources.discovery_provenance
+                            || excluded.discovery_provenance
+                        returning id
+                        """,
+                        (
+                            candidate.company.id,
+                            discovery.source_type,
+                            discovery.provider,
+                            discovery.external_key,
+                            discovery.name,
+                            discovery.url,
+                            discovery.confidence,
+                            discovery.collector_supported and policy_id is not None,
+                            Jsonb(
+                                {
+                                    "ats_type": discovery.ats_type,
+                                    "collector_supported": discovery.collector_supported,
+                                }
+                            ),
+                            policy_id,
+                            discovery.discovery_method.value,
+                            verified_at,
+                            verified_at,
+                            discovery.confidence,
+                            candidate.source_id,
+                            discovery.fingerprint,
+                            Jsonb(
+                                {
+                                    "evidence": discovery.evidence,
+                                    "discovered_from_url": discovery.discovered_from_url,
+                                }
+                            ),
+                        ),
+                    )
+                    source = await cursor.fetchone()
+                    if source is None:
+                        raise RuntimeError("direct source upsert returned no row")
+                    source_id = UUID(str(source["id"]))
+                    await connection.execute(
+                        """
+                        update public.sources set enabled = enabled
+                          and public.source_policy_is_executable(id)
+                        where id = %s
+                        """,
+                        (source_id,),
+                    )
+                    if not existed:
+                        created += 1
+                    if discovery.source_type == "ATS":
+                        if discovery.collector_supported and discovery.ats_type is not None:
+                            await connection.execute(
+                                """
+                                update public.companies set
+                                  ats_type = %s::public.ats_type,
+                                  ats_identifier = %s
+                                where id = %s and ats_type is null and ats_identifier is null
+                                  and not exists (
+                                    select 1 from public.companies existing
+                                    where existing.id <> %s
+                                      and existing.ats_type = %s::public.ats_type
+                                      and existing.ats_identifier = %s
+                                  )
+                                """,
+                                (
+                                    discovery.ats_type,
+                                    discovery.external_key,
+                                    candidate.company.id,
+                                    candidate.company.id,
+                                    discovery.ats_type,
+                                    discovery.external_key,
+                                ),
+                            )
+                        await connection.execute(
+                            """
+                            insert into public.schedules (
+                              name, work_type, work_class, source_id, enabled,
+                              schedule_kind, interval_seconds, anchor_at, next_run_at,
+                              jitter_seconds, priority, max_attempts, retry_policy
+                            ) select 'ats:' || source.id::text, 'ATS_COLLECT', 'ATS', source.id,
+                              source.enabled and public.source_policy_is_executable(source.id),
+                              'INTERVAL', 3600, now(), now() + interval '1 hour',
+                              300, 60, 3, 'EXPONENTIAL_V1'
+                            from public.sources source where source.id = %s
+                            on conflict (name) do update set
+                              enabled = excluded.enabled, updated_at = now()
+                            """,
+                            (source_id,),
+                        )
+                        continue
+                    cursor = await connection.execute(
+                        """
+                        insert into public.public_web_candidates (
+                          company_id, source_id, source_provider, original_url,
+                          canonical_url, title, snippet
+                        ) values (%s, %s, 'direct', %s, %s, %s, %s)
+                        on conflict (company_id, canonical_url) do update set
+                          source_id = excluded.source_id,
+                          last_seen_at = excluded.last_seen_at,
+                          title = coalesce(public.public_web_candidates.title, excluded.title)
+                        returning id
+                        """,
+                        (
+                            candidate.company.id,
+                            source_id,
+                            discovery.url,
+                            discovery.url,
+                            discovery.name,
+                            discovery.evidence,
+                        ),
+                    )
+                    direct_candidate = await cursor.fetchone()
+                    if direct_candidate is None:
+                        raise RuntimeError("direct candidate upsert returned no row")
+                    await connection.execute(
+                        """
+                        insert into public.schedules (
+                          name, work_type, work_class, public_web_candidate_id,
+                          enabled, schedule_kind, interval_seconds, anchor_at,
+                          next_run_at, jitter_seconds, priority, max_attempts, retry_policy
+                        ) select 'direct-web:' || candidate.id::text,
+                          'PUBLIC_WEB_FETCH', 'WEB_FETCH', candidate.id,
+                          public.source_policy_is_executable(candidate.source_id),
+                          'INTERVAL', 21600, now(), now() + interval '6 hours',
+                          900, 45, 3, 'EXPONENTIAL_V1'
+                        from public.public_web_candidates candidate where candidate.id = %s
+                        on conflict (name) do update set
+                          enabled = excluded.enabled, updated_at = now()
+                        """,
+                        (direct_candidate["id"],),
+                    )
+        return created
 
     async def get_current_document(self, candidate: CandidateConfig) -> StoredDocument:
         async with await self._connect() as connection:
@@ -978,7 +1219,8 @@ class PostgresPublicWebRepository:
                       unresolved_recruiter_references = greatest(
                         unresolved_recruiter_references, %s
                       ),
-                      duration_ms = %s
+                      duration_ms = %s,
+                      metadata = metadata || %s
                     where collector_run_id = %s
                     """,
                     (
@@ -991,6 +1233,13 @@ class PostgresPublicWebRepository:
                         stats.campus_events_created,
                         stats.unresolved_recruiter_references,
                         stats.duration_ms,
+                        Jsonb(
+                            {
+                                "direct_sources_discovered": stats.direct_sources_discovered,
+                                "general_search_skipped": stats.general_search_skipped,
+                                "paid_spend_micros": stats.paid_spend_micros,
+                            }
+                        ),
                         run_id,
                     ),
                 )
@@ -1042,7 +1291,9 @@ class PostgresPublicWebRepository:
         self, run_id: UUID | None, request: PublicWebWorkRequest, error: Exception
     ) -> None:
         now = datetime.now(UTC)
-        blocked = isinstance(error, (UnsafeUrlError, RobotsDeniedError))
+        blocked = isinstance(
+            error, (UnsafeUrlError, RobotsDeniedError, SearchProviderCostBlockedError)
+        )
         permanent = isinstance(
             error,
             (SearchProviderAuthRequiredError, SearchProviderPermanentError),

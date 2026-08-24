@@ -5,14 +5,14 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, Self
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from recruitintel_collectors.infrastructure.rate_limit import DistributedRateLimiter
 
-from .enums import SearchResultKind
+from .enums import SearchProviderCostCategory, SearchResultKind
 from .models import (
     SearchBatch,
     SearchRequest,
@@ -24,6 +24,7 @@ from .urls import UnsafeUrlError, canonicalize_url
 YOU_SEARCH_URL = "https://api.you.com/v1/search"
 YOU_SEARCH_HOST = "api.you.com"
 YOU_SEARCH_COST_PER_CALL_MICROS = 5_000
+SEARXNG_DEFAULT_DAILY_CALLS = 1_000
 
 
 class SearchProviderError(RuntimeError):
@@ -70,6 +71,10 @@ class SearchProviderBudgetExceededError(SearchProviderRateLimitedError):
         self.period = period
 
 
+class SearchProviderCostBlockedError(SearchProviderError, PermissionError):
+    code = "SEARCH_PROVIDER_ZERO_COST_BLOCKED"
+
+
 class SearchProvider(Protocol):
     @property
     def name(self) -> str: ...
@@ -85,6 +90,7 @@ class SearchUsageBudget(Protocol):
         credential_slot: str,
         provider_calls: int,
         estimated_cost_micros: int,
+        paid_spend_micros: int,
     ) -> None: ...
 
 
@@ -145,6 +151,8 @@ class SearchProviderDescriptor(BaseModel):
     minimum_interval_seconds: int = Field(ge=0)
     maximum_daily_queries: int = Field(ge=0)
     cost_metadata: dict[str, int | str | bool] = Field(default_factory=dict)
+    cost_category: SearchProviderCostCategory
+    zero_cost_eligible: bool
     terms_status: str = Field(pattern=r"^(DEVELOPMENT_ONLY|REVIEW_REQUIRED|REVIEWED)$")
 
     def assert_production_enabled(self) -> None:
@@ -161,6 +169,8 @@ STATIC_SEARCH_DESCRIPTOR = SearchProviderDescriptor(
     minimum_interval_seconds=0,
     maximum_daily_queries=0,
     cost_metadata={"billable": False},
+    cost_category=SearchProviderCostCategory.FREE,
+    zero_cost_eligible=True,
     terms_status="DEVELOPMENT_ONLY",
 )
 
@@ -177,6 +187,21 @@ YOU_SEARCH_DESCRIPTOR = SearchProviderDescriptor(
         "currency": "USD",
         "estimated_cost_per_call_micros": YOU_SEARCH_COST_PER_CALL_MICROS,
     },
+    cost_category=SearchProviderCostCategory.PAID,
+    zero_cost_eligible=False,
+    terms_status="REVIEW_REQUIRED",
+)
+
+SEARXNG_SEARCH_DESCRIPTOR = SearchProviderDescriptor(
+    name="searxng",
+    production_capable=True,
+    official_api=True,
+    credential_environment_names=(),
+    minimum_interval_seconds=1,
+    maximum_daily_queries=SEARXNG_DEFAULT_DAILY_CALLS,
+    cost_metadata={"billable": False, "operator_hosted": True},
+    cost_category=SearchProviderCostCategory.FREE,
+    zero_cost_eligible=True,
     terms_status="REVIEW_REQUIRED",
 )
 
@@ -186,6 +211,8 @@ class SearchProviderRegistry:
         self,
         providers: Sequence[SearchProvider],
         descriptors: Sequence[SearchProviderDescriptor] | None = None,
+        *,
+        zero_cost_mode: bool = True,
     ) -> None:
         self._providers = {provider.name: provider for provider in providers}
         values = tuple(descriptors) if descriptors is not None else (STATIC_SEARCH_DESCRIPTOR,)
@@ -194,8 +221,14 @@ class SearchProviderRegistry:
             raise ValueError("search provider names and descriptors must be unique")
         if set(self._providers) != set(self._descriptors):
             raise ValueError("every search provider requires exactly one reviewed descriptor")
+        self._zero_cost_mode = zero_cost_mode
 
     def get(self, name: str) -> SearchProvider:
+        descriptor = self.descriptor(name)
+        if self._zero_cost_mode and not descriptor.zero_cost_eligible:
+            raise SearchProviderCostBlockedError(
+                "paid search providers are disabled while zero-cost mode is active"
+            )
         try:
             return self._providers[name]
         except KeyError as exc:
@@ -430,6 +463,7 @@ class YouSearchProvider:
             credential_slot=self._credential_slot,
             provider_calls=1,
             estimated_cost_micros=YOU_SEARCH_COST_PER_CALL_MICROS,
+            paid_spend_micros=YOU_SEARCH_COST_PER_CALL_MICROS,
         )
         try:
             async with self._client.stream(
@@ -534,7 +568,217 @@ class YouSearchProvider:
             provider_calls=provider_calls,
             cost_units=provider_calls,
             estimated_cost_micros=provider_calls * YOU_SEARCH_COST_PER_CALL_MICROS,
+            paid_spend_micros=provider_calls * YOU_SEARCH_COST_PER_CALL_MICROS,
             quota_remaining=quota_remaining,
             quota_reset_at=quota_reset_at,
+            truncated=truncated,
+        )
+
+
+def _searxng_search_url(base_url: str) -> str:
+    if len(base_url) > 2048:
+        raise ValueError("SearXNG base URL is too long")
+    parsed = urlsplit(base_url.strip())
+    hostname = (parsed.hostname or "").casefold().rstrip(".")
+    if parsed.scheme not in {"http", "https"} or not hostname:
+        raise ValueError("SearXNG base URL must be HTTP or HTTPS")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("SearXNG base URL contains unsupported components")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("SearXNG base URL port is invalid") from exc
+    del port
+    if parsed.scheme == "http":
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            local_http = (
+                hostname == "localhost" or hostname.endswith(".localhost") or "." not in hostname
+            )
+        else:
+            local_http = address.is_private or address.is_loopback
+        if not local_http:
+            raise ValueError("remote SearXNG instances must use HTTPS")
+    path = parsed.path.rstrip("/") + "/search"
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
+class SearXNGProvider:
+    """Optional adapter for an operator-controlled, separately reviewed SearXNG instance."""
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        budget: SearchUsageBudget,
+        credential_slot: str = "local",
+        user_agent: str = "RecruitIntel/0.1",
+        timeout_seconds: float = 20,
+        max_response_bytes: int = 1_000_000,
+        page_size: int = 20,
+        transport: httpx.AsyncBaseTransport | None = None,
+        distributed_limiter: DistributedRateLimiter | None = None,
+    ) -> None:
+        if not credential_slot or len(credential_slot) > 100:
+            raise ValueError("credential slot must be a short non-empty label")
+        if not 1 <= page_size <= 100:
+            raise ValueError("page size must be between 1 and 100")
+        self._search_url = _searxng_search_url(base_url)
+        self._budget = budget
+        self._credential_slot = credential_slot
+        self._max_response_bytes = max_response_bytes
+        self._page_size = page_size
+        self._distributed_limiter = distributed_limiter
+        self._client = httpx.AsyncClient(
+            headers={"User-Agent": user_agent, "Accept": "application/json"},
+            timeout=httpx.Timeout(timeout_seconds),
+            follow_redirects=False,
+            trust_env=False,
+            limits=httpx.Limits(max_connections=2, max_keepalive_connections=1),
+            transport=transport,
+        )
+
+    @property
+    def name(self) -> str:
+        return "searxng"
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+    async def _request_page(self, request: SearchRequest, *, count: int, page: int) -> list[object]:
+        if request.include_domains or request.exclude_domains:
+            raise SearchProviderPermanentError("SEARCH_PROVIDER_UNSUPPORTED_DOMAIN_FILTER")
+        if request.country_code:
+            raise SearchProviderPermanentError("SEARCH_PROVIDER_UNSUPPORTED_COUNTRY_FILTER")
+        if request.freshness and "to" in request.freshness:
+            raise SearchProviderPermanentError("SEARCH_PROVIDER_UNSUPPORTED_FRESHNESS")
+        if self._distributed_limiter is not None:
+            await self._distributed_limiter.wait("PROVIDER", f"searxng:{self._credential_slot}", 1)
+        await self._budget.reserve(
+            provider=self.name,
+            credential_slot=self._credential_slot,
+            provider_calls=1,
+            estimated_cost_micros=0,
+            paid_spend_micros=0,
+        )
+        params: dict[str, str | int] = {
+            "q": request.query,
+            "format": "json",
+            "pageno": page,
+            "safesearch": 2,
+        }
+        if request.language:
+            params["language"] = request.language
+        if request.freshness:
+            params["time_range"] = request.freshness
+        try:
+            async with self._client.stream("GET", self._search_url, params=params) as response:
+                if response.is_redirect:
+                    raise SearchProviderPermanentError("SEARCH_PROVIDER_REDIRECT_REJECTED")
+                if response.status_code == 429:
+                    raise SearchProviderRateLimitedError(_retry_after_seconds(response.headers))
+                if response.status_code == 401:
+                    raise SearchProviderAuthRequiredError("SearXNG proxy authorization failed")
+                if response.status_code == 403:
+                    raise SearchProviderPermanentError("SEARXNG_API_NOT_ENABLED")
+                if response.status_code == 422:
+                    raise SearchProviderPermanentError("SEARCH_PROVIDER_INVALID_REQUEST")
+                if response.status_code in {408, 425, 500, 502, 503, 504}:
+                    raise SearchProviderRetryableError("SearXNG instance is unavailable")
+                if response.status_code != 200:
+                    raise SearchProviderPermanentError("SEARCH_PROVIDER_UNEXPECTED_STATUS")
+                content_type = response.headers.get("content-type", "").split(";", 1)[0].strip()
+                if content_type != "application/json":
+                    raise SearchProviderResponseError("SEARCH_PROVIDER_UNEXPECTED_CONTENT_TYPE")
+                declared = response.headers.get("content-length")
+                if declared:
+                    try:
+                        if int(declared) > self._max_response_bytes:
+                            raise SearchProviderResponseTooLargeError()
+                    except ValueError as exc:
+                        raise SearchProviderResponseError() from exc
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    body.extend(chunk)
+                    if len(body) > self._max_response_bytes:
+                        raise SearchProviderResponseTooLargeError()
+        except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            raise SearchProviderRetryableError("SearXNG transport failed") from exc
+        try:
+            payload = json.loads(body)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise SearchProviderResponseError() from exc
+        if not isinstance(payload, Mapping):
+            raise SearchProviderResponseError()
+        results = payload.get("results")
+        if not isinstance(results, list):
+            raise SearchProviderResponseError()
+        return list(results[:count])
+
+    async def search(self, request: SearchRequest) -> SearchBatch:
+        collected: list[SearchResult] = []
+        seen: set[str] = set()
+        provider_calls = 0
+        truncated = False
+        for page in range(1, 11):
+            remaining = request.max_results - len(collected)
+            if remaining <= 0:
+                truncated = True
+                break
+            count = min(self._page_size, remaining)
+            records = await self._request_page(request, count=count, page=page)
+            provider_calls += 1
+            for section_rank, value in enumerate(records, start=1):
+                if not isinstance(value, Mapping):
+                    continue
+                url = value.get("url")
+                if not isinstance(url, str):
+                    continue
+                try:
+                    canonical = _canonical_result_url(url)
+                    kind = (
+                        SearchResultKind.NEWS
+                        if str(value.get("category", "")).casefold() == "news"
+                        else SearchResultKind.WEB
+                    )
+                    parsed = SearchResult(
+                        url=canonical,
+                        title=_bounded_text(value.get("title"), 500),
+                        snippet=_bounded_text(value.get("content"), 2000),
+                        rank=1,
+                        result_kind=kind,
+                        published_at=_published_at(
+                            value.get("publishedDate") or value.get("published_at")
+                        ),
+                        metadata=SearchResultMetadata(
+                            page_offset=page - 1, section_rank=section_rank
+                        ),
+                    )
+                except (UnsafeUrlError, ValidationError):
+                    continue
+                if parsed.url in seen:
+                    continue
+                seen.add(parsed.url)
+                collected.append(parsed.model_copy(update={"rank": len(collected) + 1}))
+                if len(collected) >= request.max_results:
+                    truncated = len(records) >= count
+                    break
+            if len(collected) >= request.max_results or len(records) < count:
+                break
+            if page == 10:
+                truncated = True
+        return SearchBatch(
+            results=tuple(collected),
+            provider_calls=provider_calls,
+            cost_units=provider_calls,
+            estimated_cost_micros=0,
+            paid_spend_micros=0,
             truncated=truncated,
         )

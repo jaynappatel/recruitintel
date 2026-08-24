@@ -20,6 +20,7 @@ from recruitintel_collectors.public_web.fetcher import (
 )
 from recruitintel_collectors.public_web.search import (
     SearchProviderAuthRequiredError,
+    SearchProviderCostBlockedError,
     SearchProviderPermanentError,
     SearchProviderRateLimitedError,
     SearchProviderRetryableError,
@@ -37,6 +38,11 @@ def _seconds_until(value: datetime | None) -> int | None:
 
 
 def classify_failure(error: Exception) -> WorkFailure:
+    if isinstance(error, SearchProviderCostBlockedError):
+        return WorkFailure(
+            classification=FailureClassification.POLICY_BLOCKED,
+            code=error.code,
+        )
     if isinstance(error, SearchProviderRateLimitedError):
         return WorkFailure(
             classification=FailureClassification.RATE_LIMITED,

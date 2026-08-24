@@ -252,7 +252,9 @@ Reasons are `UNKNOWN_PERSON`, `AMBIGUOUS_PERSON`, `UNKNOWN_SCHOOL`, `AMBIGUOUS_S
 - Profile says stale: inspect `lastVerifiedAt` and evidence; stale data is deliberately retained.
 - A retry created no event: evidence/event fingerprints intentionally make identical work a no-op.
 - LinkedIn candidate is blocked: retain the public URL or add permitted independent evidence; do not bypass `RestrictedSiteError`.
-- No production search results: configure a reviewed `SearchProvider`; `static` is intentionally inert unless `PUBLIC_WEB_STATIC_RESULTS_FILE` is set.
+- No general-search results: direct ATS/company/GitHub/university discovery remains the canonical
+  zero-cost path. `static` is intentionally inert unless `PUBLIC_WEB_STATIC_RESULTS_FILE` is set;
+  an optional operator-controlled SearXNG provider still requires source/engine review.
 - Worker processed the web observation but no graph rows: ensure CLI composition includes `PostgresRecruiterCampusRepository`, then rerun `recruiter-campus-process` for that observation.
 
 ## Deferred scope

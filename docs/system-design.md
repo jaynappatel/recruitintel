@@ -10,6 +10,8 @@ Create a new monorepo at the current workspace root. The directory is empty and 
 - Plain versioned SQL migrations compatible with PostgreSQL/Supabase.
 - A small PostgreSQL scheduler plus typed Python dispatcher for continuous collection and recovery.
 - Provider adapters over a shared async HTTP client. External services never write directly to database tables.
+- A direct-source-first discovery path that operates without a paid search API. General web search
+  is supplemental and `ZERO_COST_MODE=true` is the runtime default.
 
 Milestone 1 deliberately has no Redis, Celery, message broker, vector search, LLM, authentication, recruiter intelligence, GitHub watcher, alert engine, or ML runtime.
 
@@ -61,6 +63,36 @@ flowchart LR
 - Web route handlers validate inputs with Zod and query through a small server-side data access package.
 - The browser never receives `raw_payload` or collector error internals.
 - Cross-language vocabularies are defined once in SQL/docs and mirrored in generated or tested TypeScript/Python enums. Milestone 1 includes parity tests where generation would add more machinery than value.
+
+## Discovery priority and source graph
+
+The canonical discovery order is known source, official ATS/API, known company careers page,
+bounded direct-domain discovery, GitHub/university sources, optional local/free search, then an
+optional commercial provider. RecruitIntel must remain useful when the final two tiers are absent.
+
+The existing `sources` table is the durable `SourceEndpoint` graph. Migration 0009 adds discovery
+method/fingerprint, first-seen/last-verified time, confidence, bounded provenance, and an optional
+parent source. Configured company careers URLs and company-homepage seeds become monitored source
+knowledge. Permitted fetched pages can deterministically yield same-domain recruiting pages and
+recognized ATS endpoints. Rediscovery is idempotent; source knowledge does not itself create jobs,
+observations, claims, or recruiting facts.
+
+```text
+Company -> SourceEndpoint -> Collector or public candidate -> evidence/facts
+              |                    ^
+              +-- discovered -----+
+```
+
+Known ATS/company-career coverage short-circuits equivalent general-search work. Greenhouse and
+Lever are the currently executable ATS adapters; recognition of other ATS URL families remains
+fail-closed until their collectors and policies are implemented. Future explicit browser imports
+use the same source graph with user/browser provenance rather than a parallel monitoring system.
+
+`SearchProvider` remains provider-neutral, but search is a supplemental candidate source only.
+Static fixtures are development-only, an operator-controlled SearXNG instance is optional and
+requires upstream-engine review, and You.com remains a disabled optional adapter. Provider-returned
+URLs cannot bypass source policy, pinned DNS/redirect/robots transport, or normal processing.
+`docs/search-provider-integration.md` and `docs/zero-cost-discovery.md` are the canonical contracts.
 
 ## Collector lifecycle
 
@@ -155,6 +187,7 @@ erDiagram
     COMPANIES ||--o{ COMPANY_ALIASES : has
     COMPANIES ||--o{ COMPANY_DOMAINS : has
     COMPANIES ||--o{ SOURCES : owns
+    SOURCES o|--o{ SOURCES : discovers
     SOURCES ||--o{ COLLECTOR_RUNS : synced_by
     COLLECTOR_RUNS ||--o{ COLLECTOR_ERRORS : records
     COMPANIES ||--o{ JOBS : posts
@@ -204,6 +237,13 @@ erDiagram
         numeric reliability
         boolean enabled
         jsonb metadata
+        source_discovery_method discovery_method
+        timestamptz first_seen_at
+        timestamptz last_verified_at
+        numeric discovery_confidence
+        uuid discovered_from_source_id FK
+        text discovery_fingerprint UK
+        jsonb discovery_provenance
     }
     COLLECTOR_RUNS {
         uuid id PK
@@ -445,6 +485,12 @@ sets, connects only to a validated address, retains the original HTTP Host and H
 hostname, disables ambient proxies, and independently resolves every redirect and robots request.
 The complete contract is documented in `docs/orchestration-source-governance.md`.
 
+Search-provider cost policy is enforced twice. In the runtime registry, zero-cost mode rejects
+providers marked paid or ineligible. In PostgreSQL, each provider/credential-slot call reserves its
+daily/monthly request, estimated-cost, and paid-spend budget transactionally before network I/O.
+`FREE_TIER` usage cannot request paid overage and `PAID` usage cannot execute in zero-cost mode.
+Missing commercial credentials never prevent startup.
+
 ## Future ERD extensions
 
 Later migrations add:
@@ -501,6 +547,11 @@ dispatches enumerated WorkTypes to typed handlers. Product routes still only enq
 requests. The scheduler and worker can also run `--once` for deterministic local and smoke tests.
 Deployment, role binding, backup, reconciliation, and recovery are documented in
 `docs/milestone-7-orchestration-operations.md`.
+
+The default environment sets `ZERO_COST_MODE=true`. No search API credential is required. An
+optional `SEARXNG_BASE_URL` registers only an operator-controlled adapter; policy and budget remain
+fail-closed until the instance and every enabled upstream engine are reviewed. Direct-source, ATS,
+GitHub, university, Calendar, and privacy work continue when SearXNG is absent or unavailable.
 
 ## Security and trust boundaries
 

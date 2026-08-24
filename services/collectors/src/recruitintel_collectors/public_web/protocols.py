@@ -1,9 +1,11 @@
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
 from .models import (
     CandidateConfig,
+    DirectSourceEndpoint,
     ExtractedDocument,
     FetchedDocument,
     NormalizedWebObservation,
@@ -54,6 +56,8 @@ class PublicWebRepository(Protocol):
 
     async def get_candidate(self, candidate_id: UUID) -> CandidateConfig: ...
 
+    async def has_direct_source_coverage(self, query: SearchQueryConfig) -> bool: ...
+
     async def start_run(self, request: PublicWebWorkRequest, source_id: UUID) -> UUID: ...
 
     async def persist_search_results(
@@ -75,6 +79,14 @@ class PublicWebRepository(Protocol):
         extracted: ExtractedDocument,
         content_hash: str,
     ) -> tuple[StoredDocument | None, bool]: ...
+
+    async def persist_direct_sources(
+        self,
+        *,
+        candidate: CandidateConfig,
+        discoveries: Sequence[DirectSourceEndpoint],
+        verified_at: datetime,
+    ) -> int: ...
 
     async def get_current_document(self, candidate: CandidateConfig) -> StoredDocument: ...
 

@@ -7,6 +7,7 @@ import pytest
 from recruitintel_collectors.infrastructure.search_budget import PostgresSearchUsageBudget
 from recruitintel_collectors.public_web.search import (
     SearchProviderBudgetExceededError,
+    SearchProviderCostBlockedError,
     SearchProviderPermanentError,
 )
 
@@ -63,15 +64,21 @@ async def configure(
             insert into public.search_provider_budgets (
               provider, credential_slot, daily_request_limit,
               monthly_estimated_cost_limit_micros,
-              estimated_cost_per_call_micros, enabled
-            ) values ('you', %s, %s, %s, 5000, true)
+              estimated_cost_per_call_micros, monthly_request_limit,
+              monthly_paid_spend_limit_micros, cost_category,
+              zero_cost_eligible, enabled
+            ) values ('you', %s, %s, %s, 5000, 1000, %s, 'PAID', false, true)
             on conflict (provider, credential_slot) do update set
               daily_request_limit = excluded.daily_request_limit,
               monthly_estimated_cost_limit_micros = excluded.monthly_estimated_cost_limit_micros,
               estimated_cost_per_call_micros = excluded.estimated_cost_per_call_micros,
+              monthly_request_limit = excluded.monthly_request_limit,
+              monthly_paid_spend_limit_micros = excluded.monthly_paid_spend_limit_micros,
+              cost_category = excluded.cost_category,
+              zero_cost_eligible = excluded.zero_cost_eligible,
               enabled = true
             """,
-            (CREDENTIAL_SLOT, daily_limit, monthly_limit_micros),
+            (CREDENTIAL_SLOT, daily_limit, monthly_limit_micros, monthly_limit_micros),
         )
 
 
@@ -102,7 +109,7 @@ async def cleanup(url: str) -> None:
 async def test_concurrent_daily_budget_reservation_allows_exactly_one_worker() -> None:
     url = database_url()
     await configure(url, daily_limit=1, monthly_limit_micros=50_000)
-    budget = PostgresSearchUsageBudget(url)
+    budget = PostgresSearchUsageBudget(url, zero_cost_mode=False)
 
     async def reserve() -> object:
         try:
@@ -111,6 +118,7 @@ async def test_concurrent_daily_budget_reservation_allows_exactly_one_worker() -
                 credential_slot=CREDENTIAL_SLOT,
                 provider_calls=1,
                 estimated_cost_micros=5_000,
+                paid_spend_micros=5_000,
             )
             return "reserved"
         except Exception as error:
@@ -125,7 +133,7 @@ async def test_concurrent_daily_budget_reservation_allows_exactly_one_worker() -
         async with await psycopg.AsyncConnection.connect(url) as connection:
             cursor = await connection.execute(
                 """
-                select request_count, estimated_cost_micros
+                select request_count, estimated_cost_micros, paid_spend_micros
                 from public.search_provider_usage_daily
                 where provider = 'you' and credential_slot = %s
                   and usage_date = (now() at time zone 'UTC')::date
@@ -133,7 +141,7 @@ async def test_concurrent_daily_budget_reservation_allows_exactly_one_worker() -
                 (CREDENTIAL_SLOT,),
             )
             row = await cursor.fetchone()
-        assert row == (1, 5_000)
+        assert row == (1, 5_000, 5_000)
     finally:
         await cleanup(url)
 
@@ -143,7 +151,7 @@ async def test_concurrent_daily_budget_reservation_allows_exactly_one_worker() -
 async def test_daily_monthly_rollover_and_monthly_cost_limit() -> None:
     url = database_url()
     await configure(url, daily_limit=10, monthly_limit_micros=5_000)
-    budget = PostgresSearchUsageBudget(url)
+    budget = PostgresSearchUsageBudget(url, zero_cost_mode=False)
     try:
         async with await psycopg.AsyncConnection.connect(url) as connection:
             await connection.execute(
@@ -164,6 +172,7 @@ async def test_daily_monthly_rollover_and_monthly_cost_limit() -> None:
             credential_slot=CREDENTIAL_SLOT,
             provider_calls=1,
             estimated_cost_micros=5_000,
+            paid_spend_micros=5_000,
         )
         with pytest.raises(SearchProviderBudgetExceededError) as caught:
             await budget.reserve(
@@ -171,6 +180,7 @@ async def test_daily_monthly_rollover_and_monthly_cost_limit() -> None:
                 credential_slot=CREDENTIAL_SLOT,
                 provider_calls=1,
                 estimated_cost_micros=5_000,
+                paid_spend_micros=5_000,
             )
         assert caught.value.period == "MONTHLY"
     finally:
@@ -192,12 +202,76 @@ async def test_disabled_or_unknown_budget_fails_closed() -> None:
                 (CREDENTIAL_SLOT,),
             )
         with pytest.raises(SearchProviderPermanentError) as caught:
-            await PostgresSearchUsageBudget(url).reserve(
+            await PostgresSearchUsageBudget(url, zero_cost_mode=False).reserve(
                 provider="you",
                 credential_slot=CREDENTIAL_SLOT,
                 provider_calls=1,
                 estimated_cost_micros=5_000,
+                paid_spend_micros=5_000,
             )
         assert caught.value.code == "SEARCH_PROVIDER_BUDGET_NOT_CONFIGURED"
+    finally:
+        await cleanup(url)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_zero_cost_mode_blocks_paid_and_free_tier_stops_before_overage() -> None:
+    url = database_url()
+    await configure(url, daily_limit=10, monthly_limit_micros=5_000)
+    try:
+        with pytest.raises(SearchProviderCostBlockedError):
+            await PostgresSearchUsageBudget(url, zero_cost_mode=True).reserve(
+                provider="you",
+                credential_slot=CREDENTIAL_SLOT,
+                provider_calls=1,
+                estimated_cost_micros=5_000,
+                paid_spend_micros=5_000,
+            )
+
+        async with await psycopg.AsyncConnection.connect(url) as connection:
+            await connection.execute(
+                """
+                update public.search_provider_budgets set
+                  cost_category = 'FREE_TIER', zero_cost_eligible = true,
+                  monthly_paid_spend_limit_micros = 0
+                where provider = 'you' and credential_slot = %s
+                """,
+                (CREDENTIAL_SLOT,),
+            )
+        free_tier = PostgresSearchUsageBudget(url, zero_cost_mode=True)
+        with pytest.raises(SearchProviderCostBlockedError):
+            await free_tier.reserve(
+                provider="you",
+                credential_slot=CREDENTIAL_SLOT,
+                provider_calls=1,
+                estimated_cost_micros=5_000,
+                paid_spend_micros=5_000,
+            )
+        await free_tier.reserve(
+            provider="you",
+            credential_slot=CREDENTIAL_SLOT,
+            provider_calls=1,
+            estimated_cost_micros=5_000,
+            paid_spend_micros=0,
+        )
+        with pytest.raises(SearchProviderBudgetExceededError):
+            await free_tier.reserve(
+                provider="you",
+                credential_slot=CREDENTIAL_SLOT,
+                provider_calls=1,
+                estimated_cost_micros=5_000,
+                paid_spend_micros=0,
+            )
+        async with await psycopg.AsyncConnection.connect(url) as connection:
+            cursor = await connection.execute(
+                """
+                select coalesce(sum(paid_spend_micros), 0)
+                from public.search_provider_usage_daily
+                where provider = 'you' and credential_slot = %s
+                """,
+                (CREDENTIAL_SLOT,),
+            )
+            assert (await cursor.fetchone())[0] == 0
     finally:
         await cleanup(url)

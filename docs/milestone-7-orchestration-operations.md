@@ -80,6 +80,27 @@ Confirm the `you/default` budget is disabled and the You policy remains `REVIEW_
 a replacement database if linkage/count, role, or budget checks fail; do not drop new history from a
 partially used database as an ad hoc rollback.
 
+## Gate 7.1A.1 migration 0009
+
+Migration 0009 extends `sources` into the durable SourceEndpoint graph, backfills configured
+career/homepage seeds, adds direct-fetch schedule targets, and replaces the provider reservation
+function with zero-cost-aware request/estimated-cost/paid-spend accounting. Deploy it with the
+matching Python worker and TypeScript contracts while web writes, schedulers, and workers are
+stopped.
+
+Take and verify a protected pre-0009 backup using the procedure above. Run:
+
+```bash
+DATABASE_URL=postgresql://... pnpm --filter @recruitintel/db smoke:migration-0009
+```
+
+Then apply 0009 and reconcile source, candidate, and schedule counts. Confirm every source has one
+discovery fingerprint, configured career/homepage ciphertext-free provenance is present, no source
+policy was fabricated as reviewed, `you/default` and `searxng/local` remain disabled, and paid
+search usage is zero. Apply the development seed only outside production. Review direct source host
+policies before enabling their schedules. If any count, source identity, policy, or budget invariant
+fails, keep workers stopped and restore the pre-0009 backup into a replacement database.
+
 ## Routine recovery
 
 The scheduler calls the lease reaper on every tick. A stopped heartbeat makes a long handler lose

@@ -51,6 +51,10 @@ try {
       (select count(*) from public.work_attempts)::int as work_attempts,
       (select count(*) from public.worker_role_bindings)::int as worker_role_bindings,
       (select count(*) from public.search_provider_budgets)::int as search_provider_budgets,
+      (select count(*) from public.sources
+        where discovery_fingerprint is not null)::int as source_endpoints,
+      (select coalesce(sum(paid_spend_micros), 0)::bigint
+        from public.search_provider_usage_daily)::text as search_paid_spend_micros,
       (
         select count(*) from public.calendar_items item
         left join public.users app_user on app_user.id = item.user_id
@@ -91,6 +95,10 @@ try {
     "work_attempts_no_search_api_key_diagnostics",
     "dead_letters_no_search_api_key_diagnostics",
     "public_web_runs_no_raw_search_payload",
+    "sources_discovery_fingerprint_key",
+    "sources_discovery_fingerprint_check",
+    "sources_discovery_confidence_check",
+    "schedules_target_check",
   ];
   const constraints = await sql`
     select conname
@@ -108,13 +116,15 @@ try {
     "public_web_runs_request_idx",
     "public_web_search_queries_provider_policy_idx",
     "search_provider_usage_month_idx",
+    "sources_company_discovery_idx",
+    "schedules_public_web_candidate_idx",
   ];
   const indexes = await sql`
     select indexname from pg_indexes
     where schemaname = 'public' and indexname in ${sql(requiredIndexes)}
   `;
 
-  if (!counts || counts.migrations < 8) {
+  if (!counts || counts.migrations < 9) {
     throw new Error("no applied RecruitIntel migrations were found");
   }
   if (counts.companies < 1 || counts.sources < 1 || counts.schools < 1) {
@@ -142,6 +152,12 @@ try {
   }
   if (counts.search_provider_budgets < 1) {
     throw new Error("Gate 7.1A search-provider budgets are missing");
+  }
+  if (counts.source_endpoints !== counts.sources) {
+    throw new Error("Gate 7.1A.1 source graph provenance is incomplete");
+  }
+  if (Number(counts.search_paid_spend_micros) !== 0) {
+    throw new Error("development zero-cost mode recorded paid search spend");
   }
 
   console.log(JSON.stringify({ status: "ok", ...counts }));

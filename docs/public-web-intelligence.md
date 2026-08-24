@@ -5,8 +5,9 @@ Milestone 3 adds a bounded, provider-independent pipeline for permitted public r
 ## Architecture
 
 ```text
-Company -> query templates -> SearchProvider -> candidate URLs
-        -> durable WEB_SEARCH requests
+Company -> known careers/homepage source -> direct source discovery -> candidate/ATS source
+        -> optional query templates -> SearchProvider -> candidate URLs
+        -> durable WEB_FETCH / WEB_SEARCH requests
 
 candidate -> WEB_FETCH -> safe HTML fetch -> normalized document + content hash
           -> unchanged: update liveness and stop
@@ -49,8 +50,10 @@ async search(request: SearchRequest) -> SearchBatch
 
 `SearchRequest` carries bounded query/result/country/language/freshness/domain-filter inputs.
 `SearchBatch` carries bounded canonical results and aggregate provider call/cost/quota metadata.
-Business logic never reads provider-specific response shapes. The production runtime still
-registers only the `static` provider:
+Business logic never reads provider-specific response shapes. Search is supplemental; known
+ATS/company-career coverage short-circuits matching general-search queries. The zero-cost runtime
+always registers `static` for local fixtures and may register an operator-controlled `searxng`
+adapter when `SEARXNG_BASE_URL` is configured:
 
 - with `PUBLIC_WEB_STATIC_RESULTS_FILE=/absolute/path/results.json`, it loads deterministic results from a JSON object keyed by exact query text;
 - without the variable, it remains a valid inert provider that returns no results;
@@ -75,10 +78,11 @@ The JSON shape is:
 Generated queries cover early career, university/campus recruiting, application deadlines, interview experiences, role focus, internship/new-grad focus, optional school and graduation year, and bounded `site:reddit.com`/`site:github.com` references. Search parameters configure `minimumIntervalSeconds` (60–2,592,000), `maxResults` (1–100), and `maxFetches` (0–`maxResults`). The API skips queries whose `nextAllowedRunAt` is still in the future.
 
 Gate 7.1A includes an offline-testable `YouSearchProvider`, explicit provider-policy linkage, and
-transactional usage budgets, but does not register or approve it for production. Gate 7.1B owns
-written authorization, retained-field permission, a manual quality benchmark, policy approval,
-secret provisioning, runtime registration, and schedule activation. See
-`docs/search-provider-integration.md`. Do not scrape search-result HTML.
+transactional usage budgets. Gate 7.1A.1 adds default zero-cost enforcement, an optional SearXNG
+adapter, and direct source discovery into the durable `sources` graph. SearXNG and all upstream
+engines remain review-required; You.com remains unregistered, disabled, and non-required. See
+`docs/search-provider-integration.md` and `docs/zero-cost-discovery.md`. Do not scrape search-result
+HTML.
 
 ## URL normalization and safe fetching
 
@@ -292,8 +296,11 @@ Admin-authenticated. Returns HTTP `202 { data: PublicWebWorkRequest }`, `400` fo
 
 ## Troubleshooting
 
-- `search provider 'x' is not configured`: Gate 7.1A runtime supports only the development/test
-  `static` provider; complete Gate 7.1B before registering a live adapter.
+- `search provider 'x' is not configured`: use the development/test `static` provider or configure
+  an operator-controlled SearXNG instance. SearXNG still needs an executable reviewed policy and
+  enabled zero-cost budget; commercial Gate 7.1B is optional.
+- `SEARCH_PROVIDER_ZERO_COST_BLOCKED`: the descriptor or PostgreSQL budget is paid/ineligible.
+  Keep the provider disabled; do not turn off zero-cost mode merely to clear the error.
 - Static searches return zero candidates: set `PUBLIC_WEB_STATIC_RESULTS_FILE` and ensure its keys exactly match the generated query strings shown by the search-query API.
 - `UnsafeUrlError`: the URL is malformed, contains credentials, or resolves to a non-public address.
 - `RobotsDeniedError`: the candidate remains blocked; do not bypass the policy.
@@ -305,4 +312,8 @@ Admin-authenticated. Returns HTTP `202 { data: PublicWebWorkRequest }`, `400` fo
 
 ## Deferred scope
 
-Milestone 3 itself does not add recruiter/person graph modeling. Milestone 4 layers that graph on these immutable observations without changing public-web candidate or document identity. Calendar backend, watchlists, alerts, application tracking, activity scoring, authenticated LinkedIn collection, live commercial search credentials, browser/JavaScript rendering, LLM extraction, embeddings, and ML remain deferred.
+Milestone 3 itself does not add recruiter/person graph modeling. Milestone 4 layers that graph on
+these immutable observations without changing public-web candidate or document identity. Calendar
+backend, watchlists, alerts, application tracking, activity scoring, authenticated LinkedIn
+collection, optional commercial search activation, browser/JavaScript rendering, LLM extraction,
+embeddings, and ML remain deferred. Commercial search credentials are not required for the product.

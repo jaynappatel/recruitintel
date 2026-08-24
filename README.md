@@ -36,7 +36,10 @@ pnpm install
 uv sync
 ```
 
-Never commit `.env` or provider credentials. Public ATS endpoints need no token. `GITHUB_TOKEN` is optional and raises official API limits; it is worker-only and never logged. The initial `static` public-web search provider needs no credential.
+Never commit `.env` or provider credentials. RecruitIntel defaults to `ZERO_COST_MODE=true` and
+does not require a paid search API. Public ATS endpoints need no token. `GITHUB_TOKEN` is optional
+and raises official API limits; it is worker-only and never logged. Static search fixtures and an
+operator-controlled, separately reviewed SearXNG instance are optional.
 
 ## Database setup
 

@@ -527,7 +527,7 @@ export const publicWebWorkRequestSchema = z.object({
 
 export const webSearchRequestSchema = z
   .object({
-    provider: z.literal("static").default("static"),
+    provider: z.enum(["static", "searxng"]).default("static"),
     roleFamily: roleFamilySchema.optional(),
     school: z.string().min(1).max(200).optional(),
     graduationYear: z.number().int().min(2020).max(2040).optional(),

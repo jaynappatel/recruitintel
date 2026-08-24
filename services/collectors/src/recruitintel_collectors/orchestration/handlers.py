@@ -19,12 +19,17 @@ from recruitintel_collectors.infrastructure.rate_limit import PostgresDistribute
 from recruitintel_collectors.infrastructure.recruiter_campus_postgres import (
     PostgresRecruiterCampusRepository,
 )
+from recruitintel_collectors.infrastructure.search_budget import PostgresSearchUsageBudget
 from recruitintel_collectors.pipeline import CollectorRunner
 from recruitintel_collectors.public_web.fetcher import SafePublicWebFetcher
 from recruitintel_collectors.public_web.runner import PublicWebWorker
 from recruitintel_collectors.public_web.search import (
+    SEARXNG_SEARCH_DESCRIPTOR,
+    STATIC_SEARCH_DESCRIPTOR,
     JsonFileSearchProvider,
+    SearchProvider,
     SearchProviderRegistry,
+    SearXNGProvider,
     StaticSearchProvider,
 )
 
@@ -119,31 +124,57 @@ class RuntimeWorkHandlers:
         if work.source_id is None:
             raise ValueError("public-web work requires a source")
         source_id = work.source_id
-        provider: StaticSearchProvider
+        static_provider: StaticSearchProvider
         if self._settings.public_web_static_results_file:
-            provider = JsonFileSearchProvider(Path(self._settings.public_web_static_results_file))
+            static_provider = JsonFileSearchProvider(
+                Path(self._settings.public_web_static_results_file)
+            )
         else:
-            provider = StaticSearchProvider({})
-        search_registry = SearchProviderRegistry([provider])
+            static_provider = StaticSearchProvider({})
+        providers: list[SearchProvider] = [static_provider]
+        descriptors = [STATIC_SEARCH_DESCRIPTOR]
+        searxng: SearXNGProvider | None = None
+        if self._settings.searxng_base_url:
+            searxng = SearXNGProvider(
+                base_url=self._settings.searxng_base_url,
+                budget=PostgresSearchUsageBudget(
+                    self._settings.database_url,
+                    zero_cost_mode=self._settings.zero_cost_mode,
+                ),
+                user_agent=self._settings.user_agent,
+                timeout_seconds=self._settings.timeout_seconds,
+                distributed_limiter=self._rate_limiter,
+            )
+            providers.append(searxng)
+            descriptors.append(SEARXNG_SEARCH_DESCRIPTOR)
+        search_registry = SearchProviderRegistry(
+            providers,
+            descriptors,
+            zero_cost_mode=self._settings.zero_cost_mode,
+        )
         repository = PostgresPublicWebRepository(
             self._settings.database_url, work_attempt_id=work.attempt_id
         )
-        async with SafePublicWebFetcher(
-            user_agent=self._settings.user_agent,
-            timeout_seconds=self._settings.timeout_seconds,
-            max_response_bytes=self._settings.public_web_max_response_bytes,
-            requests_per_second=self._settings.public_web_requests_per_second,
-            distributed_limiter=self._rate_limiter,
-            host_policy_check=lambda hostname, scheme, port: (
-                self._orchestration.assert_source_host_policy(source_id, hostname, scheme, port)
-            ),
-        ) as fetcher:
-            stats = await PublicWebWorker(
-                repository=repository,
-                search_registry=search_registry,
-                fetcher=fetcher,
-                recruiter_campus_processor=None,
-            ).run(work.public_web_work_request_id)
+        try:
+            async with SafePublicWebFetcher(
+                user_agent=self._settings.user_agent,
+                timeout_seconds=self._settings.timeout_seconds,
+                max_response_bytes=self._settings.public_web_max_response_bytes,
+                requests_per_second=self._settings.public_web_requests_per_second,
+                distributed_limiter=self._rate_limiter,
+                host_policy_check=lambda hostname, scheme, port: (
+                    self._orchestration.assert_source_host_policy(source_id, hostname, scheme, port)
+                ),
+            ) as fetcher:
+                stats = await PublicWebWorker(
+                    repository=repository,
+                    search_registry=search_registry,
+                    fetcher=fetcher,
+                    recruiter_campus_processor=None,
+                ).run(work.public_web_work_request_id)
+        finally:
+            if searxng is not None:
+                await searxng.aclose()
         if work.work_type is WorkType.PUBLIC_WEB_PROCESS:
             for observation_id in await repository.observation_ids_for_request(
                 work.public_web_work_request_id
@@ -159,6 +190,9 @@ class RuntimeWorkHandlers:
                 "providerCalls": stats.provider_calls,
                 "costUnits": stats.cost_units,
                 "estimatedCostMicros": stats.estimated_cost_micros,
+                "paidSpendMicros": stats.paid_spend_micros,
+                "directSourcesDiscovered": stats.direct_sources_discovered,
+                "generalSearchSkipped": stats.general_search_skipped,
             },
         )
 

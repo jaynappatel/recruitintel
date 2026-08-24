@@ -261,7 +261,9 @@ Verification completed:
 Known Milestone 4 technical debt:
 
 - deterministic free-text extraction is conservative and primarily English-oriented; the optional LLM interface is intentionally disabled;
-- a production deployment still needs a reviewed `SearchProvider`; the built-in static provider is fixture-oriented;
+- a production deployment does not require general search: direct ATS/company/GitHub/university
+  sources are canonical. Static search is fixture-oriented and optional local/free or commercial
+  providers remain supplemental and policy-gated;
 - unresolved records have storage/status but no administration UI or resolution endpoint;
 - current relationship projections are recomputed when evidence arrives; API freshness prevents old `ACTIVE` state from being presented as current, but there is no scheduled stale-status materialization job;
 - person identity has no fuzzy/biographical entity resolution by design; ambiguous identities require review;

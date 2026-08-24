@@ -376,7 +376,10 @@ begin
         ('greenhouse'), ('lever'), ('github'), ('web_search'), ('public_web'), ('manual'),
         ('static')
       ) known(provider)
-    ) providers where provider <> 'you'
+    ) providers where provider not in (
+      'you', 'searxng', 'ashby', 'workday', 'smartrecruiters',
+      'icims', 'successfactors', 'bamboohr'
+    )
     on conflict (provider) do update set
       status = excluded.status,
       collection_method = excluded.collection_method,
@@ -421,6 +424,11 @@ begin
       and policy.collection_method = 'ROBOTS_PERMITTED_HTTP'
       and substring(source.base_url from '^https?://([^/:]+)') is not null
     on conflict (source_policy_id, hostname_suffix) do nothing;
+
+    update public.sources source set enabled = true
+    where source.provider = 'public_web'
+      and source.discovery_method = 'CONFIGURED'
+      and public.source_policy_is_executable(source.id);
 
     insert into public.source_policy_host_rules (
       source_policy_id, hostname_suffix, allow_subdomains, https_required,
@@ -507,6 +515,29 @@ begin
       1800, 30, 3, 'EXPONENTIAL_V1'
     from public.public_web_search_queries query
     on conflict (name) do update set
+      interval_seconds = excluded.interval_seconds,
+      jitter_seconds = excluded.jitter_seconds,
+      priority = excluded.priority;
+
+    insert into public.schedules (
+      name, work_type, work_class, public_web_candidate_id, enabled,
+      schedule_kind, interval_seconds, anchor_at, next_run_at, jitter_seconds,
+      priority, max_attempts, retry_policy
+    )
+    select 'direct-web:' || candidate.id::text, 'PUBLIC_WEB_FETCH', 'WEB_FETCH',
+      candidate.id, public.source_policy_is_executable(candidate.source_id),
+      'INTERVAL', case when source.source_type = 'COMPANY_CAREERS' then 21600 else 604800 end,
+      now(), now() + case when source.source_type = 'COMPANY_CAREERS'
+        then interval '6 hours' else interval '7 days' end,
+      case when source.source_type = 'COMPANY_CAREERS' then 900 else 3600 end,
+      case when source.source_type = 'COMPANY_CAREERS' then 45 else 25 end,
+      3, 'EXPONENTIAL_V1'
+    from public.public_web_candidates candidate
+    join public.sources source on source.id = candidate.source_id
+    where source.provider = 'public_web'
+      and source.discovery_method in ('CONFIGURED', 'PAGE_LINK')
+    on conflict (name) do update set
+      enabled = excluded.enabled,
       interval_seconds = excluded.interval_seconds,
       jitter_seconds = excluded.jitter_seconds,
       priority = excluded.priority;

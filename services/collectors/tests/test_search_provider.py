@@ -151,6 +151,7 @@ async def test_normal_result_uses_fixed_post_snippets_only_and_bounded_metadata(
             "credential_slot": "default",
             "provider_calls": 1,
             "estimated_cost_micros": 5_000,
+            "paid_spend_micros": 5_000,
         }
     ]
 
