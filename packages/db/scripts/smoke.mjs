@@ -13,6 +13,17 @@ try {
       (select count(*) from public.companies)::int as companies,
       (select count(*) from public.sources)::int as sources,
       (select count(*) from public.jobs)::int as jobs,
+      (select count(*) from public.job_opportunities)::int as job_opportunities,
+      (select count(*) from public.job_opportunity_postings
+        where valid_to is null)::int as active_opportunity_memberships,
+      (
+        select count(*) from public.jobs job
+        left join public.job_opportunity_postings membership
+          on membership.job_id = job.id and membership.valid_to is null
+        where membership.id is null
+      )::int as opportunity_membership_orphans,
+      (select count(*) from public.jobs
+        where source_content_hash is null or derivation_hash is null)::int as missing_job_hash_domains,
       (select count(*) from public.github_repositories)::int as github_repositories,
       (select count(*) from public.interview_questions)::int as interview_questions,
       (select count(*) from public.interview_question_observations)::int
@@ -99,6 +110,7 @@ try {
     "sources_discovery_fingerprint_check",
     "sources_discovery_confidence_check",
     "schedules_target_check",
+    "jobs_id_company_unique",
   ];
   const constraints = await sql`
     select conname
@@ -118,13 +130,16 @@ try {
     "search_provider_usage_month_idx",
     "sources_company_discovery_idx",
     "schedules_public_web_candidate_idx",
+    "job_opportunities_company_active_idx",
+    "job_opportunity_postings_one_active_job_idx",
+    "job_identity_keys_match_idx",
   ];
   const indexes = await sql`
     select indexname from pg_indexes
     where schemaname = 'public' and indexname in ${sql(requiredIndexes)}
   `;
 
-  if (!counts || counts.migrations < 9) {
+  if (!counts || counts.migrations < 10) {
     throw new Error("no applied RecruitIntel migrations were found");
   }
   if (counts.companies < 1 || counts.sources < 1 || counts.schools < 1) {
@@ -158,6 +173,14 @@ try {
   }
   if (Number(counts.search_paid_spend_micros) !== 0) {
     throw new Error("development zero-cost mode recorded paid search spend");
+  }
+  if (
+    counts.job_opportunities < counts.jobs ||
+    counts.active_opportunity_memberships !== counts.jobs ||
+    counts.opportunity_membership_orphans !== 0 ||
+    counts.missing_job_hash_domains !== 0
+  ) {
+    throw new Error("Milestone 8 singleton opportunity or hash-domain integrity is missing");
   }
 
   console.log(JSON.stringify({ status: "ok", ...counts }));

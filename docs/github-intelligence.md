@@ -1,5 +1,14 @@
 # GitHub and interview-question intelligence
 
+## Canonical opportunity linkage
+
+GitHub-derived jobs remain community source postings with their repository/commit/row provenance.
+After persistence, the Milestone 8 resolver can merge a GitHub entry only when it carries an exact,
+validated official application URL (or a future explicit exact official cross-reference). Title,
+location, season, or description similarity cannot auto-merge it. GitHub deletion or staleness is
+weak evidence and cannot close an opportunity while an official source remains fresh. See
+`docs/canonical-job-graph.md`.
+
 Milestone 2 adds commit-aware GitHub ingestion without coupling GitHub HTTP, parsing, RecruitIntel normalization, or PostgreSQL persistence. Repository content is untrusted text: RecruitIntel uses the official API, never clones or executes code, and never sends collected text to an LLM.
 
 ## Architecture

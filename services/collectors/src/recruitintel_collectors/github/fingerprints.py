@@ -4,6 +4,7 @@ from typing import Any
 from uuid import UUID
 
 from recruitintel_collectors.domain.enums import RecruitingEventType
+from recruitintel_collectors.domain.fingerprints import fingerprint_job
 from recruitintel_collectors.domain.models import NormalizedJob
 
 FINGERPRINT_VERSION = 1
@@ -71,22 +72,4 @@ def github_event_fingerprint(
 def github_job_content_fingerprint(job: NormalizedJob) -> str:
     """Hash normalized job content, excluding commit-specific provenance fields."""
 
-    return canonical_fingerprint(
-        {
-            "version": FINGERPRINT_VERSION,
-            "kind": "GITHUB_JOB_CONTENT",
-            "external_id": job.external_id,
-            "title": job.title,
-            "description": job.description,
-            "location": job.location,
-            "employment_type": job.employment_type.value,
-            "role_family": job.role_family.value,
-            "experience_level": job.experience_level.value,
-            "is_internship": job.is_internship,
-            "is_new_grad": job.is_new_grad,
-            "season": job.season,
-            "graduation_years": list(job.graduation_years),
-            "application_url": job.application_url,
-            "classification_version": job.classification_version,
-        }
-    )
+    return fingerprint_job(job)

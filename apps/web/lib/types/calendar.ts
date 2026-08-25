@@ -81,6 +81,9 @@ export interface CalendarItemView {
   companySlug?: string;
   companyName?: string;
   jobId?: string;
+  opportunityId?: string;
+  resolvedOpportunityId?: string;
+  resolutionMismatch: boolean;
   recruitingDateId?: string;
   source?: SourceRef;
   notes?: string;
@@ -100,6 +103,7 @@ export interface CreateCalendarItemInput {
   type: Exclude<CanonicalCalendarItem["type"], "RECRUITING_DATE">;
   companyId?: string;
   jobId?: string;
+  opportunityId?: string;
   notes?: string;
   syncEnabled?: boolean;
 }
@@ -115,6 +119,7 @@ export interface UpdateCalendarItemInput {
   timezone?: string;
   status?: CanonicalCalendarItem["status"];
   syncEnabled?: boolean;
+  opportunityId?: string | null;
 }
 
 export interface CreateApplicationPlanInput {
@@ -123,6 +128,7 @@ export interface CreateApplicationPlanInput {
   companyName: string;
   recruitingDateId?: string;
   jobId?: string;
+  opportunityId?: string;
   targetLabel: string;
   targetDate: string;
   timezone?: string;

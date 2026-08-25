@@ -337,14 +337,24 @@ async def test_public_web_end_to_end_change_conflict_and_retry_idempotency() -> 
         ) as connection:
             cursor = await connection.execute(
                 """
-                select id from public.public_web_candidates
-                where company_id = %s and canonical_url like 'https://stripe.com/%%'
+                select candidate.id, request.id as request_id
+                from public.public_web_candidates candidate
+                join public.public_web_work_requests request
+                  on request.candidate_id = candidate.id and request.work_type = 'WEB_PROCESS'
+                where candidate.company_id = %s
+                  and candidate.canonical_url like 'https://stripe.com/%%'
+                order by request.requested_at desc limit 1
                 """,
                 (COMPANY_ID,),
             )
             official = await cursor.fetchone()
             assert official is not None
             official_id = UUID(str(official["id"]))
+            resolved_source_ids = await repository.source_ids_for_request(
+                UUID(str(official["request_id"]))
+            )
+            assert len(resolved_source_ids) == 1
+            assert resolved_source_ids[0] != SEARCH_SOURCE_ID
 
         fetcher.official_fixture = "web_official_internship_v2.html"
         changed_fetch = await _enqueue_fetch(database_url, official_id)
@@ -377,16 +387,52 @@ async def test_public_web_end_to_end_change_conflict_and_retry_idempotency() -> 
                   (select count(*) from public.public_recruiting_observations
                     where company_id = %s)::int observations,
                   (select count(*) from public.recruiting_events
-                    where company_id = %s and public_web_candidate_id is not null)::int events
+                    where company_id = %s and public_web_candidate_id is not null)::int events,
+                  (select count(*) from public.jobs where company_id = %s)::int source_jobs,
+                  (select count(*) from public.job_opportunities
+                    where company_id = %s and status = 'ACTIVE')::int opportunities,
+                  (select count(*) from public.job_snapshots snapshot
+                    join public.jobs job on job.id = snapshot.job_id
+                    where job.company_id = %s)::int job_snapshots
                 """,
-                (COMPANY_ID, COMPANY_ID, COMPANY_ID, COMPANY_ID),
+                (
+                    COMPANY_ID,
+                    COMPANY_ID,
+                    COMPANY_ID,
+                    COMPANY_ID,
+                    COMPANY_ID,
+                    COMPANY_ID,
+                    COMPANY_ID,
+                ),
             )
             counts = await cursor.fetchone()
             assert counts is not None
             assert counts["candidates"] == 4  # three search candidates plus configured careers
             assert counts["documents"] == 3
             assert counts["observations"] >= 5
+            assert counts["source_jobs"] == 1
+            assert counts["opportunities"] == 1
+            assert counts["job_snapshots"] == 2
             event_count = counts["events"]
+
+            source_endpoint = await (
+                await connection.execute(
+                    """
+                    select source.source_type::text, source.provider,
+                      source.discovered_from_source_id
+                    from public.jobs job join public.sources source on source.id = job.source_id
+                    where job.company_id = %s
+                    """,
+                    (COMPANY_ID,),
+                )
+            ).fetchone()
+            assert source_endpoint == {
+                "source_type": "COMPANY_CAREERS",
+                "provider": "public_web",
+                # The configured careers source already existed, so search provenance
+                # remains on the candidate rather than replacing the known source origin.
+                "discovered_from_source_id": None,
+            }
 
             claims = await connection.execute(
                 """

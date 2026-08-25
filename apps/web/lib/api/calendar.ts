@@ -294,6 +294,9 @@ export function toCalendarItemView(item: CanonicalCalendarItem): CalendarItemVie
     companySlug: item.company?.slug ?? undefined,
     companyName: item.company?.name ?? undefined,
     jobId: item.jobId ?? undefined,
+    opportunityId: item.opportunityId ?? undefined,
+    resolvedOpportunityId: item.resolvedOpportunity?.id,
+    resolutionMismatch: item.resolutionMismatch,
     recruitingDateId: item.recruitingDateId ?? undefined,
     source: sourceName
       ? { name: sourceName, url: item.recruitingDate?.source.url ?? undefined }
@@ -344,6 +347,7 @@ function toCreateRequest(input: CreateCalendarItemInput): CreateCalendarItemRequ
   const base = {
     companyId: input.companyId,
     jobId: input.jobId,
+    opportunityId: input.opportunityId,
     type: input.type,
     title: input.title,
     description: input.notes,
@@ -387,6 +391,7 @@ function toUpdateRequest(input: UpdateCalendarItemInput): UpdateCalendarItemRequ
   if (input.notes !== undefined) request.description = input.notes;
   if (input.status !== undefined) request.status = input.status;
   if (input.syncEnabled !== undefined) request.syncEnabled = input.syncEnabled;
+  if (input.opportunityId !== undefined) request.opportunityId = input.opportunityId;
   if (input.timezone !== undefined) request.timezone = input.timezone;
   if (input.allDay !== undefined) request.allDay = input.allDay;
   if (input.date && input.allDay === true) {
@@ -459,6 +464,7 @@ export async function createApplicationPlan(
   const request: CreateApplicationPlanRequest = {
     companyId: company.id,
     jobId: input.jobId,
+    opportunityId: input.opportunityId,
     recruitingDateId: input.recruitingDateId,
     title: input.targetLabel,
     targetDate: input.targetDate,

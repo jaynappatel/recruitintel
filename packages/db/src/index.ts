@@ -8,6 +8,7 @@ export * from "./calendar";
 export * from "./identity";
 export * from "./instrumentation";
 export * from "./orchestration";
+export * from "./opportunities";
 
 export interface CompanyRecord {
   id: string;

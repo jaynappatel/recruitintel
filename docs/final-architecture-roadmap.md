@@ -545,12 +545,15 @@ stable cross-source identity and structured job facts.
 
 **Dependencies:** Milestone 7 orchestration/source policy.
 
-**Major components:** `jobs` remain source postings; canonical opportunity
-projection; deterministic exact identifiers/URL/ATS matches; normalized
-company/title/location/team; conservative fuzzy candidates with review; reversible
-merge/split evidence; structured skills/requirements/work mode/visa/degree/
-compensation; close/reopen/liveness policies by source completeness; Ashby and
-then Workday/SmartRecruiters/iCIMS based on coverage value.
+**Implemented in migration 0010:** `jobs` remain source postings; a synchronous
+singleton opportunity makes every posting immediately canonical-API visible; deterministic
+company-scoped provider-native/exact-official-URL keys support bounded automatic resolution;
+title blocks create review candidates only; append-only, pinned merge/split/no-match lineage;
+separate source-content and derivation hashes; small evidence-bearing skills, requirements,
+locations, explicit eligibility constraints, compensation, and deadlines; reviewed/versioned
+source authority; conservative lifecycle projection; company-owned JobPosting JSON-LD through the
+pinned public-web path; additive opportunity and correction APIs. Greenhouse and Lever remain the
+active ATS adapters. Ashby and SmartRecruiters remain policy-gated, and Workday remains blocked.
 
 **Reference repositories:** FreeHire identity/jobhash/lifecycle/provider adapters
 (adapt with attribution); JBA provider mappings/tests (adapt); Simplify only as
@@ -560,8 +563,10 @@ format inspiration.
 `job_resolution_decisions`, `job_locations`, `job_skills`, `job_requirements`,
 `job_constraints`, and lifecycle evidence. Store resolver/parser versions.
 
-**Workers:** normalization and resolution jobs; lifecycle/liveness reconciler;
-keyset backfills; source adapters.
+**Workers:** existing typed ATS, GitHub, and public-web handlers invoke bounded normalization and
+resolution after domain persistence. PostgreSQL creates singleton membership synchronously;
+lifecycle is recomputed from versioned collection evidence. No full-catalogue resolver scan or new
+queue technology was introduced.
 
 **APIs:** opportunity-first list/detail with cursor pagination; source-posting and
 resolution evidence endpoints; admin merge/split/reprocess.
@@ -573,8 +578,11 @@ anti-bot behavior; bound descriptions and sanitize presentation.
 repost/cross-source clusters, false-merge guards, reversible decisions, location/
 skill taxonomies, million-row query plans.
 
-**Done:** one real role observed in ATS/GitHub/browser-style fixtures produces one
-opportunity with multiple provenance-preserving postings and correct lifecycle.
+**Done:** an exact official role observed in Greenhouse, GitHub, and a company JobPosting fixture
+produces one opportunity with three provenance-preserving postings, official URL precedence,
+conservative lifecycle, reversible correction lineage, stable M5 private references, zero paid
+dependencies, and indexed bounded resolution. `docs/canonical-job-graph.md` is the operational and
+API contract.
 
 ### Milestone 9 - Watchlists, deterministic recommendations, and alerts
 

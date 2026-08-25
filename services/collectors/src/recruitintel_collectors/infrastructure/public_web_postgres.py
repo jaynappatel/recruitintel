@@ -10,6 +10,12 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from recruitintel_collectors.domain.enums import RecruitingEventType
+from recruitintel_collectors.domain.fingerprints import (
+    fingerprint_event,
+    fingerprint_job_derivation,
+)
+from recruitintel_collectors.domain.normalization import normalize_company_name
+from recruitintel_collectors.opportunities.jsonld import normalize_json_ld_job_posting
 from recruitintel_collectors.pipeline.memory import RunAlreadyActiveError
 from recruitintel_collectors.public_web.enums import (
     PublicObservationType,
@@ -104,7 +110,11 @@ class PostgresPublicWebRepository:
         async with await self._connect() as connection:
             async with connection.transaction():
                 cursor = await connection.execute(
-                    "select * from public.public_web_work_requests where id = %s for update",
+                    """
+                    select request.*, request.next_attempt_at <= now() as is_eligible
+                    from public.public_web_work_requests request
+                    where request.id = %s for update
+                    """,
                     (request_id,),
                 )
                 row = await cursor.fetchone()
@@ -112,7 +122,7 @@ class PostgresPublicWebRepository:
                     raise KeyError(f"public web work request {request_id} was not found")
                 if row["status"] != WebWorkStatus.PENDING.value:
                     raise ValueError(f"public web work request is {row['status']}, not PENDING")
-                if row["next_attempt_at"] > datetime.now(UTC):
+                if not row["is_eligible"]:
                     raise ValueError("public web work request is waiting for its retry window")
                 cursor = await connection.execute(
                     """
@@ -906,6 +916,396 @@ class PostgresPublicWebRepository:
             ),
         )
 
+    @staticmethod
+    async def _resolve_json_ld_source(
+        cursor: psycopg.AsyncCursor[dict[str, Any]],
+        *,
+        candidate: CandidateConfig,
+        document: StoredDocument,
+    ) -> tuple[UUID, float] | None:
+        await cursor.execute(
+            """
+            select id, reliability from public.sources
+            where id = %s and company_id = %s
+              and source_type in ('ATS', 'COMPANY_CAREERS')
+              and public.source_policy_is_executable(id)
+            """,
+            (candidate.source_id, candidate.company.id),
+        )
+        direct = await cursor.fetchone()
+        if direct is not None:
+            return UUID(str(direct["id"])), float(direct["reliability"])
+
+        final_url = canonicalize_url(document.extracted.final_url)
+        hostname = (urlsplit(final_url).hostname or "").casefold()
+        await cursor.execute(
+            "select public.executable_source_policy_for_hostname(%s) as id",
+            (hostname,),
+        )
+        policy = await cursor.fetchone()
+        if policy is None or policy["id"] is None:
+            return None
+        external_key = candidate_source_key(candidate.company.id, final_url)
+        await cursor.execute(
+            """
+            insert into public.sources (
+              company_id, source_type, provider, external_key, name, base_url,
+              reliability, enabled, source_policy_id, discovery_method,
+              last_verified_at, discovered_from_source_id, discovery_provenance
+            ) values (
+              %s, 'COMPANY_CAREERS', 'public_web', %s, %s, %s,
+              0.900, true, %s, 'SEARCH', %s, %s, %s
+            )
+            on conflict (provider, external_key) do update set
+              last_verified_at = excluded.last_verified_at,
+              reliability = greatest(public.sources.reliability, excluded.reliability),
+              discovered_from_source_id = coalesce(
+                public.sources.discovered_from_source_id,
+                excluded.discovered_from_source_id
+              ),
+              discovery_provenance = public.sources.discovery_provenance
+                || excluded.discovery_provenance
+            returning id, reliability
+            """,
+            (
+                candidate.company.id,
+                external_key,
+                f"{candidate.company.canonical_name} JobPosting page",
+                final_url,
+                policy["id"],
+                document.fetched_at,
+                candidate.source_id,
+                Jsonb(
+                    {
+                        "method": "validated_jobposting_jsonld",
+                        "candidateId": str(candidate.id),
+                    }
+                ),
+            ),
+        )
+        source = await cursor.fetchone()
+        if source is None:
+            raise RuntimeError("JSON-LD source endpoint upsert returned no row")
+        source_id = UUID(str(source["id"]))
+        await cursor.execute(
+            "update public.public_web_candidates set source_id = %s where id = %s",
+            (source_id, candidate.id),
+        )
+        await cursor.execute(
+            """
+            insert into public.schedules (
+              name, work_type, work_class, public_web_candidate_id, enabled,
+              schedule_kind, interval_seconds, anchor_at, next_run_at,
+              jitter_seconds, priority, max_attempts, retry_policy
+            ) values (
+              %s, 'PUBLIC_WEB_FETCH', 'WEB_FETCH', %s, true, 'INTERVAL', 21600,
+              now(), now() + interval '6 hours', 900, 45, 3, 'EXPONENTIAL_V1'
+            ) on conflict (name) do update set enabled = true, updated_at = now()
+            """,
+            (f"direct-web:{candidate.id}", candidate.id),
+        )
+        return source_id, float(source["reliability"])
+
+    @staticmethod
+    async def _persist_json_ld_postings(
+        cursor: psycopg.AsyncCursor[dict[str, Any]],
+        *,
+        run_id: UUID,
+        candidate: CandidateConfig,
+        document: StoredDocument,
+    ) -> int:
+        raw_postings = document.extracted.structured_metadata.get("job_postings")
+        if not isinstance(raw_postings, list):
+            return 0
+        await cursor.execute(
+            """
+            select canonical_name as name from public.companies where id = %s
+            union all select alias from public.company_aliases where company_id = %s
+            """,
+            (candidate.company.id, candidate.company.id),
+        )
+        names = frozenset(normalize_company_name(row["name"]) for row in await cursor.fetchall())
+        source = await PostgresPublicWebRepository._resolve_json_ld_source(
+            cursor, candidate=candidate, document=document
+        )
+        if source is None:
+            return 0
+        source_id, reliability = source
+        persisted = 0
+        now = datetime.now(UTC)
+        for raw in raw_postings[:50]:
+            if not isinstance(raw, dict):
+                continue
+            normalized = normalize_json_ld_job_posting(
+                raw,
+                company_id=str(candidate.company.id),
+                company_names=names,
+                document_url=document.extracted.final_url,
+            )
+            if normalized is None:
+                continue
+            value, deadline_at = normalized
+            job = value.job
+            derivation_hash = value.derivation_hash or fingerprint_job_derivation(job)
+            await cursor.execute(
+                """
+                select id, title, description, location, application_url, source_url,
+                  published_at, content_hash, source_content_hash, source_content_version,
+                  derivation_hash, derivation_version, closed_at
+                from public.jobs where source_id = %s and external_id = %s for update
+                """,
+                (source_id, job.external_id),
+            )
+            existing = await cursor.fetchone()
+            same_source = bool(
+                existing
+                and existing["title"] == job.title
+                and existing["description"] == job.description
+                and existing["location"] == job.location
+                and existing["application_url"] == job.application_url
+                and existing["source_url"] == job.source_url
+                and existing["published_at"] == job.published_at
+            )
+            if existing is None:
+                await cursor.execute(
+                    """
+                    insert into public.jobs (
+                      company_id, source_id, external_id, title, description, location,
+                      employment_type, role_family, experience_level, is_internship,
+                      is_new_grad, season, graduation_years, application_url, source_url,
+                      first_seen_at, last_seen_at, changed_at, published_at, content_hash,
+                      fingerprint_version, source_content_hash, source_content_version,
+                      derivation_hash, derivation_version, classification_version,
+                      last_seen_run_id, raw_payload
+                    ) values (
+                      %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                      %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                      %s, %s, %s, %s
+                    ) returning id
+                    """,
+                    (
+                        candidate.company.id,
+                        source_id,
+                        job.external_id,
+                        job.title,
+                        job.description,
+                        job.location,
+                        job.employment_type.value,
+                        job.role_family.value,
+                        job.experience_level.value,
+                        job.is_internship,
+                        job.is_new_grad,
+                        job.season,
+                        list(job.graduation_years),
+                        job.application_url,
+                        job.source_url,
+                        now,
+                        now,
+                        now,
+                        job.published_at,
+                        value.content_hash,
+                        job.fingerprint_version,
+                        value.content_hash,
+                        job.fingerprint_version,
+                        derivation_hash,
+                        job.derivation_version,
+                        job.classification_version,
+                        run_id,
+                        Jsonb(job.raw_payload),
+                    ),
+                )
+                inserted = await cursor.fetchone()
+                if inserted is None:
+                    raise RuntimeError("JSON-LD job insert returned no ID")
+                job_id = UUID(str(inserted["id"]))
+                transition = "OPENED"
+            else:
+                job_id = UUID(str(existing["id"]))
+                derivation_changed = (
+                    existing["derivation_hash"] != derivation_hash
+                    or existing["derivation_version"] != job.derivation_version
+                )
+                source_hash_recomputed = same_source and (
+                    existing["source_content_hash"] != value.content_hash
+                    or existing["source_content_version"] != job.fingerprint_version
+                )
+                transition = (
+                    "UNCHANGED"
+                    if same_source and existing["closed_at"] is None
+                    else ("OPENED" if existing["closed_at"] is not None else "CHANGED")
+                )
+                await cursor.execute(
+                    """
+                    update public.jobs set
+                      title = %s, description = %s, location = %s,
+                      employment_type = %s, role_family = %s, experience_level = %s,
+                      is_internship = %s, is_new_grad = %s, season = %s,
+                      graduation_years = %s, application_url = %s, source_url = %s,
+                      last_seen_at = %s,
+                      changed_at = case when %s then changed_at else %s end,
+                      published_at = %s, closed_at = null, content_hash = %s,
+                      fingerprint_version = %s, source_content_hash = %s,
+                      source_content_version = %s, derivation_hash = %s,
+                      derivation_version = %s, classification_version = %s,
+                      last_seen_run_id = %s, raw_payload = %s
+                    where id = %s
+                    """,
+                    (
+                        job.title,
+                        job.description,
+                        job.location,
+                        job.employment_type.value,
+                        job.role_family.value,
+                        job.experience_level.value,
+                        job.is_internship,
+                        job.is_new_grad,
+                        job.season,
+                        list(job.graduation_years),
+                        job.application_url,
+                        job.source_url,
+                        now,
+                        same_source,
+                        now,
+                        job.published_at,
+                        value.content_hash,
+                        job.fingerprint_version,
+                        value.content_hash,
+                        job.fingerprint_version,
+                        derivation_hash,
+                        job.derivation_version,
+                        job.classification_version,
+                        run_id,
+                        Jsonb(job.raw_payload),
+                        job_id,
+                    ),
+                )
+                if transition == "UNCHANGED" and (derivation_changed or source_hash_recomputed):
+                    await cursor.execute(
+                        """
+                        insert into public.job_derivation_events (
+                          job_id, event_type, previous_derivation_hash, derivation_hash,
+                          derivation_version, source_content_hash, reason_code
+                        ) values (%s, %s, %s, %s, %s, %s, %s) on conflict do nothing
+                        """,
+                        (
+                            job_id,
+                            "DERIVATION_RECOMPUTED"
+                            if derivation_changed
+                            else "SOURCE_HASH_RECOMPUTED",
+                            existing["derivation_hash"],
+                            derivation_hash,
+                            job.derivation_version,
+                            value.content_hash,
+                            "CLASSIFIER_OR_PARSER_VERSION_CHANGED"
+                            if derivation_changed
+                            else "SOURCE_HASH_VERSION_CHANGED",
+                        ),
+                    )
+            if deadline_at is not None:
+                await cursor.execute(
+                    """
+                    delete from public.job_application_deadlines
+                    where job_id = %s and source_field = 'validThrough'
+                    """,
+                    (job_id,),
+                )
+                await cursor.execute(
+                    """
+                    insert into public.job_application_deadlines (
+                      job_id, deadline_at, source_field, parser_version, evidence_fingerprint
+                    ) values (%s, %s, 'validThrough', 1,
+                      encode(digest('jsonld-validThrough:' || %s::text || ':' || %s::text,
+                        'sha256'), 'hex'))
+                    """,
+                    (job_id, deadline_at, job_id, deadline_at),
+                )
+            if transition != "UNCHANGED":
+                normalized_payload = job.model_dump(mode="json", exclude={"raw_payload"})
+                await cursor.execute(
+                    """
+                    insert into public.job_snapshots (
+                      job_id, collector_run_id, content_hash, fingerprint_version,
+                      normalized_payload, raw_payload, observed_at
+                    ) values (%s, %s, %s, %s, %s, %s, %s)
+                    on conflict (job_id, content_hash) do nothing
+                    """,
+                    (
+                        job_id,
+                        run_id,
+                        value.content_hash,
+                        job.fingerprint_version,
+                        Jsonb(normalized_payload),
+                        Jsonb(job.raw_payload),
+                        now,
+                    ),
+                )
+                await cursor.execute(
+                    """
+                    insert into public.observations (
+                      source_id, collector_run_id, entity_type, job_id, source_url,
+                      collected_at, published_at, raw_text, normalized_text,
+                      content_hash, confidence, metadata
+                    ) values (%s, %s, 'JOB', %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        source_id,
+                        run_id,
+                        job_id,
+                        job.source_url,
+                        now,
+                        job.published_at,
+                        job.description,
+                        "\n".join((job.title, job.description, job.location)),
+                        value.content_hash,
+                        reliability,
+                        Jsonb({"provider": "company_jsonld", "schema": "JobPosting"}),
+                    ),
+                )
+                event_type = (
+                    RecruitingEventType.JOB_OPENED
+                    if transition == "OPENED"
+                    else RecruitingEventType.JOB_CHANGED
+                )
+                event_hash = fingerprint_event(
+                    event_type=event_type,
+                    company_id=candidate.company.id,
+                    source_id=source_id,
+                    job_id=job_id,
+                    causal_hash=value.content_hash,
+                    sequence="jsonld-open" if transition == "OPENED" else value.content_hash,
+                )
+                await cursor.execute(
+                    """
+                    insert into public.recruiting_events (
+                      company_id, source_id, job_id, event_type, occurred_at,
+                      discovered_at, source_url, confidence, fingerprint, payload,
+                      public_web_candidate_id
+                    ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    on conflict (fingerprint) do nothing
+                    """,
+                    (
+                        candidate.company.id,
+                        source_id,
+                        job_id,
+                        event_type.value,
+                        job.published_at or now,
+                        now,
+                        job.source_url,
+                        reliability,
+                        event_hash,
+                        Jsonb(
+                            {
+                                "content_hash": value.content_hash,
+                                "schema": "JobPosting",
+                                "sourceChanged": transition == "CHANGED",
+                            }
+                        ),
+                        candidate.id,
+                    ),
+                )
+                persisted += 1
+        return persisted
+
     async def persist_processed_document(
         self,
         *,
@@ -1146,6 +1546,22 @@ class PostgresPublicWebRepository:
                     relevance.status is RelevanceStatus.RELEVANT
                     and assessment.classification is WebSourceClassification.COMPANY_CAREERS
                 ):
+                    # Source postings are not public-web observations. Keep the existing
+                    # return contract stable and store only a bounded operational count.
+                    json_ld_postings = await self._persist_json_ld_postings(
+                        cursor,
+                        run_id=run_id,
+                        candidate=candidate,
+                        document=document,
+                    )
+                    if json_ld_postings:
+                        await cursor.execute(
+                            """
+                            update public.public_web_runs set metadata = metadata || %s
+                            where collector_run_id = %s
+                            """,
+                            (Jsonb({"jsonLdSourcePostingsProcessed": json_ld_postings}), run_id),
+                        )
                     await cursor.execute(
                         """
                         select count(*)::int count from public.public_web_documents
@@ -1286,6 +1702,29 @@ class PostgresPublicWebRepository:
             )
             rows = await cursor.fetchall()
         return tuple(UUID(str(row["id"])) for row in rows)
+
+    async def source_ids_for_request(self, request_id: UUID) -> tuple[UUID, ...]:
+        """Return the durable source endpoints affected by a completed request.
+
+        Processing a search-discovered company page may promote the candidate from
+        the generic search source to a durable company-careers SourceEndpoint.  The
+        opportunity resolver must therefore follow the candidate's current source,
+        rather than the source captured on the already-claimed WorkItem.
+        """
+        async with await self._connect() as connection:
+            cursor = await connection.execute(
+                """
+                select distinct candidate.source_id
+                from public.public_web_work_requests request
+                join public.public_web_candidates candidate
+                  on candidate.id = request.candidate_id
+                where request.id = %s and candidate.source_id is not null
+                order by candidate.source_id
+                """,
+                (request_id,),
+            )
+            rows = await cursor.fetchall()
+        return tuple(UUID(str(row["source_id"])) for row in rows)
 
     async def fail_run(
         self, run_id: UUID | None, request: PublicWebWorkRequest, error: Exception

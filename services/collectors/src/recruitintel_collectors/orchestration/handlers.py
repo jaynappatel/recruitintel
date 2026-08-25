@@ -20,6 +20,7 @@ from recruitintel_collectors.infrastructure.recruiter_campus_postgres import (
     PostgresRecruiterCampusRepository,
 )
 from recruitintel_collectors.infrastructure.search_budget import PostgresSearchUsageBudget
+from recruitintel_collectors.opportunities import PostgresOpportunityResolver
 from recruitintel_collectors.pipeline import CollectorRunner
 from recruitintel_collectors.public_web.fetcher import SafePublicWebFetcher
 from recruitintel_collectors.public_web.runner import PublicWebWorker
@@ -81,11 +82,15 @@ class RuntimeWorkHandlers:
                 },
             )
             stats = await runner.run(work.source_id)
+        resolved = await PostgresOpportunityResolver(self._settings.database_url).resolve_source(
+            work.source_id
+        )
         return WorkExecutionResult(
             coverage=CoverageStatus.COMPLETE,
             discovered=stats.discovered,
             processed=stats.new + stats.changed + stats.unchanged,
             failed=0,
+            diagnostics={"opportunityPostingsResolved": resolved},
         )
 
     async def github_sync(self, work: ClaimedWork) -> WorkExecutionResult:
@@ -110,12 +115,22 @@ class RuntimeWorkHandlers:
                 client=github,
                 max_concurrency=min(self._settings.max_concurrency, 5),
             ).run(repository_id, request_id=work.github_sync_request_id)
+        resolved = (
+            await PostgresOpportunityResolver(self._settings.database_url).resolve_source(
+                work.source_id
+            )
+            if work.source_id is not None
+            else 0
+        )
         return WorkExecutionResult(
             coverage=(CoverageStatus.PARTIAL if stats.errors else CoverageStatus.COMPLETE),
             discovered=stats.records_parsed,
             processed=stats.new + stats.updated + stats.unchanged,
             failed=stats.errors,
-            diagnostics={"unchangedCommit": stats.skipped_unchanged_sha},
+            diagnostics={
+                "unchangedCommit": stats.skipped_unchanged_sha,
+                "opportunityPostingsResolved": resolved,
+            },
         )
 
     async def public_web(self, work: ClaimedWork) -> WorkExecutionResult:
@@ -180,6 +195,14 @@ class RuntimeWorkHandlers:
                 work.public_web_work_request_id
             ):
                 await self._orchestration.enqueue_recruiter_projection(observation_id, parent=work)
+            resolver = PostgresOpportunityResolver(self._settings.database_url)
+            resolved = 0
+            for affected_source_id in await repository.source_ids_for_request(
+                work.public_web_work_request_id
+            ):
+                resolved += await resolver.resolve_source(affected_source_id)
+        else:
+            resolved = 0
         return WorkExecutionResult(
             coverage=CoverageStatus.COMPLETE,
             discovered=stats.candidates,
@@ -193,6 +216,7 @@ class RuntimeWorkHandlers:
                 "paidSpendMicros": stats.paid_spend_micros,
                 "directSourcesDiscovered": stats.direct_sources_discovered,
                 "generalSearchSkipped": stats.general_search_skipped,
+                "opportunityPostingsResolved": resolved,
             },
         )
 

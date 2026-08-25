@@ -11,6 +11,7 @@ const ENTITY_TYPE = {
   JOB_VIEWED: "JOB",
   RECRUITER_VIEWED: "RECRUITER",
   INTERVIEW_INTEL_VIEWED: "INTERVIEW_INTEL",
+  SOURCE_POSTING_SELECTED: "JOB",
 } as const;
 
 export async function POST(request: Request) {

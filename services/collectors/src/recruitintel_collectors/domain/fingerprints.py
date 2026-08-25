@@ -6,7 +6,8 @@ from uuid import UUID
 from .enums import RecruitingEventType
 from .models import NormalizedJob
 
-FINGERPRINT_VERSION = 1
+FINGERPRINT_VERSION = 2
+DERIVATION_VERSION = 1
 EVENT_FINGERPRINT_VERSION = 1
 
 
@@ -22,12 +23,30 @@ def _canonical_hash(value: dict[str, Any]) -> str:
 
 
 def job_fingerprint_document(job: NormalizedJob) -> dict[str, Any]:
+    """Return only provider-derived content.
+
+    Source identity and deterministic classifier output intentionally live outside this
+    hash. A parser/rule upgrade therefore cannot manufacture a JOB_CHANGED event.
+    """
+
     return {
         "version": FINGERPRINT_VERSION,
-        "external_id": job.external_id,
         "title": job.title,
         "description": job.description,
         "location": job.location,
+        "application_url": job.application_url,
+        "source_url": job.source_url,
+        "published_at": job.published_at.isoformat() if job.published_at else None,
+    }
+
+
+def fingerprint_job(job: NormalizedJob) -> str:
+    return _canonical_hash(job_fingerprint_document(job))
+
+
+def job_derivation_document(job: NormalizedJob) -> dict[str, Any]:
+    return {
+        "version": job.derivation_version,
         "employment_type": job.employment_type.value,
         "role_family": job.role_family.value,
         "experience_level": job.experience_level.value,
@@ -35,15 +54,12 @@ def job_fingerprint_document(job: NormalizedJob) -> dict[str, Any]:
         "is_new_grad": job.is_new_grad,
         "season": job.season,
         "graduation_years": list(job.graduation_years),
-        "application_url": job.application_url,
-        "source_url": job.source_url,
-        "published_at": job.published_at.isoformat() if job.published_at else None,
         "classification_version": job.classification_version,
     }
 
 
-def fingerprint_job(job: NormalizedJob) -> str:
-    return _canonical_hash(job_fingerprint_document(job))
+def fingerprint_job_derivation(job: NormalizedJob) -> str:
+    return _canonical_hash(job_derivation_document(job))
 
 
 def fingerprint_event(

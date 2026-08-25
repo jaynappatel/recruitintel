@@ -83,6 +83,21 @@ Company -> SourceEndpoint -> Collector or public candidate -> evidence/facts
               +-- discovered -----+
 ```
 
+Milestone 8 adds an additive canonical job graph after source collection:
+
+```text
+Company -> SourceEndpoint -> SourcePosting (`jobs`) -> CanonicalOpportunity
+                                |                         |
+                                +-> snapshots/evidence   +-> active user-facing count
+```
+
+Every source posting receives a singleton opportunity transactionally. A bounded resolver may later
+merge memberships using only validated provider-native identity, an exact official application URL,
+or an explicit exact official cross-reference. Source postings and temporal resolution lineage are
+never deleted by canonicalization. Source authority and collection completeness are reviewed,
+versioned capabilities, so weak disappearance or partial collection cannot close an opportunity.
+See `docs/canonical-job-graph.md` for the schema, lifecycle, correction, and API contracts.
+
 Known ATS/company-career coverage short-circuits equivalent general-search work. Greenhouse and
 Lever are the currently executable ATS adapters; recognition of other ATS URL families remains
 fail-closed until their collectors and policies are implemented. Future explicit browser imports
@@ -93,6 +108,10 @@ Static fixtures are development-only, an operator-controlled SearXNG instance is
 requires upstream-engine review, and You.com remains a disabled optional adapter. Provider-returned
 URLs cannot bypass source policy, pinned DNS/redirect/robots transport, or normal processing.
 `docs/search-provider-integration.md` and `docs/zero-cost-discovery.md` are the canonical contracts.
+
+Permitted company pages can yield bounded schema.org `JobPosting` JSON-LD. Those postings are
+attached to a durable company-careers SourceEndpoint and then enter the same singleton/resolver
+path. They do not bypass source policy, robots rules, pinned transport, or provider throttling.
 
 ## Collector lifecycle
 

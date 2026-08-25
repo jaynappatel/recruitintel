@@ -9,13 +9,23 @@ export type ProductEventType =
   | "CALENDAR_ITEM_COMPLETED"
   | "JOB_VIEWED"
   | "RECRUITER_VIEWED"
-  | "INTERVIEW_INTEL_VIEWED";
+  | "INTERVIEW_INTEL_VIEWED"
+  | "OPPORTUNITY_VIEWED"
+  | "SOURCE_POSTING_SELECTED"
+  | "OPPORTUNITY_MERGED"
+  | "OPPORTUNITY_SPLIT";
 
 export interface ProductEventInput {
   userId: string;
   eventType: ProductEventType;
   source: "SERVER" | "CLIENT";
-  entityType: "APPLICATION_PLAN" | "CALENDAR_ITEM" | "JOB" | "RECRUITER" | "INTERVIEW_INTEL";
+  entityType:
+    | "APPLICATION_PLAN"
+    | "CALENDAR_ITEM"
+    | "JOB"
+    | "OPPORTUNITY"
+    | "RECRUITER"
+    | "INTERVIEW_INTEL";
   entityId?: string | null;
   requestId?: string | null;
   deduplicationKey?: string | null;
@@ -60,13 +70,18 @@ export async function recordProductEvent(input: ProductEventInput): Promise<stri
 }
 
 export async function productEventEntityExists(
-  eventType: "JOB_VIEWED" | "RECRUITER_VIEWED" | "INTERVIEW_INTEL_VIEWED",
+  eventType:
+    | "JOB_VIEWED"
+    | "RECRUITER_VIEWED"
+    | "INTERVIEW_INTEL_VIEWED"
+    | "SOURCE_POSTING_SELECTED",
   entityId: string,
 ): Promise<boolean> {
   const table = {
     JOB_VIEWED: "jobs",
     RECRUITER_VIEWED: "recruiters",
     INTERVIEW_INTEL_VIEWED: "interview_questions",
+    SOURCE_POSTING_SELECTED: "jobs",
   }[eventType];
   const sql = getDatabase();
   const [row] = await sql.unsafe(

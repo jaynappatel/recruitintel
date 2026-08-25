@@ -1,5 +1,19 @@
 # Public web recruiting intelligence
 
+## Company JobPosting projection
+
+Milestone 8 permits bounded schema.org `JobPosting` JSON-LD extraction from reviewed, executable
+company pages. Extraction validates company identity and retains only normalized job fields; raw
+HTML/provider payloads are not copied into opportunity responses. A recognized posting is persisted
+as a provenance-bearing `jobs` source posting under a durable company-careers SourceEndpoint, then
+enters the canonical opportunity resolver. Missing markup never counts as complete-listing absence
+and cannot close an opportunity. The promoted source ID, not a generic search source ID, is used for
+resolution and future direct monitoring.
+
+This path remains downstream of source policy, robots, M7 DNS pinning and redirect validation,
+response limits, and rate controls. It is not a general browser renderer and executes no scripts.
+See `docs/canonical-job-graph.md`.
+
 Milestone 3 adds a bounded, provider-independent pipeline for permitted public recruiting pages. It discovers candidate URLs, fetches public HTML safely, extracts normalized text, classifies relevance and reliability with deterministic rules, preserves independent evidence, aggregates compatible claims, and emits immutable recruiting events. It does not scrape authenticated sites, run browser automation, call an LLM, or create a second job database.
 
 ## Architecture

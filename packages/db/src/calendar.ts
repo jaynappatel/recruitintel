@@ -74,6 +74,9 @@ export interface CalendarItemRecord {
   id: string;
   company: { id: string; name: string; slug: string } | null;
   jobId: string | null;
+  opportunityId: string | null;
+  resolvedOpportunity: { id: string; title: string; status: string } | null;
+  resolutionMismatch: boolean;
   recruitingDateId: string | null;
   applicationPlanId: string | null;
   type: CalendarItemType;
@@ -99,6 +102,7 @@ export interface RecruitingDateRecord {
   id: string;
   company: { id: string; name: string; slug: string } | null;
   jobId: string | null;
+  opportunityId: string | null;
   schoolId: string | null;
   recruitingEventId: string | null;
   campusRecruitingEventId: string | null;
@@ -136,6 +140,7 @@ export interface CalendarListOptions {
 export interface CalendarItemInput {
   companyId?: string;
   jobId?: string;
+  opportunityId?: string;
   type: Exclude<CalendarItemType, "RECRUITING_DATE">;
   title: string;
   description?: string;
@@ -162,11 +167,13 @@ export interface CalendarItemPatch {
   status?: CalendarItemStatus;
   syncEnabled?: boolean;
   metadata?: Record<string, unknown>;
+  opportunityId?: string | null;
 }
 
 export interface CreateApplicationPlanInput {
   companyId: string;
   jobId?: string;
+  opportunityId?: string;
   recruitingDateId?: string;
   title: string;
   targetDate: string;
@@ -178,6 +185,9 @@ export interface ApplicationPlanRecord {
   id: string;
   company: { id: string; name: string; slug: string };
   jobId: string | null;
+  opportunityId: string | null;
+  resolvedOpportunity: { id: string; title: string; status: string } | null;
+  resolutionMismatch: boolean;
   recruitingDateId: string | null;
   title: string;
   targetDate: string;
@@ -292,6 +302,7 @@ function mapRecruitingDate(row: Row): RecruitingDateRecord | null {
     id: text(row.recruiting_date_id),
     company: company(row),
     jobId: nullableText(row.recruiting_date_job_id),
+    opportunityId: nullableText(row.recruiting_date_opportunity_id),
     schoolId: nullableText(row.school_id),
     recruitingEventId: nullableText(row.recruiting_event_id),
     campusRecruitingEventId: nullableText(row.campus_recruiting_event_id),
@@ -324,6 +335,15 @@ export function mapCalendarItem(row: Row): CalendarItemRecord {
     id: text(row.id),
     company: company(row),
     jobId: nullableText(row.job_id),
+    opportunityId: nullableText(row.opportunity_id),
+    resolvedOpportunity: row.resolved_opportunity_id
+      ? {
+          id: text(row.resolved_opportunity_id),
+          title: text(row.resolved_opportunity_title),
+          status: text(row.resolved_opportunity_status),
+        }
+      : null,
+    resolutionMismatch: bool(row.resolution_mismatch),
     recruitingDateId: nullableText(row.recruiting_date_id),
     applicationPlanId: nullableText(row.application_plan_id),
     type: text(row.type) as CalendarItemType,
@@ -349,11 +369,19 @@ export function mapCalendarItem(row: Row): CalendarItemRecord {
 const calendarItemSelect = `
   select
     ci.id, ci.company_id, c.canonical_name as company_name, c.slug as company_slug,
-    ci.job_id, ci.recruiting_date_id, ci.application_plan_id, ci.type, ci.title,
+    ci.job_id, ci.opportunity_id, ci.recruiting_date_id, ci.application_plan_id,
+    ci.type, ci.title,
     ci.description, ci.starts_at, ci.ends_at, ci.starts_on, ci.ends_on, ci.all_day,
     ci.timezone, ci.status, ci.source, ci.sync_enabled, ci.completed_at, ci.metadata,
     ci.created_at, ci.updated_at,
-    rd.job_id as recruiting_date_job_id, rd.school_id, rd.recruiting_event_id,
+    coalesce(current_membership.opportunity_id, ci.opportunity_id) as resolved_opportunity_id,
+    resolved_canonical.title as resolved_opportunity_title,
+    resolved_opportunity.status::text as resolved_opportunity_status,
+    (ci.opportunity_id is not null and current_membership.opportunity_id is not null
+      and ci.opportunity_id <> current_membership.opportunity_id) as resolution_mismatch,
+    rd.job_id as recruiting_date_job_id,
+    rd.opportunity_id as recruiting_date_opportunity_id,
+    rd.school_id, rd.recruiting_event_id,
     rd.campus_recruiting_event_id, rd.public_recruiting_observation_id,
     rd.public_recruiting_claim_id, rd.type as recruiting_date_type,
     rd.title as recruiting_date_title, rd.starts_at as recruiting_date_starts_at,
@@ -366,6 +394,12 @@ const calendarItemSelect = `
     rd.created_at as recruiting_date_created_at, rd.updated_at as recruiting_date_updated_at
   from public.calendar_items ci
   left join public.companies c on c.id = ci.company_id
+  left join public.job_opportunity_postings current_membership
+    on current_membership.job_id = ci.job_id and current_membership.valid_to is null
+  left join public.job_opportunities resolved_opportunity
+    on resolved_opportunity.id = coalesce(current_membership.opportunity_id, ci.opportunity_id)
+  left join public.jobs resolved_canonical
+    on resolved_canonical.id = resolved_opportunity.canonical_source_posting_id
   left join public.recruiting_dates rd on rd.id = ci.recruiting_date_id
   left join public.sources rs on rs.id = rd.source_id
 `;
@@ -398,6 +432,7 @@ export function planFingerprint(userId: string, input: CreateApplicationPlanInpu
     userId,
     companyId: input.companyId,
     jobId: input.jobId ?? null,
+    opportunityId: input.opportunityId ?? null,
     recruitingDateId: input.recruitingDateId ?? null,
     title: input.title,
     targetDate: input.targetDate,
@@ -414,13 +449,15 @@ export async function materializeRecruitingDates(userId: string): Promise<{
   return sql.begin(async (transaction) => {
     const observationDates = await transaction`
       insert into public.recruiting_dates (
-        company_id, job_id, school_id, public_recruiting_observation_id, source_id,
+        company_id, job_id, opportunity_id, school_id,
+        public_recruiting_observation_id, source_id,
         type, title, starts_at, ends_at, starts_on, ends_on, all_day, timezone,
         date_certainty, date_precision, confidence, source_kind, source_url,
         source_fingerprint, provenance
       )
       select
-        o.company_id, o.job_id, o.school_id, o.id, o.source_id,
+        o.company_id, o.job_id, current_membership.opportunity_id,
+        o.school_id, o.id, o.source_id,
         case
           when o.observation_type::text = 'APPLICATION_DEADLINE' then 'APPLICATION_DEADLINE'
           when o.observation_type::text in ('CAREER_FAIR') then 'CAREER_FAIR'
@@ -448,6 +485,8 @@ export async function materializeRecruitingDates(userId: string): Promise<{
           'certaintyPreserved', true
         )
       from public.public_recruiting_observations o
+      left join public.job_opportunity_postings current_membership
+        on current_membership.job_id = o.job_id and current_membership.valid_to is null
       where o.date_start is not null
       on conflict (source_fingerprint) do update set
         company_id = excluded.company_id,
@@ -513,11 +552,12 @@ export async function materializeRecruitingDates(userId: string): Promise<{
     `;
     const items = await transaction`
       insert into public.calendar_items (
-        user_id, company_id, job_id, recruiting_date_id, type, title, description,
+        user_id, company_id, job_id, opportunity_id, recruiting_date_id,
+        type, title, description,
         starts_at, ends_at, starts_on, ends_on, all_day, timezone, status, source, metadata
       )
       select
-        ${userId}::uuid, rd.company_id, rd.job_id, rd.id,
+        ${userId}::uuid, rd.company_id, rd.job_id, rd.opportunity_id, rd.id,
         case when rd.type in ('CAREER_FAIR', 'CAMPUS_EVENT', 'INFO_SESSION', 'INTERVIEW_EVENT')
              then 'CAREER_EVENT' else 'RECRUITING_DATE' end::public.calendar_item_type,
         rd.title, null, rd.starts_at, rd.ends_at, rd.starts_on, rd.ends_on,
@@ -605,6 +645,31 @@ async function validateCompanyJob(sql: QuerySql, companyId?: string, jobId?: str
   }
 }
 
+async function validateCompanyOpportunity(
+  sql: QuerySql,
+  companyId?: string,
+  opportunityId?: string,
+  jobId?: string,
+) {
+  if (!opportunityId) return;
+  const [opportunity] = await sql`
+    select company_id from public.job_opportunities where id = ${opportunityId}::uuid
+  `;
+  if (!opportunity) throw new CalendarNotFoundError("Opportunity not found");
+  if (companyId && text(opportunity.company_id) !== companyId) {
+    throw new CalendarConflictError("Opportunity does not belong to the selected company");
+  }
+  if (jobId) {
+    const [membership] = await sql`
+      select opportunity_id from public.job_opportunity_postings
+      where job_id = ${jobId}::uuid and valid_to is null
+    `;
+    if (!membership || text(membership.opportunity_id) !== opportunityId) {
+      throw new CalendarConflictError("Source posting resolves to a different opportunity");
+    }
+  }
+}
+
 function normalizedTiming(input: {
   startsAt?: string;
   endsAt?: string | null;
@@ -642,16 +707,18 @@ export async function createCalendarItem(
 ): Promise<CalendarItemRecord> {
   const sql = getDatabase();
   await validateCompanyJob(sql, input.companyId, input.jobId);
+  await validateCompanyOpportunity(sql, input.companyId, input.opportunityId, input.jobId);
   const timing = normalizedTiming(input);
   const completedAt = input.status === "DONE" ? new Date().toISOString() : null;
   const [created] = await sql`
     insert into public.calendar_items (
-      user_id, company_id, job_id, type, title, description, starts_at, ends_at,
+      user_id, company_id, job_id, opportunity_id, type, title, description, starts_at, ends_at,
       starts_on, ends_on, all_day, timezone, status, source, sync_enabled,
       completed_at, metadata
     ) values (
       ${userId}::uuid, ${input.companyId ?? null}::uuid, ${input.jobId ?? null}::uuid,
-      ${input.type}, ${input.title}, ${input.description ?? null}, ${timing.startsAt},
+      ${input.opportunityId ?? null}::uuid, ${input.type}, ${input.title},
+      ${input.description ?? null}, ${timing.startsAt},
       ${timing.endsAt}, ${timing.startsOn}, ${timing.endsOn}, ${input.allDay},
       ${input.timezone}, ${input.status}, 'USER', ${input.syncEnabled},
       ${completedAt}, ${sql.json(input.metadata as never)}
@@ -677,6 +744,14 @@ export async function updateCalendarItem(
     ) {
       throw new CalendarConflictError("Source-driven dates only allow status or sync changes");
     }
+    if (patch.opportunityId !== undefined) {
+      await validateCompanyOpportunity(
+        transaction,
+        current.company?.id,
+        patch.opportunityId ?? undefined,
+        current.jobId ?? undefined,
+      );
+    }
     const allDay = patch.allDay ?? current.allDay;
     const timing = normalizedTiming({
       allDay,
@@ -696,6 +771,7 @@ export async function updateCalendarItem(
         starts_on = ${timing.startsOn}, ends_on = ${timing.endsOn}, all_day = ${allDay},
         timezone = ${patch.timezone ?? current.timezone}, status = ${status},
         sync_enabled = ${patch.syncEnabled ?? current.syncEnabled},
+        opportunity_id = ${patch.opportunityId === undefined ? current.opportunityId : patch.opportunityId}::uuid,
         completed_at = ${completedAt},
         metadata = ${transaction.json((patch.metadata ?? current.metadata) as never)}
       where id = ${id}::uuid and user_id = ${userId}::uuid and deleted_at is null
@@ -749,6 +825,15 @@ function mapPlan(row: Row, tasks: ApplicationPlanTaskRecord[]): ApplicationPlanR
       slug: text(row.company_slug),
     },
     jobId: nullableText(row.job_id),
+    opportunityId: nullableText(row.opportunity_id),
+    resolvedOpportunity: row.resolved_opportunity_id
+      ? {
+          id: text(row.resolved_opportunity_id),
+          title: text(row.resolved_opportunity_title),
+          status: text(row.resolved_opportunity_status),
+        }
+      : null,
+    resolutionMismatch: bool(row.resolution_mismatch),
     recruitingDateId: nullableText(row.recruiting_date_id),
     title: text(row.title),
     targetDate: date(row.target_date),
@@ -774,9 +859,20 @@ const applicationTaskSelect = calendarItemSelect.replace(
 
 async function getPlanWithTasks(sql: QuerySql, userId: string, id: string) {
   const [plan] = await sql`
-    select p.*, c.canonical_name as company_name, c.slug as company_slug
+    select p.*, c.canonical_name as company_name, c.slug as company_slug,
+      coalesce(current_membership.opportunity_id, p.opportunity_id) as resolved_opportunity_id,
+      resolved_canonical.title as resolved_opportunity_title,
+      resolved_opportunity.status::text as resolved_opportunity_status,
+      (p.opportunity_id is not null and current_membership.opportunity_id is not null
+        and p.opportunity_id <> current_membership.opportunity_id) as resolution_mismatch
     from public.application_plans p
     join public.companies c on c.id = p.company_id
+    left join public.job_opportunity_postings current_membership
+      on current_membership.job_id = p.job_id and current_membership.valid_to is null
+    left join public.job_opportunities resolved_opportunity
+      on resolved_opportunity.id = coalesce(current_membership.opportunity_id, p.opportunity_id)
+    left join public.jobs resolved_canonical
+      on resolved_canonical.id = resolved_opportunity.canonical_source_posting_id
     where p.id = ${id}::uuid and p.user_id = ${userId}::uuid
   `;
   if (!plan) return null;
@@ -813,6 +909,12 @@ export async function createApplicationPlan(
   const sql = getDatabase();
   const plan = await sql.begin(async (transaction) => {
     await validateCompanyJob(transaction, input.companyId, input.jobId);
+    await validateCompanyOpportunity(
+      transaction,
+      input.companyId,
+      input.opportunityId,
+      input.jobId,
+    );
     const [companyRow] = await transaction`
       select canonical_name from public.companies where id = ${input.companyId}::uuid
     `;
@@ -840,11 +942,12 @@ export async function createApplicationPlan(
     const steps = input.template ?? DEFAULT_APPLICATION_PLAN_TEMPLATE;
     const [planRow] = await transaction`
       insert into public.application_plans (
-        user_id, company_id, job_id, recruiting_date_id, title, target_date,
+        user_id, company_id, job_id, opportunity_id, recruiting_date_id, title, target_date,
         timezone, plan_fingerprint, metadata
       ) values (
         ${userId}::uuid, ${input.companyId}::uuid, ${input.jobId ?? null}::uuid,
-        ${input.recruitingDateId ?? null}::uuid, ${input.title}, ${input.targetDate},
+        ${input.opportunityId ?? null}::uuid, ${input.recruitingDateId ?? null}::uuid,
+        ${input.title}, ${input.targetDate},
         ${input.timezone}, ${fingerprint},
         ${transaction.json({
           generator: "deterministic-v1",
@@ -861,11 +964,13 @@ export async function createApplicationPlan(
       const taskTitle = `${step.title}${topicAware ? ` — ${topics[0]}` : ""} — ${text(companyRow.canonical_name)}`;
       const [item] = await transaction`
         insert into public.calendar_items (
-          user_id, company_id, job_id, application_plan_id, type, title, description,
+          user_id, company_id, job_id, opportunity_id, application_plan_id,
+          type, title, description,
           starts_at, starts_on, all_day, timezone, status, source, sync_enabled, metadata
         ) values (
           ${userId}::uuid, ${input.companyId}::uuid, ${input.jobId ?? null}::uuid,
-          ${planId}::uuid, ${step.taskType}, ${taskTitle}, ${step.generatedReason},
+          ${input.opportunityId ?? null}::uuid, ${planId}::uuid,
+          ${step.taskType}, ${taskTitle}, ${step.generatedReason},
           ${midnightUtc(taskDate)}, ${taskDate}, true, ${input.timezone}, 'TODO',
           'APPLICATION_PLAN', false,
           ${transaction.json({
@@ -906,6 +1011,7 @@ export async function createApplicationPlan(
       context: {
         companyId: created.company.id,
         jobId: created.jobId,
+        opportunityId: created.opportunityId,
         templateVersion: created.templateVersion,
       },
     });
@@ -963,7 +1069,12 @@ export async function activateApplicationPlan(
       entityType: "APPLICATION_PLAN",
       entityId: plan.id,
       deduplicationKey: `calendar-plan-activated:${plan.id}`,
-      context: { syncEnabled, companyId: plan.company.id, jobId: plan.jobId },
+      context: {
+        syncEnabled,
+        companyId: plan.company.id,
+        jobId: plan.jobId,
+        opportunityId: plan.opportunityId,
+      },
     });
     return plan;
   });
@@ -973,7 +1084,13 @@ export async function activateApplicationPlan(
 export async function updateApplicationPlan(
   userId: string,
   id: string,
-  patch: { title?: string; targetDate?: string; timezone?: string; status?: string },
+  patch: {
+    title?: string;
+    targetDate?: string;
+    timezone?: string;
+    status?: string;
+    opportunityId?: string | null;
+  },
 ): Promise<ApplicationPlanRecord> {
   const sql = getDatabase();
   return sql.begin(async (transaction) => {
@@ -981,12 +1098,27 @@ export async function updateApplicationPlan(
     if (!current) throw new CalendarNotFoundError("Application plan not found");
     const targetDate = patch.targetDate ?? current.targetDate;
     const timezone = patch.timezone ?? current.timezone;
+    if (patch.opportunityId !== undefined) {
+      await validateCompanyOpportunity(
+        transaction,
+        current.company.id,
+        patch.opportunityId ?? undefined,
+        current.jobId ?? undefined,
+      );
+    }
     await transaction`
       update public.application_plans set title = ${patch.title ?? current.title},
         target_date = ${targetDate}, timezone = ${timezone},
-        status = ${patch.status ?? current.status}::public.application_plan_status
+        status = ${patch.status ?? current.status}::public.application_plan_status,
+        opportunity_id = ${patch.opportunityId === undefined ? current.opportunityId : patch.opportunityId}::uuid
       where id = ${id}::uuid and user_id = ${userId}::uuid
     `;
+    if (patch.opportunityId !== undefined) {
+      await transaction`
+        update public.calendar_items set opportunity_id = ${patch.opportunityId}::uuid
+        where application_plan_id = ${id}::uuid and user_id = ${userId}::uuid
+      `;
+    }
     if (patch.targetDate || patch.timezone) {
       for (const task of current.tasks) {
         if (task.relativeDayOffset === null) continue;

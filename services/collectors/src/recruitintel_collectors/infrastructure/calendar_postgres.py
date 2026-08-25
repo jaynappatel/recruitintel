@@ -40,7 +40,8 @@ class PostgresCalendarSyncRepository:
                 cursor = await connection.execute(
                     """
                     select r.*, c.user_id, c.provider, c.selected_calendar_id,
-                           c.encrypted_refresh_token, c.connection_status
+                           c.encrypted_refresh_token, c.connection_status,
+                           r.next_attempt_at <= now() as is_eligible
                     from public.calendar_sync_requests r
                     join public.calendar_connections c
                       on c.id = r.calendar_connection_id and c.user_id = r.user_id
@@ -52,7 +53,7 @@ class PostgresCalendarSyncRepository:
                 row = await cursor.fetchone()
                 if row is None:
                     raise KeyError(f"calendar sync request {request_id} was not found")
-                if row["status"] != "PENDING" or row["next_attempt_at"] > datetime.now(UTC):
+                if row["status"] != "PENDING" or not row["is_eligible"]:
                     raise RuntimeError("calendar sync request is not claimable")
                 if row["connection_status"] != "CONNECTED" or not row["encrypted_refresh_token"]:
                     raise RuntimeError("calendar connection is not connected")

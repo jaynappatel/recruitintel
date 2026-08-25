@@ -3,7 +3,11 @@ from uuid import UUID
 
 from recruitintel_collectors.adapters.greenhouse import GreenhouseCollector
 from recruitintel_collectors.domain.enums import RecruitingEventType
-from recruitintel_collectors.domain.fingerprints import fingerprint_event, fingerprint_job
+from recruitintel_collectors.domain.fingerprints import (
+    fingerprint_event,
+    fingerprint_job,
+    fingerprint_job_derivation,
+)
 from recruitintel_collectors.domain.models import SourceConfig
 from recruitintel_collectors.infrastructure.http import ProviderHttpClient
 
@@ -31,6 +35,18 @@ def test_meaningful_job_change_changes_fingerprint(source: SourceConfig, load_fi
     assert fingerprint_job(collector.normalize(first, source)) != fingerprint_job(
         collector.normalize(second, source)
     )
+
+
+def test_classifier_change_is_a_derivation_not_a_source_change(
+    source: SourceConfig, load_fixture: Any
+) -> None:
+    payload = load_fixture("greenhouse_jobs.json")
+    job = GreenhouseCollector(cast(ProviderHttpClient, object())).normalize(
+        payload["jobs"][0], source
+    )
+    recomputed = job.model_copy(update={"is_new_grad": not job.is_new_grad})
+    assert fingerprint_job(job) == fingerprint_job(recomputed)
+    assert fingerprint_job_derivation(job) != fingerprint_job_derivation(recomputed)
 
 
 def test_event_fingerprint_is_deterministic_and_causal() -> None:
