@@ -32,7 +32,6 @@ create type public.application_next_action_type as enum (
   'FOLLOW_UP_OR_WAIT', 'PREPARE_APPLICATION', 'DECIDE_OR_PLAN'
 );
 
-alter type public.calendar_item_source add value if not exists 'APPLICATION';
 alter type public.alert_type add value if not exists 'APPLICATION_ACTION_DUE';
 alter type public.alert_type add value if not exists 'OA_DEADLINE_APPROACHING';
 alter type public.alert_type add value if not exists 'INTERVIEW_UPCOMING';
@@ -185,8 +184,6 @@ alter table public.calendar_items add column application_assessment_id uuid;
 alter table public.calendar_items add column application_interview_id uuid;
 alter table public.calendar_items add constraint calendar_items_application_owner_fkey
   foreign key (application_id, user_id) references public.applications(id, user_id) on delete cascade;
-alter table public.calendar_items add constraint calendar_items_application_source_check
-  check ((source = 'APPLICATION') = (application_id is not null));
 create index calendar_items_application_idx on public.calendar_items (user_id, application_id, starts_at)
   where application_id is not null and deleted_at is null;
 
