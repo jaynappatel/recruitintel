@@ -28,6 +28,60 @@ export const roleFamilies = [
   "OTHER",
 ] as const;
 
+export const applicationStatuses = [
+  "SAVED",
+  "PLANNING",
+  "APPLIED",
+  "IN_PROCESS",
+  "OFFER",
+  "REJECTED",
+  "WITHDRAWN",
+  "CLOSED",
+] as const;
+export const applicationStages = [
+  "NONE",
+  "OA",
+  "RECRUITER_SCREEN",
+  "TECHNICAL_INTERVIEW",
+  "ONSITE",
+  "FINAL_ROUND",
+] as const;
+export const applicationStatusSchema = z.enum(applicationStatuses);
+export const applicationStageSchema = z.enum(applicationStages);
+export const createApplicationRequestSchema = z
+  .object({
+    opportunityId: z.uuid(),
+    sourcePostingId: z.uuid().nullable().optional(),
+    cycleKey: z.string().trim().min(1).max(80),
+    applicationPlanId: z.uuid().nullable().optional(),
+    originRecommendationImpressionId: z.uuid().nullable().optional(),
+    applicationUrlUsed: z
+      .string()
+      .url()
+      .refine((v) => v.startsWith("https://"))
+      .nullable()
+      .optional(),
+    appliedAt: z.iso.datetime().nullable().optional(),
+  })
+  .strict();
+export const applicationStatusRequestSchema = z
+  .object({
+    status: applicationStatusSchema,
+    stage: applicationStageSchema.optional(),
+    occurredAt: z.iso.datetime().optional(),
+    reasonCode: z.string().trim().max(100).optional(),
+    idempotencyKey: z.string().trim().min(1).max(200),
+  })
+  .strict();
+export const applicationAssessmentRequestSchema = z
+  .object({
+    type: z.string().trim().min(1).max(40),
+    dueAt: z.iso.datetime().nullable().optional(),
+    providerName: z.string().trim().max(200).nullable().optional(),
+    idempotencyKey: z.string().trim().min(1).max(200),
+  })
+  .strict();
+
 export const eventTypes = [
   "JOB_OPENED",
   "JOB_CHANGED",

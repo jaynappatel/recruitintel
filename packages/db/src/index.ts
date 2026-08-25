@@ -11,6 +11,7 @@ export * from "./orchestration";
 export * from "./opportunities";
 export * from "./recommendation-scoring";
 export * from "./personalization";
+export * from "./applications";
 
 export interface CompanyRecord {
   id: string;
