@@ -19,6 +19,8 @@ class ClaimedWork(BaseModel):
     public_web_work_request_id: UUID | None = None
     calendar_sync_request_id: UUID | None = None
     recruiting_observation_id: UUID | None = None
+    alert_evaluation_request_id: UUID | None = None
+    fanout_after_user_id: UUID | None = None
     user_id: UUID | None = None
     lease_token: UUID
     lease_generation: int = Field(ge=1)

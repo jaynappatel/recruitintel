@@ -1,4 +1,5 @@
 import { GoogleCalendarCard } from "@/components/settings/google-calendar-card";
+import { RecruitingPreferencesCard } from "@/components/settings/recruiting-preferences-card";
 import { PageHeader } from "@/components/page-header";
 
 export const metadata = { title: "Settings" };
@@ -28,33 +29,6 @@ function SettingsSection({
   );
 }
 
-function Field({ label, placeholder }: { label: string; placeholder: string }) {
-  return (
-    <label className="flex flex-col gap-1.5 text-sm font-semibold">
-      {label}
-      <input
-        className="rounded-lg border border-[var(--line)] bg-white/70 px-3 py-2 text-sm font-normal outline-none focus:border-[var(--accent)]"
-        placeholder={placeholder}
-        type="text"
-      />
-    </label>
-  );
-}
-
-function ToggleRow({ label, description }: { label: string; description: string }) {
-  return (
-    <div className="flex items-center justify-between gap-4 py-2.5">
-      <div>
-        <div className="text-sm font-semibold">{label}</div>
-        <div className="text-xs text-[var(--muted)]">{description}</div>
-      </div>
-      <span className="relative h-6 w-10 shrink-0 rounded-full bg-[var(--panel)]">
-        <span className="absolute top-0.5 left-[calc(100%-1.375rem)] size-5 rounded-full bg-white shadow" />
-      </span>
-    </div>
-  );
-}
-
 export default function SettingsPage() {
   return (
     <>
@@ -70,47 +44,7 @@ export default function SettingsPage() {
           eyebrow="Profile"
           title="Recruiting preferences"
         >
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Graduation year" placeholder="2027" />
-            <Field label="School" placeholder="e.g. University of Michigan" />
-            <Field label="Target roles" placeholder="Software Engineering, Data Science" />
-            <Field label="Target locations" placeholder="Remote, San Francisco, New York" />
-          </div>
-          <div className="mt-4 flex gap-3">
-            <label className="flex items-center gap-2 text-sm font-semibold">
-              <input className="size-4 accent-[var(--panel)]" defaultChecked type="checkbox" />
-              Internships
-            </label>
-            <label className="flex items-center gap-2 text-sm font-semibold">
-              <input className="size-4 accent-[var(--panel)]" type="checkbox" />
-              New grad roles
-            </label>
-          </div>
-        </SettingsSection>
-
-        <SettingsSection
-          description="Choose what RecruitIntel should notify you about, and how."
-          eyebrow="Alerts"
-          title="Notification preferences"
-        >
-          <div className="divide-y divide-[var(--line)]">
-            <ToggleRow
-              description="New internship or new-grad postings from watched companies"
-              label="Job openings"
-            />
-            <ToggleRow
-              description="Confirmed and estimated recruiting date changes"
-              label="Recruiting windows"
-            />
-            <ToggleRow
-              description="New interview questions observed for watched companies"
-              label="Interview intelligence"
-            />
-            <ToggleRow
-              description="Daily digest of upcoming calendar tasks"
-              label="Calendar reminders"
-            />
-          </div>
+          <RecruitingPreferencesCard />
         </SettingsSection>
 
         <SettingsSection

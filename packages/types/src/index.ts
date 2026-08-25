@@ -165,6 +165,8 @@ export const orchestrationWorkTypes = [
   "CALENDAR_SYNC",
   "PRIVACY_RETENTION_CLEANUP",
   "SOURCE_HEALTH_ROLLUP",
+  "ALERT_FANOUT",
+  "ALERT_EVALUATE",
 ] as const;
 export const orchestrationWorkStatuses = [
   "READY",
@@ -400,6 +402,229 @@ export const opportunityReviewsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });
 export const dismissOpportunityReviewRequestSchema = opportunityCorrectionSchema;
+
+export const watchEntityTypes = ["COMPANY", "OPPORTUNITY", "RECRUITER", "SCHOOL"] as const;
+export const watchReasons = [
+  "SAVED_FOR_LATER",
+  "TARGET_COMPANY",
+  "RECRUITING_CONTACT",
+  "TARGET_SCHOOL",
+  "OTHER",
+] as const;
+export const watchNotificationOverrides = ["INHERIT", "ENABLED", "DISABLED"] as const;
+export const watchSuccessorPolicies = ["MANUAL", "AUTO_FOLLOW_DIRECT"] as const;
+export const watchEntityTypeSchema = z.enum(watchEntityTypes);
+export const watchlistCreateSchema = z
+  .object({
+    entityType: watchEntityTypeSchema,
+    entityId: databaseUuidSchema,
+    reason: z.enum(watchReasons).default("OTHER"),
+    notificationOverride: z.enum(watchNotificationOverrides).default("INHERIT"),
+    successorPolicy: z.enum(watchSuccessorPolicies).default("MANUAL"),
+  })
+  .strict();
+export const watchlistPatchSchema = z
+  .object({
+    notificationOverride: z.enum(watchNotificationOverrides).optional(),
+    successorPolicy: z.enum(watchSuccessorPolicies).optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, "At least one setting is required");
+export const watchlistQuerySchema = z.object({
+  state: z.enum(["ACTIVE", "REMOVED", "SUPERSEDED"]).optional(),
+  entityType: watchEntityTypeSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: z.string().min(1).max(500).optional(),
+});
+export const watchlistItemSchema = z.object({
+  id: databaseUuidSchema,
+  entityType: watchEntityTypeSchema,
+  entityId: databaseUuidSchema,
+  entityLabel: z.string().min(1),
+  entityHref: z.string().min(1),
+  state: z.enum(["ACTIVE", "REMOVED", "SUPERSEDED"]),
+  origin: z.enum(["USER", "MIGRATED_SOURCE_POSTING", "SUCCESSOR_FOLLOW"]),
+  reason: z.enum(watchReasons),
+  notificationOverride: z.enum(watchNotificationOverrides),
+  successorPolicy: z.enum(watchSuccessorPolicies),
+  resolvedSuccessor: z
+    .object({ id: databaseUuidSchema, label: z.string().min(1), href: z.string().min(1) })
+    .nullable(),
+  createdAt: z.iso.datetime(),
+  removedAt: z.iso.datetime().nullable(),
+  supersededAt: z.iso.datetime().nullable(),
+});
+
+export const experienceLevels = [
+  "INTERNSHIP",
+  "ENTRY_LEVEL",
+  "MID_LEVEL",
+  "SENIOR",
+  "LEADERSHIP",
+] as const;
+export const workplaceModes = ["REMOTE", "HYBRID", "ONSITE"] as const;
+export const earlyCareerTracks = ["INTERNSHIP", "NEW_GRAD"] as const;
+export const preferredLocationSchema = z
+  .object({
+    kind: z.enum(["CITY_REGION_COUNTRY", "REGION_COUNTRY", "COUNTRY", "REMOTE_REGION"]),
+    city: z.string().trim().min(1).max(100).nullable().optional(),
+    region: z.string().trim().min(1).max(100).nullable().optional(),
+    countryCode: z.string().trim().length(2).toUpperCase().nullable().optional(),
+    remoteRegion: z.string().trim().min(1).max(100).nullable().optional(),
+    displayLabel: z.string().trim().min(1).max(200),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const valid =
+      (value.kind === "CITY_REGION_COUNTRY" && value.city && value.region && value.countryCode) ||
+      (value.kind === "REGION_COUNTRY" && !value.city && value.region && value.countryCode) ||
+      (value.kind === "COUNTRY" && !value.city && !value.region && value.countryCode) ||
+      (value.kind === "REMOTE_REGION" &&
+        !value.city &&
+        !value.region &&
+        !value.countryCode &&
+        value.remoteRegion);
+    if (!valid) context.addIssue({ code: "custom", message: "Location fields do not match kind" });
+  });
+export const recruitingPreferencesPatchSchema = z
+  .object({
+    graduationYear: z.number().int().min(2020).max(2050).nullable().optional(),
+    usWorkAuthorized: z.boolean().nullable().optional(),
+    requiresEmployerSponsorship: z.boolean().nullable().optional(),
+    roleFamilies: z
+      .array(roleFamilySchema.exclude(["OTHER"]))
+      .max(10)
+      .optional(),
+    earlyCareerTracks: z.array(z.enum(earlyCareerTracks)).max(2).optional(),
+    experienceLevels: z.array(z.enum(experienceLevels)).max(5).optional(),
+    workplaceModes: z.array(z.enum(workplaceModes)).max(3).optional(),
+    locations: z.array(preferredLocationSchema).max(20).optional(),
+    targetSchoolIds: z.array(databaseUuidSchema).max(20).optional(),
+  })
+  .strict();
+export const recruitingPreferencesSchema = recruitingPreferencesPatchSchema.extend({
+  graduationYear: z.number().int().nullable(),
+  usWorkAuthorized: z.boolean().nullable(),
+  requiresEmployerSponsorship: z.boolean().nullable(),
+  roleFamilies: z.array(roleFamilySchema.exclude(["OTHER"])),
+  earlyCareerTracks: z.array(z.enum(earlyCareerTracks)),
+  experienceLevels: z.array(z.enum(experienceLevels)),
+  workplaceModes: z.array(z.enum(workplaceModes)),
+  locations: z.array(preferredLocationSchema.extend({ id: databaseUuidSchema })),
+  targetSchools: z.array(
+    z.object({ id: databaseUuidSchema, name: z.string().min(1), slug: z.string().min(1) }),
+  ),
+  version: z.number().int().positive(),
+  updatedAt: z.iso.datetime(),
+});
+
+export const recommendationQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  cursor: z.string().min(1).max(500).optional(),
+  includeLowPriority: z
+    .enum(["true", "false"])
+    .transform((value) => value === "true")
+    .default(true),
+  includeIneligible: z
+    .enum(["true", "false"])
+    .transform((value) => value === "true")
+    .default(false),
+  company: z.union([databaseUuidSchema, z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)]).optional(),
+  roleFamily: roleFamilySchema.optional(),
+});
+export const recommendationFactorSchema = z.object({
+  code: z.enum([
+    "COMPANY_PREFERENCE",
+    "ROLE_MATCH",
+    "EARLY_CAREER_TRACK",
+    "EXPERIENCE_LEVEL",
+    "LOCATION_MATCH",
+    "WORKPLACE_MODE",
+    "FRESHNESS",
+    "DEADLINE_URGENCY",
+    "SOURCE_CONFIDENCE",
+  ]),
+  state: z.enum(["MATCH", "PARTIAL", "MISMATCH", "UNKNOWN", "NOT_APPLICABLE"]),
+  earnedWeight: z.number().int().min(0).max(100),
+  availableWeight: z.number().int().min(0).max(100),
+  reasonCode: z.string().regex(/^[A-Z][A-Z0-9_]*$/),
+});
+export const opportunityRecommendationSchema = z.object({
+  impressionId: databaseUuidSchema,
+  opportunity: opportunitySchema,
+  recommendationScore: z.number().int().min(0).max(100).nullable(),
+  category: z.enum(["HIGH_PRIORITY", "MEDIUM_PRIORITY", "LOW_PRIORITY", "NOT_ELIGIBLE"]),
+  eligibility: z.enum(["ELIGIBLE", "NOT_ELIGIBLE", "UNKNOWN"]),
+  evidenceCoverage: z.enum(["HIGH", "MEDIUM", "LOW"]),
+  availableWeight: z.number().int().min(0).max(100),
+  reasons: z.array(z.string()).max(16),
+  potentialMismatches: z.array(z.string()).max(16),
+  hardConstraints: z.array(z.string()).max(8),
+  generatedAt: z.iso.datetime(),
+  algorithmVersion: z.string().min(1),
+});
+
+export const opportunityDismissalSchema = z
+  .object({
+    reasonCode: z
+      .enum(["NOT_INTERESTED", "ALREADY_APPLIED", "WRONG_ROLE", "WRONG_LOCATION", "OTHER"])
+      .optional(),
+  })
+  .strict();
+export const recommendationOpenSchema = z.object({ impressionId: databaseUuidSchema }).strict();
+
+export const alertTypes = [
+  "WATCHED_COMPANY_OPPORTUNITY_OPENED",
+  "RECOMMENDED_OPPORTUNITY_OPENED",
+  "APPLICATION_DEADLINE_APPROACHING",
+  "OPENING_WINDOW_STARTED",
+  "WATCHED_RECRUITER_DISCOVERED",
+  "WATCHED_RECRUITER_ACTIVITY",
+  "CAMPUS_EVENT_DISCOVERED",
+  "INTERVIEW_INTELLIGENCE_UPDATED",
+  "CALENDAR_ACTION_DUE",
+] as const;
+export const alertTypeSchema = z.enum(alertTypes);
+export const alertListQuerySchema = z.object({
+  state: z.enum(["UNREAD", "READ", "DISMISSED", "EXPIRED"]).optional(),
+  type: alertTypeSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  cursor: z.string().min(1).max(500).optional(),
+});
+export const alertUpdateSchema = z.object({ read: z.boolean() }).strict();
+export const alertsShownSchema = z
+  .object({ alertIds: z.array(databaseUuidSchema).min(1).max(100) })
+  .strict();
+export const alertSchema = z.object({
+  id: databaseUuidSchema,
+  type: alertTypeSchema,
+  title: z.string().min(1),
+  body: z.string().min(1),
+  reasonCodes: z.array(z.string()).max(16),
+  state: z.enum(["UNREAD", "READ", "DISMISSED", "EXPIRED"]),
+  entity: z
+    .object({ type: z.string().min(1), id: databaseUuidSchema, href: z.string().min(1) })
+    .nullable(),
+  reminderWindow: z.enum(["NONE", "SEVEN_DAY", "THREE_DAY", "ONE_DAY", "DUE"]),
+  occurredAt: z.iso.datetime(),
+  createdAt: z.iso.datetime(),
+  readAt: z.iso.datetime().nullable(),
+  dismissedAt: z.iso.datetime().nullable(),
+  expiresAt: z.iso.datetime().nullable(),
+});
+export const notificationPreferencesPatchSchema = z
+  .object({
+    inAppEnabled: z.boolean().optional(),
+    alertTypes: z.record(alertTypeSchema, z.boolean()).optional(),
+  })
+  .strict();
+export const notificationPreferencesSchema = z.object({
+  channel: z.literal("IN_APP"),
+  inAppEnabled: z.boolean(),
+  alertTypes: z.record(alertTypeSchema, z.boolean()),
+  settingsVersion: z.number().int().positive(),
+  updatedAt: z.iso.datetime(),
+});
 
 export const recruitingEventSchema = z.object({
   id: databaseUuidSchema,

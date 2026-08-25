@@ -143,6 +143,27 @@ try {
 
   await apply(database, ["0010_canonical_job_graph.sql"]);
 
+  const [postMigrationJob] = await database`
+    insert into public.jobs (
+      company_id, source_id, external_id, title, application_url, source_url, content_hash
+    ) values (
+      ${company.id}, ${source.greenhouse}, 'gh-101', 'Another Internship',
+      'https://boards.greenhouse.io/m8-fixture/jobs/101',
+      'https://boards.greenhouse.io/m8-fixture/jobs/101', ${"5".repeat(64)}
+    ) returning id
+  `;
+
+  // Preserve the M8 source-posting watch before M9 evolves the table.
+  await database`
+    insert into public.watchlist_items (user_id, item_type, job_id, metadata)
+    values (${user.id}, 'JOB', ${postMigrationJob.id}, '{"m8":"legacy"}')
+  `;
+  await apply(database, [
+    "0011_watchlists_recommendations_alerts.sql",
+    "0012_alert_orchestration.sql",
+    "0013_m9_alert_materiality.sql",
+  ]);
+
   const [migrationState] = await database`
     select
       (select count(*)::int from public.jobs where company_id = ${company.id}) as jobs,
@@ -158,9 +179,9 @@ try {
       (select job_id from public.calendar_items where id = ${calendar.id}) as calendar_job_id
   `;
   if (
-    migrationState.jobs !== 3 ||
-    migrationState.opportunities !== 3 ||
-    migrationState.memberships !== 3 ||
+    migrationState.jobs !== 4 ||
+    migrationState.opportunities !== 4 ||
+    migrationState.memberships !== 4 ||
     migrationState.events !== eventsBefore.count ||
     migrationState.ciphertext !== ciphertext ||
     migrationState.plan_job_id !== plan.job_id ||
@@ -169,15 +190,87 @@ try {
     throw new Error("0010 one-to-one migration did not preserve source/private state");
   }
 
-  const [postMigrationJob] = await database`
-    insert into public.jobs (
-      company_id, source_id, external_id, title, application_url, source_url, content_hash
-    ) values (
-      ${company.id}, ${source.greenhouse}, 'gh-101', 'Another Internship',
-      'https://boards.greenhouse.io/m8-fixture/jobs/101',
-      'https://boards.greenhouse.io/m8-fixture/jobs/101', ${"5".repeat(64)}
-    ) returning id
+  const [m9Watch] = await database`
+    select item_type::text, opportunity_id, legacy_job_id, state::text
+    from public.watchlist_items where user_id = ${user.id} and legacy_job_id = ${postMigrationJob.id}
   `;
+  if (
+    !m9Watch ||
+    m9Watch.item_type !== "OPPORTUNITY" ||
+    !m9Watch.opportunity_id ||
+    m9Watch.legacy_job_id !== postMigrationJob.id ||
+    m9Watch.state !== "ACTIVE"
+  ) {
+    throw new Error("M8 source-posting watch was not preserved as a canonical opportunity watch");
+  }
+
+  const [secondUser] = await database`
+    insert into public.users (name, email, email_verified, status)
+    values ('M9 Isolation User', 'm9-isolation@recruitintel.invalid', true, 'ACTIVE') returning id
+  `;
+  await database`
+    insert into public.watchlist_items (user_id, item_type, company_id, watch_reason)
+    values (${user.id}, 'COMPANY', ${company.id}, 'TARGET_COMPANY')
+    on conflict (user_id, company_id)
+      where state = 'ACTIVE' and company_id is not null do nothing
+  `;
+  await database`
+    insert into public.watchlist_items (user_id, item_type, company_id, watch_reason)
+    values (${user.id}, 'COMPANY', ${company.id}, 'TARGET_COMPANY')
+    on conflict (user_id, company_id)
+      where state = 'ACTIVE' and company_id is not null do nothing
+  `;
+  const [watchCounts] = await database`
+    select
+      (select count(*)::int from public.watchlist_items where user_id = ${user.id}
+        and company_id = ${company.id} and state = 'ACTIVE') as owner_count,
+      (select count(*)::int from public.watchlist_items where user_id = ${secondUser.id}
+        and company_id = ${company.id}) as other_count
+  `;
+  if (watchCounts.owner_count !== 1 || watchCounts.other_count !== 0) {
+    throw new Error("M9 watchlist uniqueness or owner isolation failed");
+  }
+  await database`set enable_seqscan = off`;
+  const [watchPlan] = await database`
+    explain (format json, costs off)
+    select user_id from public.watchlist_items
+    where company_id = ${company.id} and state = 'ACTIVE'
+    order by user_id limit 250
+  `;
+  const [opportunityPlan] = await database`
+    explain (format json, costs off)
+    select id from public.job_opportunities
+    where status = 'ACTIVE' and lifecycle_status = 'OPEN'
+      and role_family = 'SOFTWARE_ENGINEERING' and is_internship = false and is_new_grad = false
+    order by latest_last_seen_at desc, id limit 500
+  `;
+  if (
+    !JSON.stringify(watchPlan).includes("watchlist_items_company_fanout_idx") ||
+    !JSON.stringify(opportunityPlan).includes("job_opportunities_open_role_idx")
+  ) {
+    throw new Error("M9 bounded fanout/recommendation indexes were not selected");
+  }
+
+  const fingerprint = "a".repeat(64);
+  await Promise.all(
+    [1, 2].map(
+      () => database`
+      insert into public.alerts (
+        user_id, alert_type, rule_version, reason_codes, title, body,
+        dedupe_fingerprint, occurred_at
+      ) values (
+        ${user.id}, 'WATCHED_COMPANY_OPPORTUNITY_OPENED', 'm9-smoke',
+        array['M9_SMOKE'], 'M9 smoke alert', 'dedupe', ${fingerprint}, now()
+      ) on conflict (user_id, dedupe_fingerprint) do nothing
+    `,
+    ),
+  );
+  const [alertCount] = await database`
+    select count(*)::int as count from public.alerts
+    where user_id = ${user.id} and dedupe_fingerprint = ${fingerprint}
+  `;
+  if (alertCount.count !== 1) throw new Error("M9 alert deduplication was not transactional");
+
   const [singleton] = await database`
     select count(*)::int as count from public.job_opportunity_postings
     where job_id = ${postMigrationJob.id} and valid_to is null
@@ -248,18 +341,20 @@ try {
     from public.job_opportunities where company_id = ${company.id}
   `;
 
-  await database`delete from public.companies where id = ${company.id}`;
-  const [companyDeletion] = await database`
-    select count(*)::int as count from public.companies where id = ${company.id}
-  `;
-  if (companyDeletion.count !== 0) {
-    throw new Error("canonical graph prevented the existing company deletion contract");
+  let companyDeletionRestricted = false;
+  try {
+    await database`delete from public.companies where id = ${company.id}`;
+  } catch (error) {
+    companyDeletionRestricted = error?.code === "23503";
+  }
+  if (!companyDeletionRestricted) {
+    throw new Error("M9 private entity references did not preserve watch history on deletion");
   }
 
   console.log(
     JSON.stringify({
       status: "ok",
-      migration: "0009 -> 0010",
+      migration: "0009 -> 0013 (M8 -> M9)",
       sourcePostingsPreserved: migrationState.jobs,
       singletonOpportunities: migrationState.opportunities,
       singletonMemberships: migrationState.memberships,
@@ -270,7 +365,11 @@ try {
       boundedIdentityIndex: true,
       leastPrivilegeDerivationRefresh: true,
       immutableMembershipHistory: true,
-      companyDeletionCompatible: true,
+      companyDeletionRestrictedUntilPrivateCleanup: true,
+      canonicalWatchPreserved: true,
+      watchOwnerIsolation: true,
+      alertDedupeConcurrency: true,
+      boundedRecommendationAndFanoutIndexes: true,
     }),
   );
 } finally {

@@ -29,11 +29,15 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 ## FreeHire
 
 RecruitIntel's Milestone 8 source-content/derivation hash separation, board-scoped identity, cheap
-unchanged-write tests, and complete-source lifecycle safeguards are original Python/SQL adaptations
-informed by FreeHire's `internal/sources/identity.go`, `internal/jobhash/jobhash.go`,
-`internal/jobhash/rolefingerprint.go`, `cmd/ingest/store.go`, and
-`cmd/ingest/board_health.go`. No Go source, source catalogue, location dataset, proxy behavior, or
-runtime was copied or embedded.
+unchanged-write tests, and complete-source lifecycle safeguards, plus M9's bounded saved-opportunity
+identity and notification deduplication concepts, are original Python/SQL adaptations informed by
+FreeHire's `internal/sources/identity.go`, `internal/jobhash/jobhash.go`,
+`internal/jobhash/rolefingerprint.go`, `cmd/ingest/store.go`, `cmd/ingest/board_health.go`, and
+`openspec/changes/centralize-lifecycle-notifications/`. No Go source, source catalogue, location
+dataset, proxy behavior, notification provider, or runtime was copied or embedded. M9's alert
+fingerprints, transactional in-app provider, tri-state eligibility, and M7 integration are
+RecruitIntel-specific adaptations. Expected savings: approximately 2-3 engineering days of
+design/test discovery; no dependency or runtime cost was introduced.
 
 Copyright (c) 2026 freehire contributors
 

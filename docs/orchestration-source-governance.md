@@ -169,3 +169,19 @@ directly to the trusted web-server login; `worker-role:bind` intentionally canno
 not readable by the global worker, and the Calendar worker does not inherit global collector data.
 The web-app role is a trusted server capability; browser users never receive database credentials,
 and Milestone 6 route/repository ownership remains mandatory.
+
+## M9 personalization work
+
+M9 uses the existing M7 scheduler, leases, retries, fencing, and work-item ledger. The only new
+work types are `ALERT_FANOUT` (global candidate selection in batches of 250),
+`ALERT_EVALUATE` (owner-scoped deterministic rule evaluation), and the associated personalization
+class/worker aliases. The hourly `m9-alert-due-scan` schedule handles deadline, opening-window,
+and due-calendar checks; canonical opportunity, recruiter, campus, recruiting-date, and interview
+changes enqueue semantic evaluation requests transactionally. There is no second scheduler or
+external notification queue.
+
+Fanout uses indexed watch, role-family, early-career, experience-level, and target-school joins;
+it never scans every user against every opportunity. Owner work contains only private owner IDs and
+safe subject IDs/context. Alert insertion is transactional with database fingerprint uniqueness,
+so retries, duplicate source events, canonical merges, and concurrent workers converge to one
+in-app row. The M9 evaluator has no paid provider, model, embedding, or outbound network path.

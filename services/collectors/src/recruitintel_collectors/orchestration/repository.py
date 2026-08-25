@@ -38,6 +38,8 @@ class PostgresOrchestrationRepository:
             public_web_work_request_id=row["public_web_work_request_id"],
             calendar_sync_request_id=row["calendar_sync_request_id"],
             recruiting_observation_id=row["recruiting_observation_id"],
+            alert_evaluation_request_id=row["alert_evaluation_request_id"],
+            fanout_after_user_id=row["fanout_after_user_id"],
             user_id=row["user_id"],
             lease_token=row["lease_token"],
             lease_generation=row["lease_generation"],

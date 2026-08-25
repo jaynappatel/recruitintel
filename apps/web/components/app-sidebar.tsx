@@ -3,12 +3,15 @@
 import clsx from "clsx";
 import {
   Activity,
+  Bell,
+  Bookmark,
   Building2,
   BriefcaseBusiness,
   CalendarDays,
   LayoutDashboard,
   Radar,
   Settings,
+  Sparkles,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -17,6 +20,9 @@ const navigation = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/companies", label: "Companies", icon: Building2 },
   { href: "/jobs", label: "Jobs", icon: BriefcaseBusiness },
+  { href: "/opportunities", label: "Recommendations", icon: Sparkles },
+  { href: "/watchlist", label: "Watchlist", icon: Bookmark },
+  { href: "/alerts", label: "Alerts", icon: Bell },
   { href: "/events", label: "Event stream", icon: Activity },
   { href: "/calendar", label: "Calendar", icon: CalendarDays },
   { href: "/settings", label: "Settings", icon: Settings },

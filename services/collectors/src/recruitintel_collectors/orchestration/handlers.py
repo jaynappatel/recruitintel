@@ -21,6 +21,7 @@ from recruitintel_collectors.infrastructure.recruiter_campus_postgres import (
 )
 from recruitintel_collectors.infrastructure.search_budget import PostgresSearchUsageBudget
 from recruitintel_collectors.opportunities import PostgresOpportunityResolver
+from recruitintel_collectors.personalization import PostgresAlertEngine
 from recruitintel_collectors.pipeline import CollectorRunner
 from recruitintel_collectors.public_web.fetcher import SafePublicWebFetcher
 from recruitintel_collectors.public_web.runner import PublicWebWorker
@@ -59,6 +60,8 @@ class RuntimeWorkHandlers:
             WorkType.CALENDAR_SYNC: self.calendar_sync,
             WorkType.PRIVACY_RETENTION_CLEANUP: self.privacy_cleanup,
             WorkType.SOURCE_HEALTH_ROLLUP: self.source_health,
+            WorkType.ALERT_FANOUT: self.alert_fanout,
+            WorkType.ALERT_EVALUATE: self.alert_evaluate,
         }
 
     async def ats_collect(self, work: ClaimedWork) -> WorkExecutionResult:
@@ -284,3 +287,9 @@ class RuntimeWorkHandlers:
             processed=updated,
             diagnostics={"updatedSources": updated},
         )
+
+    async def alert_fanout(self, work: ClaimedWork) -> WorkExecutionResult:
+        return await PostgresAlertEngine(self._settings.database_url).fanout(work)
+
+    async def alert_evaluate(self, work: ClaimedWork) -> WorkExecutionResult:
+        return await PostgresAlertEngine(self._settings.database_url).evaluate(work)

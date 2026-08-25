@@ -9,8 +9,8 @@ does not replace legal review, and did not modify production code or the
 Claude-owned frontend. Root repository licenses, nested code licenses, datasets,
 models, fonts, fixtures, and provider terms are treated as separate rights.
 
-Implementation status update (2026-08-24): Gate 5.1, Milestone 6, Milestone 7, Gate 7.1A, and
-corrective Gate 7.1A.1 are complete.
+Implementation status update (2026-08-25): Gate 5.1, Milestones 6-9, Gate 7.1A, and corrective
+Gate 7.1A.1 are complete. Milestone 10 remains unstarted until separately approved.
 Milestone 6 replaced the configured owner/static admin runtime with authenticated users, hashed
 scoped service principals, compound private ownership, privacy/audit/redaction foundations, and
 current-behavior instrumentation. Milestone 7 replaced manually dispatched durable requests with a
@@ -594,33 +594,35 @@ now available; alert delivery immediately generates useful feedback labels.
 
 **Dependencies:** Milestones 6-8.
 
-**Major components:** profile constraints/interests; company/search watchlists;
-save/dismiss; hard filters; versioned deterministic relevance score and reason
-codes; daily/opened/deadline/event alert rules; transactional notification outbox;
-email/in-app channels; digest/debounce/quiet hours; delivery idempotency.
+**Major components:** one typed private watchlist with canonical successor tracing; compact explicit
+recruiting preferences; versioned deterministic canonical-opportunity ranking with tri-state hard
+eligibility; versioned/material-change dismissals; transactional IN_APP alerts and bounded M7 fanout.
 
 **Reference repositories:** FreeHire saved search/notification outbox and
 deterministic dictionaries (adapt/inspiration); JBA anomaly baseline.
 
-**Data model:** `user_job_preferences`, `watchlists`, `watchlist_rules`,
-`saved_jobs`, `recommendation_runs`, `recommendation_impressions`,
-`notification_rules`, `notification_outbox`, `delivery_attempts`.
+**Data model:** evolved `watchlist_items`, normalized `user_recruiting_preferences` selections,
+M6 `ranking_decisions`/`recommendation_impressions` extensions, `opportunity_suppressions`,
+`alerts`, alert-type preferences, and append-only canonical change events.
 
-**Workers:** rank candidates, materialize alerts, drain channels, reconcile stuck
-deliveries, digest scheduler.
+**Workers:** M7 `ALERT_FANOUT` and owner-scoped `ALERT_EVALUATE`; request-time recommendation
+scoring; existing hourly M7 due scan. No second scheduler, paid provider, or delivery outbox.
 
 **APIs:** preferences, watchlists, save/dismiss, recommendation feed with reason
 codes, alerts, notification status/preferences.
 
-**Security:** verified delivery addresses, unsubscribe and quiet hours, content
-sanitization, per-user idempotency, no sensitive feature values in notifications.
+**Security:** authenticated owner-scoped APIs, two-user isolation, no admin access to private
+recommendation history, server-owned rank/score/reasons, temporal watch activation, bounded reason
+codes, and no sensitive feature values in diagnostics or alerts.
 
-**Testing:** hard-constraint precedence, score determinism/versioning, duplicate
-source postings produce one alert, outbox retry/no duplicate, quiet hours/DST,
-unsubscribe, impression logging.
+**Testing:** hard-constraint precedence, score determinism/versioning, canonical duplicate
+suppression, merge/split watch history, transactional alert dedupe, bounded fanout, privacy
+isolation, material dismissal release, and ZERO_COST_MODE.
 
-**Done:** a newly opened matching opportunity creates one explainable, retry-safe
-alert and records both impressions and actions.
+**Done:** M9 is complete when a newly opened canonical opportunity produces at most one explainable,
+retry-safe in-app alert, records the ranking/impression denominator and real actions, and remains
+fully operable with `ZERO_COST_MODE=true`. Implementation record:
+`docs/watchlists-recommendations-alerts.md`.
 
 ### Milestone 10 - Application tracking and outcome ledger
 

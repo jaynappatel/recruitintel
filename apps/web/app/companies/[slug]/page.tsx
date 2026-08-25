@@ -9,6 +9,7 @@ import { DatabaseError } from "@/components/database-error";
 import { EmptyState } from "@/components/empty-state";
 import { EventList } from "@/components/event-list";
 import { JobList } from "@/components/job-list";
+import { WatchButton } from "@/components/personalization/watch-button";
 
 export const dynamic = "force-dynamic";
 
@@ -62,6 +63,7 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              <WatchButton entityId={company.id} entityType="COMPANY" />
               <Link
                 className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/8 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-white/14"
                 href={`/calendar?plan=1&companySlug=${company.slug}&companyName=${encodeURIComponent(company.canonicalName)}`}

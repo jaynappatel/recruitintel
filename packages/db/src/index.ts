@@ -9,6 +9,8 @@ export * from "./identity";
 export * from "./instrumentation";
 export * from "./orchestration";
 export * from "./opportunities";
+export * from "./recommendation-scoring";
+export * from "./personalization";
 
 export interface CompanyRecord {
   id: string;

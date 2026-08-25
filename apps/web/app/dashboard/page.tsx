@@ -10,6 +10,7 @@ import { EmptyState } from "@/components/empty-state";
 import { EventList } from "@/components/event-list";
 import { JobList } from "@/components/job-list";
 import { PageHeader } from "@/components/page-header";
+import { RecommendationsPanel } from "@/components/personalization/recommendations-panel";
 
 export const dynamic = "force-dynamic";
 
@@ -78,6 +79,19 @@ export default async function DashboardPage() {
             </div>
           </div>
         ))}
+      </section>
+
+      <section className="mb-8">
+        <div className="mb-4">
+          <div className="eyebrow mb-1">For you</div>
+          <h2 className="m-0 font-serif text-2xl font-semibold">
+            Canonical opportunities to review
+          </h2>
+          <p className="mt-1 mb-0 text-sm text-[var(--muted)]">
+            Deterministic priority from your explicit settings—not an estimate of hiring outcome.
+          </p>
+        </div>
+        <RecommendationsPanel compact />
       </section>
 
       <section className="mb-8">

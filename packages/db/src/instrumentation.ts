@@ -13,7 +13,15 @@ export type ProductEventType =
   | "OPPORTUNITY_VIEWED"
   | "SOURCE_POSTING_SELECTED"
   | "OPPORTUNITY_MERGED"
-  | "OPPORTUNITY_SPLIT";
+  | "OPPORTUNITY_SPLIT"
+  | "OPPORTUNITY_SAVED"
+  | "OPPORTUNITY_DISMISSED"
+  | "RECOMMENDATION_SHOWN"
+  | "RECOMMENDATION_OPENED"
+  | "ALERT_SHOWN"
+  | "ALERT_OPENED"
+  | "WATCHLIST_ADDED"
+  | "WATCHLIST_REMOVED";
 
 export interface ProductEventInput {
   userId: string;
@@ -25,7 +33,10 @@ export interface ProductEventInput {
     | "JOB"
     | "OPPORTUNITY"
     | "RECRUITER"
-    | "INTERVIEW_INTEL";
+    | "INTERVIEW_INTEL"
+    | "COMPANY"
+    | "SCHOOL"
+    | "ALERT";
   entityId?: string | null;
   requestId?: string | null;
   deduplicationKey?: string | null;

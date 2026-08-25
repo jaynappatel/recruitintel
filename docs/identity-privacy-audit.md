@@ -216,4 +216,9 @@ routes before ownership is migrated. Required verification includes:
 - account deletion including encrypted Calendar credential deletion;
 - `0005 -> 0006` realistic-state survival, migration/seed idempotency, workers, and production build.
 
-There is no Milestone 7 implementation in this change.
+M9 extends this boundary with private watchlists, recruiting preferences, opportunity dismissals,
+recommendation decisions/impressions, and alerts. Every new row has a user owner or is canonical
+public evidence; owner compound keys and authenticated repositories enforce isolation. Admin
+operational scopes do not grant access to private recommendation history. Account deletion cascades
+all M9 private rows and leaves only the existing minimized privacy-request record. Explicit
+work-authorization and sponsorship answers are optional user settings and are never inferred.

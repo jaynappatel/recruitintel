@@ -163,3 +163,13 @@ by the MIT-licensed Job Board Aggregator `scripts/merge_data.py`. Required notic
 No upstream implementation was vendored. No FreeHire location data or source catalogue and no Job
 Board Aggregator `data/` content (CC BY-NC 4.0) was imported. RecruitIntel did not adopt JBA's
 URL-only identity, fixed-age deletion, rotating user agents, or bundled scraper architecture.
+
+## M9 private intent boundary
+
+M9's `opportunity_change_events` ledger records canonical lifecycle/material changes without raw
+descriptions. Recommendations, dismissals, and alerts reference the canonical opportunity and its
+change version; source-posting duplicates never produce separate cards or alerts. A private watch
+on a superseded opportunity remains on its historical target and exposes a bounded successor chain.
+Only an explicit direct-successor policy may create a traceable follow-on watch. Splits remain
+ambiguous and require user action. See `docs/watchlists-recommendations-alerts.md` for the private
+state, deterministic score, and alert contract.
