@@ -1,5 +1,12 @@
+# ruff: noqa: E501
+import base64
+import hashlib
+import os
+import re
 from collections.abc import Mapping
 from pathlib import Path
+
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from recruitintel_collectors.adapters import GreenhouseCollector, LeverCollector
 from recruitintel_collectors.calendar.encryption import AesGcmCredentialCipher
@@ -71,15 +78,65 @@ class RuntimeWorkHandlers:
             raise ValueError("Resume parse work requires an owner and version")
         async with await self._orchestration._connect() as connection:
             cursor = await connection.execute(
-                "select 1 from public.resume_versions where id=%s and user_id=%s",
+                "select d.media_type,d.content_hash,d.storage_ciphertext,d.storage_nonce from public.resume_versions v join public.resume_documents d on d.id=v.document_id where v.id=%s and v.user_id=%s and d.user_id=v.user_id and d.status <> 'DELETED'",
                 (work.resume_version_id, work.user_id),
             )
-            if await cursor.fetchone() is None:
+            target = await cursor.fetchone()
+            if target is None:
                 raise ValueError("Resume version is not owned by work item user")
+            if target["storage_ciphertext"] is None or target["storage_nonce"] is None:
+                raise ValueError("Resume object is unavailable")
+            configured = os.environ.get("RESUME_STORAGE_KEY")
+            key = (
+                hashlib.sha256(b"recruitintel-m11-local-resume-storage").digest()
+                if configured is None
+                else (
+                    bytes.fromhex(configured)
+                    if re.fullmatch(r"[0-9a-fA-F]{64}", configured)
+                    else base64.b64decode(configured)
+                )
+            )
+            plaintext = AESGCM(key).decrypt(
+                bytes(target["storage_nonce"]),
+                bytes(target["storage_ciphertext"]),
+                f"{work.user_id}:{target['content_hash']}".encode(),
+            )
+            text = (
+                plaintext.decode("utf-8", errors="replace")
+                if target["media_type"] == "text/plain"
+                else " ".join(re.findall(r"\(([^()]*)\)\s*Tj", plaintext.decode("latin1")))
+            )
+            if len(text) > 200_000 or not text.strip():
+                raise ValueError("Resume text is unavailable or exceeds bounds")
+            skills = {
+                skill
+                for skill in (
+                    "python",
+                    "typescript",
+                    "javascript",
+                    "java",
+                    "react",
+                    "angular",
+                    "pytorch",
+                    "aws",
+                    "kubernetes",
+                    "sql",
+                )
+                if re.search(rf"(?i)(^|[^a-z0-9+#]){re.escape(skill)}($|[^a-z0-9+#])", text)
+            }
+            for skill in skills:
+                evidence_hash = hashlib.sha256(
+                    f"{work.resume_version_id}\0skill\0{skill}".encode()
+                ).hexdigest()
+                await connection.execute(
+                    "insert into public.candidate_evidence (user_id,resume_version_id,evidence_type,normalized_value,source,review_status,section,source_span,evidence_hash) values (%s,%s,'SKILL',jsonb_build_object('skill',%s),'DETERMINISTIC_PARSE','EXTRACTED','skills',%s,%s) on conflict (user_id,evidence_hash) do nothing",
+                    (work.user_id, work.resume_version_id, skill, text[:500], evidence_hash),
+                )
         return WorkExecutionResult(
             coverage=CoverageStatus.COMPLETE,
+            discovered=len(skills),
             processed=1,
-            diagnostics={"parserVersion": work.parser_version or 1},
+            diagnostics={"parserVersion": work.parser_version or 1, "evidenceCount": len(skills)},
         )
 
     async def match_materialize(self, work: ClaimedWork) -> WorkExecutionResult:
@@ -92,6 +149,38 @@ class RuntimeWorkHandlers:
             )
             if await cursor.fetchone() is None:
                 raise ValueError("Match resume version is not owned by work item user")
+            cursor = await connection.execute(
+                "select id from public.job_requirement_sets where opportunity_id=%s order by version desc limit 1",
+                (work.opportunity_id,),
+            )
+            requirement = await cursor.fetchone()
+            if requirement is None:
+                raise ValueError("Requirement set is unavailable")
+            cursor = await connection.execute(
+                "select id,evidence_hash,review_version from public.candidate_evidence where user_id=%s and resume_version_id=%s and superseded_at is null and review_status <> 'REJECTED'",
+                (work.user_id, work.resume_version_id),
+            )
+            evidence = await cursor.fetchall()
+            digest = hashlib.sha256(
+                "|".join(
+                    sorted(
+                        f"{row['id']}:{row['evidence_hash']}:{row['review_version']}"
+                        for row in evidence
+                    )
+                ).encode()
+            ).hexdigest()
+            await connection.execute(
+                "insert into public.resume_job_matches (user_id,resume_version_id,opportunity_id,requirement_set_id,eligibility,reason_codes,algorithm_version,idempotency_key,evidence_fingerprint) values (%s,%s,%s,%s,'UNKNOWN',ARRAY['WORKER_MATERIALIZED'],%s,%s,%s) on conflict (user_id,resume_version_id,opportunity_id,requirement_set_id,algorithm_version,evidence_fingerprint) do update set generated_at=now()",
+                (
+                    work.user_id,
+                    work.resume_version_id,
+                    work.opportunity_id,
+                    requirement["id"],
+                    work.algorithm_version or "resume-coverage-v1",
+                    f"{work.resume_version_id}:{work.opportunity_id}:{requirement['id']}:{digest}",
+                    digest,
+                ),
+            )
         return WorkExecutionResult(
             coverage=CoverageStatus.COMPLETE,
             processed=1,
