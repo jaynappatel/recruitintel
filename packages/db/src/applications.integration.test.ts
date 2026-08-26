@@ -18,6 +18,7 @@ import {
   openRecommendation,
   updateRecruitingPreferences,
 } from "./personalization";
+import { createResumeDocument, createResumeVersion, materializeResumeJobMatch } from "./resume";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? describe : describe.skip;
@@ -298,12 +299,29 @@ integration("M10 application lifecycle", () => {
     const item = recommendations.items[0];
     if (!item) throw new Error("Expected seeded opportunity recommendation");
     await openRecommendation(owner, item.impressionId);
+    const resumeDocument = await createResumeDocument(owner, {
+      originalFilename: "recommendation-match.txt",
+      mediaType: "text/plain",
+      bytes: "Python TypeScript",
+    });
+    const resumeVersion = await createResumeVersion(owner, resumeDocument.id, "Python TypeScript");
+    const match = await materializeResumeJobMatch(owner, resumeVersion.id, item.opportunity.id, {
+      rankingDecisionId: item.rankingDecisionId,
+      recommendationImpressionId: item.impressionId,
+    });
     const application = await createApplication(owner, {
       opportunityId: item.opportunity.id,
       cycleKey: "m10-recommendation-e2e",
       originRecommendationImpressionId: item.impressionId,
       applicationUrlUsed: "https://apply.example/recommendation-e2e",
     });
+    const bound = await (await import("./applications")).bindApplicationMatch(
+      owner,
+      application.id,
+      resumeVersion.id,
+      match.id,
+    );
+    expect(bound.matchId).toBe(match.id);
     await changeApplicationStatus(owner, application.id, {
       status: "APPLIED",
       idempotencyKey: "m10-recommendation-submit",
@@ -328,7 +346,7 @@ integration("M10 application lifecycle", () => {
     const sql = postgres(databaseUrl!, { max: 1 });
     try {
       const [link] = await sql`
-        select a.origin_recommendation_impression_id, i.ranking_decision_id,
+        select a.origin_recommendation_impression_id, a.match_id, i.ranking_decision_id,
           a.current_status::text as status, a.current_stage::text as stage,
           (select count(*)::int from public.application_events where application_id=a.id) as events
         from public.applications a
@@ -336,6 +354,7 @@ integration("M10 application lifecycle", () => {
         where a.id=${application.id}::uuid and a.user_id=${owner}::uuid
       `;
       expect(String(link?.origin_recommendation_impression_id)).toBe(item.impressionId);
+      expect(String(link?.match_id)).toBe(match.id);
       expect(link?.ranking_decision_id).toBeTruthy();
       expect(link?.status).toBe("OFFER");
       expect(link?.stage).toBe("OA");
