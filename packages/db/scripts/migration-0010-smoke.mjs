@@ -317,6 +317,8 @@ try {
     "0026_m11_claimed_access.sql",
     "0027_m11_claimed_match_access.sql",
     "0028_resume_match_unique_fix.sql",
+    "0029_m11_claimed_evidence_write.sql",
+    "0030_m11_claimed_evidence_write_fix.sql",
   ]);
   await apply(database, []);
   const [postCounts] = await database`
