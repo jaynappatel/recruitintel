@@ -278,6 +278,8 @@ export interface ResumeMatchRecord {
   reasonCodes: string[];
   algorithmVersion: string;
   generatedAt: string;
+  rankingDecisionId: string | null;
+  recommendationImpressionId: string | null;
 }
 
 function documentRecord(row: Row): ResumeDocumentRecord {
@@ -320,6 +322,9 @@ function matchRecord(row: Row): ResumeMatchRecord {
     reasonCodes: Array.isArray(row.reason_codes) ? row.reason_codes.map(String) : [],
     algorithmVersion: text(row.algorithm_version),
     generatedAt: text(iso(row.generated_at)),
+    rankingDecisionId: row.ranking_decision_id == null ? null : text(row.ranking_decision_id),
+    recommendationImpressionId:
+      row.recommendation_impression_id == null ? null : text(row.recommendation_impression_id),
   };
 }
 
@@ -410,6 +415,29 @@ export async function readResumeObject(userId: string, documentId: string): Prom
   });
 }
 
+export async function listResumeDocuments(userId: string): Promise<ResumeDocumentRecord[]> {
+  const rows =
+    await getDatabase()`select * from public.resume_documents where user_id=${userId}::uuid and status <> 'DELETED' order by created_at desc,id desc`;
+  return rows.map(documentRecord);
+}
+
+export async function getResumeDocument(
+  userId: string,
+  documentId: string,
+): Promise<ResumeDocumentRecord> {
+  const [row] =
+    await getDatabase()`select * from public.resume_documents where id=${documentId}::uuid and user_id=${userId}::uuid and status <> 'DELETED'`;
+  if (!row) throw new ResumeNotFoundError("Resume not found");
+  return documentRecord(row);
+}
+
+export async function getResumeMatch(userId: string, matchId: string): Promise<ResumeMatchRecord> {
+  const [row] =
+    await getDatabase()`select * from public.resume_job_matches where id=${matchId}::uuid and user_id=${userId}::uuid`;
+  if (!row) throw new ResumeNotFoundError("Match not found");
+  return matchRecord(row);
+}
+
 export async function deleteResumeDocument(userId: string, documentId: string): Promise<void> {
   await getDatabase()`update public.resume_documents set status='DELETED', deleted_at=coalesce(deleted_at, now()), storage_ciphertext=null, storage_nonce=null, storage_key=null where id=${documentId}::uuid and user_id=${userId}::uuid`;
 }
@@ -448,6 +476,22 @@ export async function createResumeVersion(
       skills,
     };
   });
+}
+
+export async function listResumeVersions(userId: string, documentId: string) {
+  const rows = await getDatabase()`select id, document_id, user_id, version_number, text_hash,
+    parser_version, created_at, superseded_at from public.resume_versions
+    where document_id=${documentId}::uuid and user_id=${userId}::uuid order by version_number desc`;
+  return rows.map((row) => ({
+    id: text(row.id),
+    documentId: text(row.document_id),
+    userId: text(row.user_id),
+    versionNumber: Number(row.version_number),
+    textHash: text(row.text_hash),
+    parserVersion: Number(row.parser_version),
+    createdAt: text(iso(row.created_at)),
+    supersededAt: row.superseded_at == null ? null : text(iso(row.superseded_at)),
+  }));
 }
 
 export async function listResumeEvidence(
@@ -547,6 +591,7 @@ export async function materializeResumeJobMatch(
   userId: string,
   resumeVersionId: string,
   opportunityId: string,
+  context: { rankingDecisionId?: string | null; recommendationImpressionId?: string | null } = {},
 ): Promise<ResumeMatchRecord> {
   return getDatabase().begin(async (tx) => {
     const [version] =
@@ -557,6 +602,16 @@ export async function materializeResumeJobMatch(
       throw new ResumeValidationError("Requirement set could not be materialized");
     const [opp] =
       await tx`select status::text as status, experience_level::text as experience_level, role_family::text as role_family from public.job_opportunities where id=${opportunityId}::uuid`;
+    if (context.rankingDecisionId || context.recommendationImpressionId) {
+      const [link] = await tx`select
+        ${context.rankingDecisionId ?? null}::uuid as ranking_decision_id,
+        ${context.recommendationImpressionId ?? null}::uuid as recommendation_impression_id
+        where (${context.rankingDecisionId ?? null}::uuid is null or exists (
+          select 1 from public.ranking_decisions where id=${context.rankingDecisionId ?? null}::uuid and user_id=${userId}::uuid))
+        and (${context.recommendationImpressionId ?? null}::uuid is null or exists (
+          select 1 from public.recommendation_impressions where id=${context.recommendationImpressionId ?? null}::uuid and user_id=${userId}::uuid and opportunity_id=${opportunityId}::uuid))`;
+      if (!link) throw new ResumeValidationError("Recommendation linkage is not owned by user");
+    }
     const evidence =
       await tx`select id,normalized_value,review_status,review_version,evidence_hash from public.candidate_evidence where user_id=${userId}::uuid and resume_version_id=${resumeVersionId}::uuid and superseded_at is null and review_status <> 'REJECTED'`;
     const skills = new Set(
@@ -613,6 +668,15 @@ export async function materializeResumeJobMatch(
       const matched = skills.has(key);
       await tx`insert into public.match_evidence (match_id,user_id,requirement_key,relation,reason_code,citation)
         values (${text(row.id)}::uuid,${userId}::uuid,${key},${matched ? "SATISFIES" : "UNKNOWN"}::public.match_relation,${matched ? "EXPLICIT_SKILL_EVIDENCE" : "NO_EXPLICIT_EVIDENCE"},${tx.json({ resumeVersionId })}) on conflict (match_id,requirement_key) do nothing`;
+    }
+    if (context.rankingDecisionId || context.recommendationImpressionId) {
+      await tx`update public.resume_job_matches set
+        ranking_decision_id=${context.rankingDecisionId ?? null}::uuid,
+        recommendation_impression_id=${context.recommendationImpressionId ?? null}::uuid
+        where id=${text(row.id)}::uuid and user_id=${userId}::uuid`;
+      const [linked] =
+        await tx`select * from public.resume_job_matches where id=${text(row.id)}::uuid and user_id=${userId}::uuid`;
+      return matchRecord(linked as Row);
     }
     return matchRecord(row);
   });

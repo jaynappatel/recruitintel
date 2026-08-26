@@ -31,6 +31,14 @@ from .enums import FailureClassification
 from .models import WorkFailure
 
 
+class M11PermanentError(ValueError):
+    """Safe, non-retryable M11 input failure."""
+
+
+class M11RetryableError(RuntimeError):
+    """Transient M11 storage/database failure."""
+
+
 def _seconds_until(value: datetime | None) -> int | None:
     if value is None:
         return None
@@ -38,6 +46,16 @@ def _seconds_until(value: datetime | None) -> int | None:
 
 
 def classify_failure(error: Exception) -> WorkFailure:
+    if isinstance(error, M11PermanentError):
+        return WorkFailure(
+            classification=FailureClassification.NON_RETRYABLE,
+            code="M11_INVALID_TARGET",
+        )
+    if isinstance(error, M11RetryableError):
+        return WorkFailure(
+            classification=FailureClassification.RETRYABLE,
+            code="M11_TRANSIENT_STORAGE",
+        )
     if isinstance(error, SearchProviderCostBlockedError):
         return WorkFailure(
             classification=FailureClassification.POLICY_BLOCKED,

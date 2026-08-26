@@ -45,6 +45,8 @@ export interface ApplicationRecord {
   applicationUrlUsed: string | null;
   applicationPlanId: string | null;
   originRecommendationImpressionId: string | null;
+  resumeVersionId: string | null;
+  matchId: string | null;
   targetSnapshot: Record<string, unknown>;
   nextActionType: string;
   nextActionAt: string | null;
@@ -89,6 +91,8 @@ function app(row: Row): ApplicationRecord {
       row.origin_recommendation_impression_id == null
         ? null
         : s(row.origin_recommendation_impression_id),
+    resumeVersionId: row.resume_version_id == null ? null : s(row.resume_version_id),
+    matchId: row.match_id == null ? null : s(row.match_id),
     targetSnapshot: (row.target_snapshot && typeof row.target_snapshot === "object"
       ? row.target_snapshot
       : {}) as Record<string, unknown>,
@@ -257,6 +261,32 @@ export async function archiveApplication(userId: string, id: string) {
   await getOwned(getDatabase(), userId, id);
   await getDatabase()`update public.applications set archived_at = coalesce(archived_at, now()), updated_at = now() where id = ${id}::uuid and user_id = ${userId}::uuid`;
   return getApplication(userId, id);
+}
+
+/** Bind the immutable resume/match inputs used for an application. */
+export async function bindApplicationMatch(
+  userId: string,
+  applicationId: string,
+  resumeVersionId: string,
+  matchId: string,
+) {
+  return getDatabase().begin(async (tx) => {
+    await getOwned(tx, userId, applicationId);
+    const [match] = await tx`select id, resume_version_id, opportunity_id
+      from public.resume_job_matches where id=${matchId}::uuid and user_id=${userId}::uuid`;
+    if (!match || String(match.resume_version_id) !== resumeVersionId)
+      throw new ApplicationValidationError("Match is not owned by application user/version");
+    const [application] = await tx`select opportunity_id from public.applications
+      where id=${applicationId}::uuid and user_id=${userId}::uuid`;
+    if (!application || String(application.opportunity_id) !== String(match.opportunity_id))
+      throw new ApplicationValidationError("Match opportunity does not match application");
+    const [row] = await tx`update public.applications set
+      resume_version_id=${resumeVersionId}::uuid, match_id=${matchId}::uuid, updated_at=now()
+      where id=${applicationId}::uuid and user_id=${userId}::uuid
+      returning *`;
+    if (!row) throw new ApplicationNotFoundError("Application not found");
+    return app(row as Row);
+  });
 }
 export async function getApplicationTimeline(userId: string, id: string) {
   await getOwned(getDatabase(), userId, id);

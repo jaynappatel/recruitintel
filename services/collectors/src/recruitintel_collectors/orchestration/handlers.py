@@ -44,6 +44,7 @@ from recruitintel_collectors.public_web.search import (
 
 from .dispatcher import WorkHandler
 from .enums import CoverageStatus, WorkType
+from .failures import M11PermanentError
 from .models import ClaimedWork, WorkExecutionResult
 from .repository import PostgresOrchestrationRepository
 
@@ -83,9 +84,9 @@ class RuntimeWorkHandlers:
             )
             target = await cursor.fetchone()
             if target is None:
-                raise ValueError("Resume version is not owned by work item user")
+                raise M11PermanentError("Resume version is not owned by work item user")
             if target["storage_ciphertext"] is None or target["storage_nonce"] is None:
-                raise ValueError("Resume object is unavailable")
+                raise M11PermanentError("Resume object is unavailable")
             configured = os.environ.get("RESUME_STORAGE_KEY")
             key = (
                 hashlib.sha256(b"recruitintel-m11-local-resume-storage").digest()
@@ -107,7 +108,7 @@ class RuntimeWorkHandlers:
                 else " ".join(re.findall(r"\(([^()]*)\)\s*Tj", plaintext.decode("latin1")))
             )
             if len(text) > 200_000 or not text.strip():
-                raise ValueError("Resume text is unavailable or exceeds bounds")
+                raise M11PermanentError("Resume text is unavailable or exceeds bounds")
             skills = {
                 skill
                 for skill in (
@@ -148,14 +149,14 @@ class RuntimeWorkHandlers:
                 (work.resume_version_id, work.user_id),
             )
             if await cursor.fetchone() is None:
-                raise ValueError("Match resume version is not owned by work item user")
+                raise M11PermanentError("Match resume version is not owned by work item user")
             cursor = await connection.execute(
                 "select id from public.job_requirement_sets where opportunity_id=%s order by version desc limit 1",
                 (work.opportunity_id,),
             )
             requirement = await cursor.fetchone()
             if requirement is None:
-                raise ValueError("Requirement set is unavailable")
+                raise M11PermanentError("Requirement set is unavailable")
             cursor = await connection.execute(
                 "select id,evidence_hash,review_version from public.candidate_evidence where user_id=%s and resume_version_id=%s and superseded_at is null and review_status <> 'REJECTED'",
                 (work.user_id, work.resume_version_id),

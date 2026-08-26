@@ -168,6 +168,42 @@ export async function createPrivacyRequest(
   return text(row?.id);
 }
 
+/** Policy-shaped private export. Secrets and encrypted object bytes are intentionally omitted. */
+export async function exportUserAccount(userId: string) {
+  const sql = getDatabase();
+  const [user] = await sql`select id, name, created_at from public.users where id=${userId}::uuid`;
+  if (!user) throw new Error("User not found");
+  const resumes =
+    await sql`select id, original_filename, media_type, byte_size, content_hash, status, created_at
+    from public.resume_documents where user_id=${userId}::uuid order by created_at,id`;
+  const versions =
+    await sql`select id, document_id, version_number, text_hash, parser_version, created_at, superseded_at
+    from public.resume_versions where user_id=${userId}::uuid order by created_at,id`;
+  const evidence =
+    await sql`select id, resume_version_id, evidence_type, normalized_value, source, review_status,
+    page_number, section, source_span, parser_version, revision, parent_evidence_id, created_at, superseded_at
+    from public.candidate_evidence where user_id=${userId}::uuid order by created_at,id`;
+  const matches =
+    await sql`select id, resume_version_id, opportunity_id, requirement_set_id, eligibility, score,
+    reason_codes, algorithm_version, generated_at, ranking_decision_id, recommendation_impression_id
+    from public.resume_job_matches where user_id=${userId}::uuid order by generated_at,id`;
+  const applications =
+    await sql`select id, opportunity_id, resume_version_id, match_id, current_status, current_stage,
+    cycle_key, created_at, updated_at from public.applications where user_id=${userId}::uuid order by created_at,id`;
+  return {
+    user: {
+      id: String(user.id),
+      name: String(user.name),
+      createdAt: new Date(user.created_at as string).toISOString(),
+    },
+    resumes,
+    versions,
+    evidence,
+    matches,
+    applications,
+  };
+}
+
 export async function deleteUserAccount(userId: string, privacyRequestId: string): Promise<void> {
   const sql = getDatabase();
   await sql.begin(async (transaction) => {

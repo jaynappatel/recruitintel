@@ -14,6 +14,7 @@ const allowedCapabilityRoles = new Set([
   "recruitintel_worker_global",
   "recruitintel_worker_calendar",
   "recruitintel_worker_privacy",
+  "recruitintel_worker_resume",
 ]);
 const allowedClasses = new Set([
   "ATS",
@@ -24,6 +25,7 @@ const allowedClasses = new Set([
   "CALENDAR",
   "PRIVACY",
   "CONTROL",
+  "RESUME",
 ]);
 const capabilityContract = {
   recruitintel_scheduler: {
@@ -41,6 +43,10 @@ const capabilityContract = {
   recruitintel_worker_privacy: {
     scope: "WORKER_PRIVACY",
     classes: new Set(["PRIVACY"]),
+  },
+  recruitintel_worker_resume: {
+    scope: "ORCHESTRATION_MUTATE",
+    classes: new Set(["RESUME"]),
   },
 };
 if (!databaseRole || !/^[a-z_][a-z0-9_]{0,62}$/.test(databaseRole)) {

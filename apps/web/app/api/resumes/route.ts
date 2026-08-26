@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createResumeDocument, ResumeValidationError } from "@recruitintel/db";
+import { createResumeDocument, listResumeDocuments, ResumeValidationError } from "@recruitintel/db";
 import { resumeUploadRequestSchema } from "@recruitintel/types";
 import { apiError, validationError, databaseApiError } from "@/lib/api";
 import { authenticatedUserOrResponse } from "@/lib/server/authorization";
@@ -31,4 +31,10 @@ export async function POST(request: Request) {
       return apiError(400, "INVALID_REQUEST", error.message);
     return databaseApiError(error);
   }
+}
+
+export async function GET(request: Request) {
+  const actor = await authenticatedUserOrResponse(request);
+  if (actor instanceof Response) return actor;
+  return NextResponse.json({ data: await listResumeDocuments(actor.user.id) });
 }
