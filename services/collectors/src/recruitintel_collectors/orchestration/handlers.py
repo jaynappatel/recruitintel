@@ -133,6 +133,17 @@ class RuntimeWorkHandlers:
                     "select public.m11_record_claimed_evidence(%s,%s,%s,%s)",
                     (work.id, skill, text[:500], evidence_hash),
                 )
+            await connection.execute(
+                "insert into public.resume_parse_runs (user_id,resume_version_id,status,parser_version,input_hash,diagnostics,error_code,idempotency_key,started_at,completed_at) values (%s,%s,'SUCCEEDED',%s,%s,%s::jsonb,null,%s,now(),now()) on conflict (user_id,resume_version_id,idempotency_key) do update set status='SUCCEEDED',completed_at=now(),diagnostics=excluded.diagnostics",
+                (
+                    work.user_id,
+                    work.resume_version_id,
+                    work.parser_version or 1,
+                    target["content_hash"],
+                    '{"bounded":true}' ,
+                    f"worker:{work.resume_version_id}:{work.parser_version or 1}",
+                ),
+            )
         return WorkExecutionResult(
             coverage=CoverageStatus.COMPLETE,
             discovered=len(skills),
