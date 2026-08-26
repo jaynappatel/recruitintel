@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -11,6 +12,7 @@ import {
   updateAssessment,
   updateInterview,
 } from "./applications";
+import { mergeOpportunities, splitOpportunity } from "./opportunities";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? describe : describe.skip;
@@ -267,6 +269,178 @@ integration("M10 application lifecycle", () => {
       expect(Number(counts?.interviews)).toBe(1);
       expect(Number(counts?.calendar_items)).toBe(1);
       expect(Number(counts?.reschedules)).toBe(1);
+    } finally {
+      await sql.end();
+    }
+  });
+});
+
+const resolutionCompanyId = randomUUID();
+const resolutionSourceId = randomUUID();
+const resolutionFirstJobId = randomUUID();
+const resolutionSecondJobId = randomUUID();
+const resolutionSuffix = resolutionCompanyId.replaceAll("-", "").slice(0, 12);
+
+integration("M10 application canonical opportunity resolution", () => {
+  let firstOpportunityId: string;
+  let secondOpportunityId: string;
+
+  beforeAll(async () => {
+    process.env.DATABASE_URL = databaseUrl;
+    const sql = postgres(databaseUrl!, { max: 1 });
+    try {
+      await sql`insert into public.users (id,name,email,email_verified,status)
+        values (${second}::uuid,'M10 Resolution Second','m10-resolution-second@example.test',true,'ACTIVE')
+        on conflict (id) do nothing`;
+      await sql`
+        insert into public.companies (id, canonical_name, slug, website, careers_url)
+        values (${resolutionCompanyId}::uuid, ${`M10 resolution ${resolutionSuffix}`}, ${`m10-resolution-${resolutionSuffix}`},
+          ${`https://${resolutionSuffix}.example.test`}, ${`https://${resolutionSuffix}.example.test/careers`})
+      `;
+      await sql`
+        insert into public.sources (id, company_id, source_type, provider, external_key, name, base_url,
+          reliability, source_policy_id)
+        values (${resolutionSourceId}::uuid, ${resolutionCompanyId}::uuid, 'ATS', 'greenhouse', ${resolutionSuffix},
+          'M10 resolution fixture', ${`https://boards.greenhouse.io/${resolutionSuffix}`}, 0.99,
+          (select id from public.source_policies where provider = 'greenhouse'))
+      `;
+      for (const [jobId, externalId, hash] of [
+        [resolutionFirstJobId, "m10-resolution-first", "c".repeat(64)],
+        [resolutionSecondJobId, "m10-resolution-second", "d".repeat(64)],
+      ] as const) {
+        await sql`
+          insert into public.jobs (id, company_id, source_id, external_id, title, description, location,
+            role_family, experience_level, employment_type, is_internship, application_url, source_url, content_hash)
+          values (${jobId}::uuid, ${resolutionCompanyId}::uuid, ${resolutionSourceId}::uuid, ${externalId},
+            'Software Engineer Intern', 'M10 resolution fixture', 'Austin, TX', 'SOFTWARE_ENGINEERING',
+            'INTERNSHIP', 'INTERNSHIP', true,
+            ${`https://boards.greenhouse.io/${resolutionSuffix}/jobs/${externalId}`},
+            ${`https://boards.greenhouse.io/${resolutionSuffix}/jobs/${externalId}`}, ${hash})
+        `;
+      }
+      const [first] = await sql`
+        select opportunity_id from public.job_opportunity_postings
+        where job_id = ${resolutionFirstJobId}::uuid and valid_to is null
+      `;
+      const [secondOpportunity] = await sql`
+        select opportunity_id from public.job_opportunity_postings
+        where job_id = ${resolutionSecondJobId}::uuid and valid_to is null
+      `;
+      if (!first || !secondOpportunity) throw new Error("resolution opportunities missing");
+      firstOpportunityId = String(first.opportunity_id);
+      secondOpportunityId = String(secondOpportunity.opportunity_id);
+    } finally {
+      await sql.end();
+    }
+  });
+
+  afterAll(async () => {
+    if (!databaseUrl) return;
+    const sql = postgres(databaseUrl, { max: 1 });
+    try {
+      await sql`delete from public.applications where user_id in (${owner}::uuid, ${second}::uuid)
+        and opportunity_id in (${firstOpportunityId}::uuid, ${secondOpportunityId}::uuid)
+        and cycle_key like 'm10-resolution-%'`;
+      await sql`delete from public.companies where id = ${resolutionCompanyId}::uuid`;
+    } finally {
+      await sql.end();
+    }
+  });
+
+  it("preserves private application targets through merge, split, and re-merge", async () => {
+    const userA = await createApplication(owner, {
+      opportunityId: secondOpportunityId,
+      sourcePostingId: resolutionSecondJobId,
+      cycleKey: "m10-resolution-a",
+      applicationUrlUsed: "https://apply.example/m10-resolution-a",
+    });
+    const userB = await createApplication(second, {
+      opportunityId: firstOpportunityId,
+      sourcePostingId: resolutionFirstJobId,
+      cycleKey: "m10-resolution-b",
+      applicationUrlUsed: "https://apply.example/m10-resolution-b",
+    });
+    await changeApplicationStatus(owner, userA.id, {
+      status: "APPLIED",
+      idempotencyKey: "m10-resolution-submit",
+    });
+    const assessment = await createAssessment(owner, userA.id, {
+      type: "OA",
+      idempotencyKey: "m10-resolution-oa",
+    });
+    if (!assessment) throw new Error("resolution assessment missing");
+    const interview = await createInterview(owner, userA.id, {
+      interviewType: "TECHNICAL",
+      startsAt: "2027-04-01T15:00:00.000Z",
+      endsAt: "2027-04-01T16:00:00.000Z",
+      timezone: "UTC",
+    });
+    const before = await getApplication(owner, userA.id);
+    const beforeTimeline = await getApplicationTimeline(owner, userA.id);
+
+    await mergeOpportunities({
+      winnerId: firstOpportunityId,
+      loserId: secondOpportunityId,
+      reason: "M10 application resolution merge",
+      idempotencyKey: "m10-resolution-merge",
+      actorUserId: owner,
+    });
+    const merged = await getApplication(owner, userA.id);
+    expect(merged.opportunityId).toBe(secondOpportunityId);
+    expect(merged.sourcePostingId).toBe(resolutionSecondJobId);
+    expect(merged.resolvedOpportunity?.id).toBe(firstOpportunityId);
+    expect(merged.resolutionMismatch).toBe(true);
+    expect(merged.currentStatus).toBe(before.currentStatus);
+    expect(merged.currentStage).toBe(before.currentStage);
+    expect((await getApplication(second, userB.id)).opportunityId).toBe(firstOpportunityId);
+    await expect(getApplication(second, userA.id)).rejects.toThrow();
+
+    await splitOpportunity({
+      opportunityId: firstOpportunityId,
+      sourcePostingId: resolutionSecondJobId,
+      reason: "M10 application resolution split",
+      idempotencyKey: "m10-resolution-split",
+      actorUserId: owner,
+    });
+    const split = await getApplication(owner, userA.id);
+    expect(split.opportunityId).toBe(secondOpportunityId);
+    expect(split.sourcePostingId).toBe(resolutionSecondJobId);
+    expect(split.resolvedOpportunity?.id).toBe(secondOpportunityId);
+    expect(split.resolutionMismatch).toBe(false);
+    expect(await getApplicationTimeline(owner, userA.id)).toHaveLength(beforeTimeline.length);
+
+    await mergeOpportunities({
+      winnerId: firstOpportunityId,
+      loserId: secondOpportunityId,
+      reason: "M10 application resolution re-merge",
+      idempotencyKey: "m10-resolution-remerge",
+      actorUserId: owner,
+    });
+    const remerged = await getApplication(owner, userA.id);
+    expect(remerged.opportunityId).toBe(secondOpportunityId);
+    expect(remerged.resolvedOpportunity?.id).toBe(firstOpportunityId);
+    expect(remerged.resolutionMismatch).toBe(true);
+    expect(await getApplicationTimeline(owner, userA.id)).toHaveLength(beforeTimeline.length);
+    const sql = postgres(databaseUrl!, { max: 1 });
+    try {
+      const [counts] = await sql`
+        select
+          (select count(*)::int from public.application_events where application_id = ${userA.id}::uuid) events,
+          (select count(*)::int from public.application_assessments where application_id = ${userA.id}::uuid) assessments,
+          (select count(*)::int from public.application_interviews where application_id = ${userA.id}::uuid) interviews,
+          (select id from public.application_interviews where application_id = ${userA.id}::uuid limit 1) interview_id,
+          (select count(*)::int from public.calendar_items where application_id = ${userA.id}::uuid and deleted_at is null) calendar_items,
+          (select count(*)::int from public.application_events where application_id = ${userA.id}::uuid and user_id = ${owner}::uuid) owned_events,
+          (select count(*)::int from public.job_resolution_decisions where company_id = ${resolutionCompanyId}::uuid
+            and idempotency_key in ('m10-resolution-merge','m10-resolution-split','m10-resolution-remerge')) decisions
+      `;
+      expect(Number(counts?.events)).toBe(beforeTimeline.length);
+      expect(Number(counts?.assessments)).toBe(1);
+      expect(Number(counts?.interviews)).toBe(1);
+      expect(String(counts?.interview_id)).toBe(interview.id);
+      expect(Number(counts?.calendar_items)).toBe(1);
+      expect(Number(counts?.owned_events)).toBe(beforeTimeline.length);
+      expect(Number(counts?.decisions)).toBe(3);
     } finally {
       await sql.end();
     }
