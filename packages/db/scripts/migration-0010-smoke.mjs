@@ -230,6 +230,23 @@ try {
   if (watchCounts.owner_count !== 1 || watchCounts.other_count !== 0) {
     throw new Error("M9 watchlist uniqueness or owner isolation failed");
   }
+  const [decision] = await database`
+    insert into public.ranking_decisions
+      (user_id, surface, candidate_set_version, ranking_algorithm,
+       ranking_algorithm_version, input_fingerprint, candidate_count)
+    values (${user.id}, 'migration-preservation', 'm10-fixture',
+      'deterministic-opportunity-priority', 'v1', ${"c".repeat(64)}, 1)
+    returning id
+  `;
+  const [impression] = await database`
+    insert into public.recommendation_impressions
+      (user_id, ranking_decision_id, item_type, item_id, opportunity_id,
+       rank_position, score, reason_codes)
+    values (${user.id}, ${decision.id}, 'OPPORTUNITY', ${postMigrationJob.id},
+      (select opportunity_id from public.job_opportunity_postings
+       where job_id = ${postMigrationJob.id} and valid_to is null), 1, 88,
+      array['MIGRATION_FIXTURE']) returning id
+  `;
   await database`set enable_seqscan = off`;
   const [watchPlan] = await database`
     explain (format json, costs off)
@@ -270,6 +287,55 @@ try {
     where user_id = ${user.id} and dedupe_fingerprint = ${fingerprint}
   `;
   if (alertCount.count !== 1) throw new Error("M9 alert deduplication was not transactional");
+  const [alert] = await database`
+    select id, user_id from public.alerts
+    where user_id = ${user.id} and dedupe_fingerprint = ${fingerprint}
+  `;
+
+  const [preCounts] = await database`
+    select
+      (select count(*)::int from public.watchlist_items where user_id=${user.id}) as watches,
+      (select count(*)::int from public.application_plans where id=${plan.id}) as plans,
+      (select count(*)::int from public.calendar_items where id=${calendar.id}) as calendar_items,
+      (select count(*)::int from public.job_opportunity_postings where job_id=${postMigrationJob.id} and valid_to is null) as memberships
+  `;
+  const ciphertextBefore = ciphertext;
+
+  await apply(database, [
+    "0014_application_tracking.sql",
+    "0015_baseline_repair.sql",
+    "0016_m10_runtime_completion.sql",
+    "0017_alert_enqueue_conflict_repair.sql",
+  ]);
+  await apply(database, []);
+  const [postCounts] = await database`
+    select
+      (select count(*)::int from public.watchlist_items where user_id=${user.id}) as watches,
+      (select count(*)::int from public.application_plans where id=${plan.id}) as plans,
+      (select count(*)::int from public.calendar_items where id=${calendar.id}) as calendar_items,
+      (select count(*)::int from public.job_opportunity_postings where job_id=${postMigrationJob.id} and valid_to is null) as memberships,
+      (select encrypted_refresh_token from public.calendar_connections where id=${connection.id}) as ciphertext,
+      (select count(*)::int from public.recommendation_impressions where id=${impression.id} and ranking_decision_id=${decision.id}) as impressions,
+      (select count(*)::int from public.alerts where id=${alert.id} and user_id=${user.id}) as alerts,
+      (select count(*)::int from public.users where id in (${user.id}, ${secondUser.id})) as users
+  `;
+  if (
+    postCounts.watches !== preCounts.watches ||
+    postCounts.plans !== preCounts.plans ||
+    postCounts.calendar_items !== preCounts.calendar_items ||
+    postCounts.memberships !== preCounts.memberships ||
+    postCounts.ciphertext !== ciphertextBefore ||
+    postCounts.impressions !== 1 ||
+    postCounts.alerts !== 1 ||
+    postCounts.users !== 2
+  ) {
+    throw new Error("M9 to M10 migration did not preserve private/shared state or ciphertext");
+  }
+  const [orphans] = await database`
+    select count(*)::int as count from public.application_plans p
+    left join public.users u on u.id=p.user_id where u.id is null
+  `;
+  if (orphans.count !== 0) throw new Error("private owner orphan detected after M10 migration");
 
   const [singleton] = await database`
     select count(*)::int as count from public.job_opportunity_postings
@@ -354,7 +420,7 @@ try {
   console.log(
     JSON.stringify({
       status: "ok",
-      migration: "0009 -> 0013 (M8 -> M9)",
+      migration: "0009 -> 0017 (M8 -> M10)",
       sourcePostingsPreserved: migrationState.jobs,
       singletonOpportunities: migrationState.opportunities,
       singletonMemberships: migrationState.memberships,
@@ -369,6 +435,8 @@ try {
       canonicalWatchPreserved: true,
       watchOwnerIsolation: true,
       alertDedupeConcurrency: true,
+      m9ToM10Preserved: true,
+      googleCiphertextByteIdentical: true,
       boundedRecommendationAndFanoutIndexes: true,
     }),
   );
