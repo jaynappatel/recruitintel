@@ -130,8 +130,8 @@ class RuntimeWorkHandlers:
                     f"{work.resume_version_id}\0skill\0{skill}".encode()
                 ).hexdigest()
                 await connection.execute(
-                    "insert into public.candidate_evidence (user_id,resume_version_id,evidence_type,normalized_value,source,review_status,section,source_span,evidence_hash) values (%s,%s,'SKILL',jsonb_build_object('skill',%s::text),'DETERMINISTIC_PARSE','EXTRACTED','skills',%s::text,%s::text) on conflict (user_id,evidence_hash) do nothing",
-                    (work.user_id, work.resume_version_id, skill, text[:500], evidence_hash),
+                    "select public.m11_record_claimed_evidence(%s,%s,%s,%s)",
+                    (work.id, skill, text[:500], evidence_hash),
                 )
         return WorkExecutionResult(
             coverage=CoverageStatus.COMPLETE,
