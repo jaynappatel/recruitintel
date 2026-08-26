@@ -152,4 +152,40 @@ integration("M11 resume evidence persistence", () => {
     expect(first.resumeVersionId).toBe(version.id);
     expect(second.resumeVersionId).toBe(version.id);
   });
+
+  it("enforces compound M11 ownership at the database boundary", async () => {
+    const a = await createResumeDocument(owner, {
+      originalFilename: "owner-a.txt",
+      mediaType: "text/plain",
+      bytes: "Python",
+    });
+    const b = await createResumeDocument(otherOwner, {
+      originalFilename: "owner-b.txt",
+      mediaType: "text/plain",
+      bytes: "React",
+    });
+    const av = await createResumeVersion(owner, a.id, "Python");
+    const bv = await createResumeVersion(otherOwner, b.id, "React");
+    const ae = (await listResumeEvidence(owner, av.id))[0]!;
+    const sql = postgres(databaseUrl!, { max: 1 });
+    await expect(readResumeObject(otherOwner, a.id)).rejects.toThrow();
+    await expect(sql`insert into public.candidate_evidence
+      (user_id,resume_version_id,evidence_type,normalized_value,source,evidence_hash)
+      values (${otherOwner}::uuid,${av.id}::uuid,'SKILL','{"skill":"Python"}'::jsonb,'DETERMINISTIC_PARSE',${"f".repeat(64)})`).rejects.toThrow();
+    const [opportunity] =
+      await sql`select id from public.job_opportunities where status='ACTIVE' limit 1`;
+    if (opportunity) {
+      const [application] =
+        await sql`select id from public.applications where user_id=${owner}::uuid limit 1`;
+      if (application) {
+        await expect(
+          sql`update public.applications set resume_version_id=${bv.id}::uuid where id=${String(application.id)}::uuid`,
+        ).rejects.toThrow();
+      }
+    }
+    await sql.end();
+    await expect(reviewResumeEvidence(otherOwner, ae.id, "CONFIRMED")).rejects.toThrow();
+    await expect(deleteResumeDocument(otherOwner, a.id)).resolves.toBeUndefined();
+    await expect(readResumeObject(owner, a.id)).resolves.toEqual(Buffer.from("Python"));
+  });
 });
