@@ -398,9 +398,10 @@ export async function createInterview(
   if (!row) throw new ApplicationConflictError("Interview could not be created");
   const [existingItem] =
     await getDatabase()`select id from public.calendar_items where user_id=${userId}::uuid and application_interview_id=${String(row.id)}::uuid and deleted_at is null limit 1`;
-  const item = existingItem
-    ? { id: String(existingItem.id) }
-    : await createCalendarItem(userId, {
+  let item = existingItem ? { id: String(existingItem.id) } : null;
+  if (!item) {
+    try {
+      item = await createCalendarItem(userId, {
         companyId: current.companyId,
         opportunityId: current.opportunityId,
         type: "CUSTOM",
@@ -415,6 +416,14 @@ export async function createInterview(
         applicationId,
         applicationInterviewId: String(row.id),
       });
+    } catch (error) {
+      if ((error as { code?: string }).code !== "23505") throw error;
+      const [concurrentItem] =
+        await getDatabase()`select id from public.calendar_items where user_id=${userId}::uuid and application_interview_id=${String(row.id)}::uuid and deleted_at is null limit 1`;
+      if (!concurrentItem) throw error;
+      item = { id: String(concurrentItem.id) };
+    }
+  }
   await getDatabase()`update public.application_interviews set calendar_item_id=${item.id}::uuid where id=${String(row.id)}::uuid and user_id=${userId}::uuid and calendar_item_id is null`;
   await getDatabase()`insert into public.application_events (application_id,user_id,event_type,from_status,to_status,from_stage,to_stage,interview_id,calendar_item_id,source,idempotency_key) values (${applicationId}::uuid,${userId}::uuid,'INTERVIEW_SCHEDULED',${current.currentStatus},'IN_PROCESS',${current.currentStage},'TECHNICAL_INTERVIEW',${String(row.id)}::uuid,${item.id}::uuid,'USER',${`interview-scheduled:${String(row.id)}`}) on conflict (user_id,idempotency_key) do nothing`;
   await createApplicationAlert({

@@ -128,6 +128,9 @@ integration("M10 application lifecycle", () => {
   });
 
   it("holds PostgreSQL invariants under concurrent application and alert writes", async () => {
+    const cleanup = postgres(databaseUrl!, { max: 1 });
+    await cleanup`delete from public.applications where user_id=${owner}::uuid and cycle_key='m10-race'`;
+    await cleanup.end();
     const results = await Promise.allSettled(
       [1, 2].map(() =>
         createApplication(owner, {
@@ -170,6 +173,100 @@ integration("M10 application lifecycle", () => {
         (select count(*)::int from public.alerts where user_id=${owner}::uuid and application_id=${app.id}::uuid and alert_type='APPLICATION_ACTION_DUE') alerts`;
       expect(Number(counts?.applications)).toBe(1);
       expect(Number(counts?.alerts)).toBe(1);
+    } finally {
+      await sql.end();
+    }
+  });
+
+  it("serializes identical status transitions and assessment completion", async () => {
+    const cleanup = postgres(databaseUrl!, { max: 1 });
+    await cleanup`delete from public.applications where user_id=${owner}::uuid and cycle_key='m10-status-race'`;
+    await cleanup.end();
+    const app = await createApplication(owner, {
+      opportunityId,
+      cycleKey: "m10-status-race",
+      applicationUrlUsed: "https://apply.example/status-race",
+    });
+    const statuses = await Promise.allSettled([
+      changeApplicationStatus(owner, app.id, { status: "APPLIED", idempotencyKey: "status-race" }),
+      changeApplicationStatus(owner, app.id, { status: "APPLIED", idempotencyKey: "status-race" }),
+    ]);
+    expect(statuses.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const assessment = await createAssessment(owner, app.id, {
+      type: "OA",
+      idempotencyKey: "assessment-race",
+    });
+    if (!assessment) throw new Error("assessment missing");
+    await Promise.all([
+      updateAssessment(owner, app.id, String(assessment.id), {
+        status: "COMPLETED",
+        completedAt: "2027-02-01T12:00:00.000Z",
+      }),
+      updateAssessment(owner, app.id, String(assessment.id), {
+        status: "COMPLETED",
+        completedAt: "2027-02-01T12:00:00.000Z",
+      }),
+    ]);
+    const sql = postgres(databaseUrl!, { max: 1 });
+    try {
+      const [counts] = await sql`select
+        (select count(*)::int from public.application_events where application_id=${app.id}::uuid and event_type='APPLICATION_SUBMITTED') submitted,
+        (select count(*)::int from public.application_events where application_id=${app.id}::uuid and event_type='OA_COMPLETED') completed,
+        (select status::text from public.application_assessments where id=${String(assessment.id)}::uuid) assessment_status`;
+      expect(Number(counts?.submitted)).toBe(1);
+      expect(Number(counts?.completed)).toBe(1);
+      expect(counts?.assessment_status).toBe("COMPLETED");
+    } finally {
+      await sql.end();
+    }
+  });
+
+  it("deduplicates concurrent interview scheduling and rescheduling", async () => {
+    const cleanup = postgres(databaseUrl!, { max: 1 });
+    await cleanup`delete from public.applications where user_id=${owner}::uuid and cycle_key='m10-interview-race'`;
+    await cleanup.end();
+    const app = await createApplication(owner, {
+      opportunityId,
+      cycleKey: "m10-interview-race",
+      applicationUrlUsed: "https://apply.example/interview-race",
+    });
+    const scheduled = await Promise.allSettled([
+      createInterview(owner, app.id, {
+        interviewType: "TECHNICAL",
+        startsAt: "2027-03-01T12:00:00.000Z",
+        endsAt: "2027-03-01T13:00:00.000Z",
+        timezone: "UTC",
+      }),
+      createInterview(owner, app.id, {
+        interviewType: "TECHNICAL",
+        startsAt: "2027-03-01T12:00:00.000Z",
+        endsAt: "2027-03-01T13:00:00.000Z",
+        timezone: "UTC",
+      }),
+    ]);
+    expect(scheduled.filter((result) => result.status === "fulfilled")).toHaveLength(2);
+    const interview = (
+      scheduled.find((result) => result.status === "fulfilled") as PromiseFulfilledResult<{
+        id: string;
+      }>
+    ).value;
+    await Promise.all([
+      updateInterview(owner, app.id, String(interview.id), {
+        startsAt: "2027-03-02T12:00:00.000Z",
+      }),
+      updateInterview(owner, app.id, String(interview.id), {
+        startsAt: "2027-03-02T12:00:00.000Z",
+      }),
+    ]);
+    const sql = postgres(databaseUrl!, { max: 1 });
+    try {
+      const [counts] = await sql`select
+        (select count(*)::int from public.application_interviews where application_id=${app.id}::uuid and status <> 'CANCELLED') interviews,
+        (select count(*)::int from public.calendar_items where application_id=${app.id}::uuid and application_interview_id=${interview.id}::uuid and deleted_at is null) calendar_items,
+        (select count(*)::int from public.application_events where application_id=${app.id}::uuid and event_type='INTERVIEW_RESCHEDULED') reschedules`;
+      expect(Number(counts?.interviews)).toBe(1);
+      expect(Number(counts?.calendar_items)).toBe(1);
+      expect(Number(counts?.reschedules)).toBe(1);
     } finally {
       await sql.end();
     }
