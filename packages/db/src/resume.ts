@@ -526,6 +526,26 @@ export async function listResumeVersions(userId: string, documentId: string) {
   }));
 }
 
+export async function listResumeParseRuns(userId: string, resumeVersionId: string) {
+  const rows = await getDatabase()`select id, resume_version_id, status, parser_version,
+    input_hash, diagnostics, error_code, idempotency_key, started_at, completed_at, created_at
+    from public.resume_parse_runs where user_id=${userId}::uuid and resume_version_id=${resumeVersionId}::uuid
+    order by created_at desc,id desc`;
+  return rows.map((row) => ({
+    id: text(row.id),
+    resumeVersionId: text(row.resume_version_id),
+    status: text(row.status),
+    parserVersion: Number(row.parser_version),
+    inputHash: text(row.input_hash),
+    diagnostics: (row.diagnostics ?? {}) as Record<string, unknown>,
+    errorCode: row.error_code == null ? null : text(row.error_code),
+    idempotencyKey: text(row.idempotency_key),
+    startedAt: row.started_at == null ? null : text(iso(row.started_at)),
+    completedAt: row.completed_at == null ? null : text(iso(row.completed_at)),
+    createdAt: text(iso(row.created_at)),
+  }));
+}
+
 export async function listResumeEvidence(
   userId: string,
   resumeVersionId?: string,

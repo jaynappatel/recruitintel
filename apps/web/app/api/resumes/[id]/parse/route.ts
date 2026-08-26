@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { enqueueM11Work } from "@recruitintel/db";
+import { listResumeParseRuns } from "@recruitintel/db";
 import { apiError, databaseApiError } from "@/lib/api";
 import { authenticatedUserOrResponse } from "@/lib/server/authorization";
 
@@ -24,6 +25,18 @@ export async function POST(request: Request, _context: { params: Promise<{ id: s
     });
     if (!work) return apiError(500, "INTERNAL_ERROR", "Parse work could not be queued");
     return NextResponse.json({ data: { id: work.id, status: work.status } }, { status: 202 });
+  } catch (error) {
+    return databaseApiError(error);
+  }
+}
+
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
+  const actor = await authenticatedUserOrResponse(request);
+  if (actor instanceof Response) return actor;
+  const versionId = new URL(request.url).searchParams.get("resumeVersionId");
+  if (!versionId) return apiError(400, "INVALID_REQUEST", "resumeVersionId is required");
+  try {
+    return NextResponse.json({ data: await listResumeParseRuns(actor.user.id, versionId) });
   } catch (error) {
     return databaseApiError(error);
   }
