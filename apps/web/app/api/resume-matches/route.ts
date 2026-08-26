@@ -16,6 +16,10 @@ export async function POST(request: Request) {
           actor.user.id,
           parsed.data.resumeVersionId,
           parsed.data.opportunityId,
+          {
+            rankingDecisionId: parsed.data.rankingDecisionId,
+            recommendationImpressionId: parsed.data.recommendationImpressionId,
+          },
         ),
       },
       { status: 201 },

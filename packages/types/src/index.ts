@@ -102,7 +102,12 @@ export const evidenceReviewRequestSchema = z
   })
   .strict();
 export const resumeMatchRequestSchema = z
-  .object({ opportunityId: z.uuid(), resumeVersionId: z.uuid() })
+  .object({
+    opportunityId: z.uuid(),
+    resumeVersionId: z.uuid(),
+    rankingDecisionId: z.uuid().nullable().optional(),
+    recommendationImpressionId: z.uuid().nullable().optional(),
+  })
   .strict();
 
 export const eventTypes = [
