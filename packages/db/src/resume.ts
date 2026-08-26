@@ -26,6 +26,7 @@ export const MATCH_ALGORITHM_VERSION = "resume-coverage-v1";
 
 export class ResumeValidationError extends Error {}
 export class ResumeNotFoundError extends Error {}
+export class ResumeConflictError extends Error {}
 
 export interface ResumeValidationResult {
   valid: boolean;
@@ -306,14 +307,25 @@ export async function reviewResumeEvidence(
   evidenceId: string,
   disposition: "CONFIRMED" | "REJECTED",
   reasonCode?: string,
+  expectedReviewVersion?: number,
 ) {
   return getDatabase().begin(async (tx) => {
     const [row] =
-      await tx`select * from public.candidate_evidence where id=${evidenceId}::uuid and user_id=${userId}::uuid`;
+      await tx`select * from public.candidate_evidence where id=${evidenceId}::uuid and user_id=${userId}::uuid for update`;
     if (!row) throw new ResumeNotFoundError("Evidence not found");
+    const currentVersion = Number(row.review_version ?? 0);
+    if (expectedReviewVersion != null && expectedReviewVersion !== currentVersion)
+      throw new ResumeConflictError("Evidence review is stale");
+    if (row.review_status === disposition) return evidenceRecord(row);
+    if (row.review_status !== "EXTRACTED" && row.review_status !== "UNKNOWN")
+      throw new ResumeConflictError("Evidence has already been reviewed");
     await tx`insert into public.evidence_confirmations (evidence_id,user_id,disposition,reason_code) values (${evidenceId}::uuid,${userId}::uuid,${disposition},${reasonCode ?? null})`;
-    await tx`update public.candidate_evidence set review_status=${disposition}::public.evidence_review_status where id=${evidenceId}::uuid and user_id=${userId}::uuid`;
-    return evidenceRecord({ ...row, review_status: disposition });
+    await tx`update public.candidate_evidence set review_status=${disposition}::public.evidence_review_status, review_version=review_version+1 where id=${evidenceId}::uuid and user_id=${userId}::uuid`;
+    return evidenceRecord({
+      ...row,
+      review_status: disposition,
+      review_version: currentVersion + 1,
+    });
   });
 }
 
@@ -322,12 +334,15 @@ export async function correctResumeEvidence(
   evidenceId: string,
   normalizedValue: Record<string, unknown>,
   reasonCode?: string,
+  expectedRevision?: number,
 ) {
   return getDatabase().begin(async (tx) => {
     const [rawOriginal] =
-      await tx`select * from public.candidate_evidence where id=${evidenceId}::uuid and user_id=${userId}::uuid and superseded_at is null`;
+      await tx`select * from public.candidate_evidence where id=${evidenceId}::uuid and user_id=${userId}::uuid and superseded_at is null for update`;
     const original = rawOriginal as Row | undefined;
     if (!original) throw new ResumeNotFoundError("Evidence not found");
+    if (expectedRevision != null && expectedRevision !== Number(original.revision ?? 1))
+      throw new ResumeConflictError("Evidence revision is stale");
     const [latest] =
       await tx`select coalesce(max(revision),0)::int as revision from public.candidate_evidence where user_id=${userId}::uuid and coalesce(parent_evidence_id,id)=coalesce(${evidenceId}::uuid,${evidenceId}::uuid)`;
     const revision = Number(latest?.revision ?? 0) + 1;
@@ -336,7 +351,7 @@ export async function correctResumeEvidence(
       (user_id,resume_version_id,evidence_type,normalized_value,source,review_status,page_number,section,source_span,parser_version,evidence_hash,revision,parent_evidence_id)
       values (${userId}::uuid,${nullableText(original.resume_version_id)},${text(original.evidence_type)},${tx.json(normalizedValue as never)},'USER_CORRECTED','CONFIRMED',${typeof original.page_number === "number" ? original.page_number : null},${nullableText(original.section)},${nullableText(original.source_span)},${Number(original.parser_version ?? 1)},${evidenceHash},${revision},${evidenceId}::uuid) returning *`;
     if (!row) throw new ResumeValidationError("Evidence correction could not be created");
-    await tx`update public.candidate_evidence set superseded_at=now(), review_status='SUPERSEDED' where id=${evidenceId}::uuid and user_id=${userId}::uuid`;
+    await tx`update public.candidate_evidence set superseded_at=now(), review_status='SUPERSEDED', review_version=review_version+1 where id=${evidenceId}::uuid and user_id=${userId}::uuid`;
     await tx`insert into public.evidence_confirmations (evidence_id,user_id,disposition,replacement_evidence_id,reason_code) values (${evidenceId}::uuid,${userId}::uuid,'SUPERSEDED',${text(row.id)}::uuid,${reasonCode ?? "USER_CORRECTION"})`;
     return evidenceRecord(row as Row);
   });
@@ -385,11 +400,20 @@ export async function materializeResumeJobMatch(
     const [opp] =
       await tx`select status::text as status, experience_level::text as experience_level, role_family::text as role_family from public.job_opportunities where id=${opportunityId}::uuid`;
     const evidence =
-      await tx`select normalized_value,review_status from public.candidate_evidence where user_id=${userId}::uuid and resume_version_id=${resumeVersionId}::uuid and review_status <> 'REJECTED'`;
+      await tx`select id,normalized_value,review_status,review_version,evidence_hash from public.candidate_evidence where user_id=${userId}::uuid and resume_version_id=${resumeVersionId}::uuid and superseded_at is null and review_status <> 'REJECTED'`;
     const skills = new Set(
       evidence
         .filter((e) => e.evidence_type === "SKILL")
         .map((e) => String((e.normalized_value as Row).skill).toLowerCase()),
+    );
+    const evidenceFingerprint = hash(
+      evidence
+        .map(
+          (e) =>
+            `${text(e.id)}:${text(e.evidence_hash)}:${Number(e.review_version ?? 0)}:${text(e.review_status)}`,
+        )
+        .sort()
+        .join("|") || "none",
     );
     const req = (requirementSet.requirements ?? {}) as Row;
     const required = Array.isArray(req.requirements) ? req.requirements : [];
@@ -422,9 +446,9 @@ export async function materializeResumeJobMatch(
             ? ["REQUIREMENTS_UNSUPPORTED"]
             : ["ALL_EXPLICIT_SKILLS_SUPPORTED"];
     const [rawRow] =
-      await tx`insert into public.resume_job_matches (user_id,resume_version_id,opportunity_id,requirement_set_id,eligibility,score,reason_codes,algorithm_version,idempotency_key)
-      values (${userId}::uuid,${resumeVersionId}::uuid,${opportunityId}::uuid,${text(requirementSet.id)}::uuid,${eligibility}::public.match_eligibility,${score},${tx.array(reasons)},${MATCH_ALGORITHM_VERSION},${`${resumeVersionId}:${opportunityId}:${text(requirementSet.id)}:${MATCH_ALGORITHM_VERSION}`})
-      on conflict (user_id,resume_version_id,opportunity_id,requirement_set_id,algorithm_version) do update set generated_at=now() returning *`;
+      await tx`insert into public.resume_job_matches (user_id,resume_version_id,opportunity_id,requirement_set_id,eligibility,score,reason_codes,algorithm_version,idempotency_key,evidence_fingerprint)
+      values (${userId}::uuid,${resumeVersionId}::uuid,${opportunityId}::uuid,${text(requirementSet.id)}::uuid,${eligibility}::public.match_eligibility,${score},${tx.array(reasons)},${MATCH_ALGORITHM_VERSION},${`${resumeVersionId}:${opportunityId}:${text(requirementSet.id)}:${MATCH_ALGORITHM_VERSION}:${evidenceFingerprint}`},${evidenceFingerprint})
+      on conflict (user_id,resume_version_id,opportunity_id,requirement_set_id,algorithm_version,evidence_fingerprint) do update set generated_at=now() returning *`;
     const row = rawRow as Row | undefined;
     if (!row) throw new ResumeValidationError("Match could not be materialized");
     for (const key of skillReqs) {

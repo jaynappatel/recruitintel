@@ -7,7 +7,9 @@ import {
   createResumeVersion,
   deleteResumeDocument,
   listResumeEvidence,
+  materializeResumeJobMatch,
   readResumeObject,
+  ResumeConflictError,
   reviewResumeEvidence,
 } from "./resume";
 
@@ -77,5 +79,77 @@ integration("M11 resume evidence persistence", () => {
     expect(row?.storage_key).toBeNull();
     expect(row?.storage_ciphertext).toBeNull();
     expect(row?.storage_nonce).toBeNull();
+  });
+
+  it("serializes concurrent reviews and rejects stale evidence clients", async () => {
+    const document = await createResumeDocument(owner, {
+      originalFilename: "concurrency.txt",
+      mediaType: "text/plain",
+      bytes: "Python and React",
+    });
+    const version = await createResumeVersion(owner, document.id, "Python and React");
+    const evidence = (await listResumeEvidence(owner, version.id))[0]!;
+    const results = await Promise.allSettled([
+      reviewResumeEvidence(owner, evidence.id, "CONFIRMED", undefined, 0),
+      reviewResumeEvidence(owner, evidence.id, "CONFIRMED", undefined, 0),
+    ]);
+    expect(results.filter((item) => item.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((item) => item.status === "rejected")).toHaveLength(1);
+    const sql = postgres(databaseUrl!, { max: 1 });
+    const confirmations =
+      await sql`select count(*)::int as count from public.evidence_confirmations where evidence_id=${evidence.id}::uuid`;
+    await sql.end();
+    expect(Number(confirmations[0]?.count)).toBe(1);
+    await expect(
+      reviewResumeEvidence(owner, evidence.id, "REJECTED", undefined, 0),
+    ).rejects.toBeInstanceOf(ResumeConflictError);
+  });
+
+  it("allows only one competing correction and preserves the original claim", async () => {
+    const document = await createResumeDocument(owner, {
+      originalFilename: "correction-race.txt",
+      mediaType: "text/plain",
+      bytes: "Python",
+    });
+    const version = await createResumeVersion(owner, document.id, "Python");
+    const evidence = (await listResumeEvidence(owner, version.id))[0]!;
+    const outcomes = await Promise.allSettled([
+      correctResumeEvidence(owner, evidence.id, { skill: "Python" }, undefined, 1),
+      correctResumeEvidence(
+        owner,
+        evidence.id,
+        { skill: "Python", framework: "FastAPI" },
+        undefined,
+        1,
+      ),
+    ]);
+    expect(outcomes.filter((item) => item.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.filter((item) => item.status === "rejected")).toHaveLength(1);
+    const history = await listResumeEvidence(owner, version.id);
+    expect(
+      history.some((item) => item.id === evidence.id && item.reviewStatus === "SUPERSEDED"),
+    ).toBe(true);
+    expect(history.filter((item) => item.source === "USER_CORRECTED")).toHaveLength(1);
+  });
+
+  it("creates a new match version when evidence changes", async () => {
+    const sql = postgres(databaseUrl!, { max: 1 });
+    const [opportunity] =
+      await sql`select id from public.job_opportunities where status='ACTIVE' limit 1`;
+    await sql.end();
+    if (!opportunity) return;
+    const document = await createResumeDocument(owner, {
+      originalFilename: "match-version.txt",
+      mediaType: "text/plain",
+      bytes: "Python",
+    });
+    const version = await createResumeVersion(owner, document.id, "Python");
+    const evidence = (await listResumeEvidence(owner, version.id))[0]!;
+    const first = await materializeResumeJobMatch(owner, version.id, String(opportunity.id));
+    await correctResumeEvidence(owner, evidence.id, { skill: "Python", framework: "FastAPI" });
+    const second = await materializeResumeJobMatch(owner, version.id, String(opportunity.id));
+    expect(second.id).not.toBe(first.id);
+    expect(first.resumeVersionId).toBe(version.id);
+    expect(second.resumeVersionId).toBe(version.id);
   });
 });
