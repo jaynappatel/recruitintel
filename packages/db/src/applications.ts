@@ -52,6 +52,8 @@ export interface ApplicationRecord {
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  resolvedOpportunity: { id: string; title: string; status: string } | null;
+  resolutionMismatch: boolean;
 }
 export interface ApplicationEventRecord {
   id: string;
@@ -96,8 +98,24 @@ function app(row: Row): ApplicationRecord {
     archivedAt: t(row.archived_at),
     createdAt: s(t(row.created_at)),
     updatedAt: s(t(row.updated_at)),
+    resolvedOpportunity: row.resolved_opportunity_id
+      ? {
+          id: s(row.resolved_opportunity_id),
+          title: s(row.resolved_opportunity_title),
+          status: s(row.resolved_opportunity_status),
+        }
+      : null,
+    resolutionMismatch: Boolean(row.resolution_mismatch),
   };
 }
+
+const applicationSelect = `select a.*, resolved.id as resolved_opportunity_id,
+  resolved.status::text as resolved_opportunity_status, resolved_canonical.title as resolved_opportunity_title,
+  (a.opportunity_id is distinct from coalesce(membership.opportunity_id, a.opportunity_id)) as resolution_mismatch
+  from public.applications a
+  left join public.job_opportunity_postings membership on membership.job_id=a.source_posting_id and membership.valid_to is null
+  left join public.job_opportunities resolved on resolved.id=coalesce(membership.opportunity_id,a.opportunity_id)
+  left join public.jobs resolved_canonical on resolved_canonical.id=resolved.canonical_source_posting_id`;
 function event(row: Row): ApplicationEventRecord {
   return {
     id: s(row.id),
@@ -121,8 +139,10 @@ function event(row: Row): ApplicationEventRecord {
 }
 
 async function getOwned(sql: Query, userId: string, id: string): Promise<ApplicationRecord> {
-  const [row] =
-    await sql`select * from public.applications where id = ${id}::uuid and user_id = ${userId}::uuid`;
+  const [row] = await sql.unsafe(
+    `${applicationSelect} where a.id = $1::uuid and a.user_id = $2::uuid`,
+    [id, userId],
+  );
   if (!row) throw new ApplicationNotFoundError("Application not found");
   return app(row);
 }
@@ -211,8 +231,10 @@ export async function listApplications(
   } = {},
 ) {
   const limit = Math.min(Math.max(options.limit ?? 25, 1), 100);
-  const rows =
-    await getDatabase()`select * from public.applications where user_id = ${userId}::uuid ${options.status ? getDatabase().unsafe("and current_status = $1::public.application_status", [options.status]) : getDatabase().unsafe("", [])} ${options.companyId ? getDatabase().unsafe("and company_id = $1::uuid", [options.companyId]) : getDatabase().unsafe("", [])} ${options.includeArchived ? getDatabase().unsafe("", []) : getDatabase().unsafe("and archived_at is null", [])} order by updated_at desc, id desc limit ${limit}`;
+  const rows = await getDatabase().unsafe(
+    `${applicationSelect} where a.user_id = $1::uuid ${options.status ? "and a.current_status = $2::public.application_status" : ""} ${options.companyId ? "and a.company_id = $3::uuid" : ""} ${options.includeArchived ? "" : "and a.archived_at is null"} order by a.updated_at desc, a.id desc limit ${limit}`,
+    [userId, options.status ?? null, options.companyId ?? null],
+  );
   const last = rows[rows.length - 1];
   return { items: rows.map(app), nextCursor: rows.length === limit && last ? s(last.id) : null };
 }
@@ -323,6 +345,17 @@ export async function createAssessment(
         : null;
     await getDatabase()`insert into public.application_events (application_id,user_id,event_type,from_status,to_status,from_stage,to_stage,assessment_id,calendar_item_id,source,idempotency_key) values (${applicationId}::uuid,${userId}::uuid,'OA_RECEIVED',${current.currentStatus},'IN_PROCESS',${current.currentStage},'OA',${String(row.id)}::uuid,${calendarItemId}::uuid,'USER',${`oa-received:${String(row.id)}`}) on conflict (user_id,idempotency_key) do nothing`;
     await getDatabase()`update public.applications set current_status='IN_PROCESS', current_stage='OA', next_action_type='COMPLETE_OA', next_action_at=${input.dueAt ?? null}::timestamptz, updated_at=now() where id=${applicationId}::uuid and user_id=${userId}::uuid`;
+    if (input.dueAt) {
+      await createApplicationAlert({
+        userId,
+        applicationId,
+        alertType: "OA_DEADLINE_APPROACHING",
+        reminderWindow: "DUE",
+        title: "Online assessment deadline",
+        body: "Your online assessment deadline is approaching.",
+        reasonCodes: ["OA_DEADLINE"],
+      });
+    }
   }
   return row;
 }
@@ -384,6 +417,15 @@ export async function createInterview(
       });
   await getDatabase()`update public.application_interviews set calendar_item_id=${item.id}::uuid where id=${String(row.id)}::uuid and user_id=${userId}::uuid and calendar_item_id is null`;
   await getDatabase()`insert into public.application_events (application_id,user_id,event_type,from_status,to_status,from_stage,to_stage,interview_id,calendar_item_id,source,idempotency_key) values (${applicationId}::uuid,${userId}::uuid,'INTERVIEW_SCHEDULED',${current.currentStatus},'IN_PROCESS',${current.currentStage},'TECHNICAL_INTERVIEW',${String(row.id)}::uuid,${item.id}::uuid,'USER',${`interview-scheduled:${String(row.id)}`}) on conflict (user_id,idempotency_key) do nothing`;
+  await createApplicationAlert({
+    userId,
+    applicationId,
+    alertType: "INTERVIEW_UPCOMING",
+    reminderWindow: "NONE",
+    title: "Upcoming interview",
+    body: "You have an upcoming interview for this application.",
+    reasonCodes: ["INTERVIEW_SCHEDULED"],
+  });
   return row;
 }
 
@@ -418,7 +460,7 @@ export async function createApplicationAlert(input: {
   userId: string;
   applicationId: string;
   alertType: "APPLICATION_ACTION_DUE" | "OA_DEADLINE_APPROACHING" | "INTERVIEW_UPCOMING";
-  reminderWindow: "NONE" | "SEVEN_DAY" | "THREE_DAY" | "ONE_DAY";
+  reminderWindow: "NONE" | "SEVEN_DAY" | "THREE_DAY" | "ONE_DAY" | "DUE";
   title: string;
   body: string;
   reasonCodes: string[];

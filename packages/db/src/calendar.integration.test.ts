@@ -30,6 +30,9 @@ async function reset() {
   if (!databaseUrl) return;
   const sql = postgres(databaseUrl, { max: 1 });
   try {
+    await sql`delete from public.work_items where user_id in (${userId}::uuid, ${otherUserId}::uuid) or requesting_user_id in (${userId}::uuid, ${otherUserId}::uuid)`;
+    await sql`delete from public.work_items where work_type in ('ALERT_EVALUATE', 'ALERT_FANOUT')`;
+    await sql`delete from public.calendar_sync_requests where user_id in (${userId}::uuid, ${otherUserId}::uuid)`;
     await sql`delete from public.calendar_oauth_states where user_id = ${userId}::uuid`;
     await sql`delete from public.calendar_connections where user_id = ${userId}::uuid`;
     await sql`delete from public.calendar_items where user_id = ${userId}::uuid`;
