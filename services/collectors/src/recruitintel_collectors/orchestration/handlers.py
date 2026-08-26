@@ -130,7 +130,7 @@ class RuntimeWorkHandlers:
                     f"{work.resume_version_id}\0skill\0{skill}".encode()
                 ).hexdigest()
                 await connection.execute(
-                    "insert into public.candidate_evidence (user_id,resume_version_id,evidence_type,normalized_value,source,review_status,section,source_span,evidence_hash) values (%s,%s,'SKILL',jsonb_build_object('skill',%s),'DETERMINISTIC_PARSE','EXTRACTED','skills',%s,%s) on conflict (user_id,evidence_hash) do nothing",
+                    "insert into public.candidate_evidence (user_id,resume_version_id,evidence_type,normalized_value,source,review_status,section,source_span,evidence_hash) values (%s,%s,'SKILL',jsonb_build_object('skill',%s::text),'DETERMINISTIC_PARSE','EXTRACTED','skills',%s::text,%s::text) on conflict (user_id,evidence_hash) do nothing",
                     (work.user_id, work.resume_version_id, skill, text[:500], evidence_hash),
                 )
         return WorkExecutionResult(
@@ -145,27 +145,22 @@ class RuntimeWorkHandlers:
             raise ValueError("Match work requires owner, resume version, and opportunity")
         async with await self._orchestration._connect() as connection:
             cursor = await connection.execute(
-                "select 1 from public.resume_versions where id=%s and user_id=%s",
-                (work.resume_version_id, work.user_id),
+                "select requirement_set_id from public.m11_claimed_match_inputs(%s) limit 1",
+                (work.id,),
             )
-            if await cursor.fetchone() is None:
+            claimed = await cursor.fetchone()
+            if claimed is None:
                 raise M11PermanentError("Match resume version is not owned by work item user")
             cursor = await connection.execute(
-                "select id from public.job_requirement_sets where opportunity_id=%s order by version desc limit 1",
-                (work.opportunity_id,),
-            )
-            requirement = await cursor.fetchone()
-            if requirement is None:
-                raise M11PermanentError("Requirement set is unavailable")
-            cursor = await connection.execute(
-                "select id,evidence_hash,review_version from public.candidate_evidence where user_id=%s and resume_version_id=%s and superseded_at is null and review_status <> 'REJECTED'",
-                (work.user_id, work.resume_version_id),
+                "select evidence_id,evidence_hash,review_version,requirement_set_id from public.m11_claimed_match_inputs(%s)",
+                (work.id,),
             )
             evidence = await cursor.fetchall()
+            requirement = evidence[0] if evidence else claimed
             digest = hashlib.sha256(
                 "|".join(
                     sorted(
-                        f"{row['id']}:{row['evidence_hash']}:{row['review_version']}"
+                        f"{row['evidence_id']}:{row['evidence_hash']}:{row['review_version']}"
                         for row in evidence
                     )
                 ).encode()
@@ -176,9 +171,9 @@ class RuntimeWorkHandlers:
                     work.user_id,
                     work.resume_version_id,
                     work.opportunity_id,
-                    requirement["id"],
+                    requirement["requirement_set_id"],
                     work.algorithm_version or "resume-coverage-v1",
-                    f"{work.resume_version_id}:{work.opportunity_id}:{requirement['id']}:{digest}",
+                    f"{work.resume_version_id}:{work.opportunity_id}:{requirement['requirement_set_id']}:{digest}",
                     digest,
                 ),
             )
