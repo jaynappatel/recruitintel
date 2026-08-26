@@ -306,6 +306,11 @@ try {
     "0015_baseline_repair.sql",
     "0016_m10_runtime_completion.sql",
     "0017_alert_enqueue_conflict_repair.sql",
+    "0018_application_calendar_idempotency.sql",
+    "0019_resume_evidence_matching.sql",
+    "0020_evidence_corrections.sql",
+    "0021_resume_object_storage.sql",
+    "0022_resume_match_versioning.sql",
   ]);
   await apply(database, []);
   const [postCounts] = await database`
@@ -318,6 +323,9 @@ try {
       (select count(*)::int from public.recommendation_impressions where id=${impression.id} and ranking_decision_id=${decision.id}) as impressions,
       (select count(*)::int from public.alerts where id=${alert.id} and user_id=${user.id}) as alerts,
       (select count(*)::int from public.users where id in (${user.id}, ${secondUser.id})) as users
+      ,(select count(*)::int from public.resume_documents where user_id=${user.id}) as resume_documents
+      ,(select count(*)::int from public.resume_versions where user_id=${user.id}) as resume_versions
+      ,(select count(*)::int from public.candidate_evidence where user_id=${user.id}) as evidence
   `;
   if (
     postCounts.watches !== preCounts.watches ||
@@ -327,7 +335,10 @@ try {
     postCounts.ciphertext !== ciphertextBefore ||
     postCounts.impressions !== 1 ||
     postCounts.alerts !== 1 ||
-    postCounts.users !== 2
+    postCounts.users !== 2 ||
+    postCounts.resume_documents !== 0 ||
+    postCounts.resume_versions !== 0 ||
+    postCounts.evidence !== 0
   ) {
     throw new Error("M9 to M10 migration did not preserve private/shared state or ciphertext");
   }
@@ -420,7 +431,7 @@ try {
   console.log(
     JSON.stringify({
       status: "ok",
-      migration: "0009 -> 0017 (M8 -> M10)",
+      migration: "0009 -> 0022 (M8 -> M11)",
       sourcePostingsPreserved: migrationState.jobs,
       singletonOpportunities: migrationState.opportunities,
       singletonMemberships: migrationState.memberships,
@@ -436,6 +447,7 @@ try {
       watchOwnerIsolation: true,
       alertDedupeConcurrency: true,
       m9ToM10Preserved: true,
+      m10ToM11Preserved: true,
       googleCiphertextByteIdentical: true,
       boundedRecommendationAndFanoutIndexes: true,
     }),
