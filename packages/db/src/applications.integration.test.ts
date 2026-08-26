@@ -126,4 +126,52 @@ integration("M10 application lifecycle", () => {
       await sql.end();
     }
   });
+
+  it("holds PostgreSQL invariants under concurrent application and alert writes", async () => {
+    const results = await Promise.allSettled(
+      [1, 2].map(() =>
+        createApplication(owner, {
+          opportunityId,
+          cycleKey: "m10-race",
+          applicationUrlUsed: "https://apply.example/race",
+        }),
+      ),
+    );
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const app = (
+      results.find((result) => result.status === "fulfilled") as PromiseFulfilledResult<
+        Awaited<ReturnType<typeof createApplication>>
+      >
+    ).value;
+    await Promise.all([
+      createApplicationAlert({
+        userId: owner,
+        applicationId: app.id,
+        alertType: "APPLICATION_ACTION_DUE",
+        reminderWindow: "DUE",
+        title: "Action",
+        body: "Action due",
+        reasonCodes: ["NEXT_ACTION"],
+      }),
+      createApplicationAlert({
+        userId: owner,
+        applicationId: app.id,
+        alertType: "APPLICATION_ACTION_DUE",
+        reminderWindow: "DUE",
+        title: "Action",
+        body: "Action due",
+        reasonCodes: ["NEXT_ACTION"],
+      }),
+    ]);
+    const sql = postgres(databaseUrl!, { max: 1 });
+    try {
+      const [counts] = await sql`select
+        (select count(*)::int from public.applications where user_id=${owner}::uuid and opportunity_id=${opportunityId}::uuid and cycle_key='m10-race' and archived_at is null) applications,
+        (select count(*)::int from public.alerts where user_id=${owner}::uuid and application_id=${app.id}::uuid and alert_type='APPLICATION_ACTION_DUE') alerts`;
+      expect(Number(counts?.applications)).toBe(1);
+      expect(Number(counts?.alerts)).toBe(1);
+    } finally {
+      await sql.end();
+    }
+  });
 });
