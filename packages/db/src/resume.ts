@@ -23,6 +23,164 @@ const hash = (value: string | Buffer) => createHash("sha256").update(value).dige
 
 export const RESUME_PARSER_VERSION = 1;
 export const MATCH_ALGORITHM_VERSION = "resume-coverage-v1";
+export const REQUIREMENT_ALGORITHM_VERSION = "requirements-v2";
+
+export type RequirementLevel = "REQUIRED" | "PREFERRED" | "INFORMATIONAL";
+export interface ExactJobRequirement {
+  key: string;
+  type: string;
+  normalizedValue: Record<string, unknown>;
+  level: RequirementLevel;
+  hard: boolean;
+  evidenceStatus: "CONFIRMED" | "UNKNOWN";
+  citation?: Record<string, unknown>;
+}
+
+export interface ExactJobCandidateEvidence {
+  type: string;
+  value: Record<string, unknown>;
+  status?: "CONFIRMED" | "EXTRACTED" | "REJECTED";
+}
+
+export function normalizeJobRequirements(
+  requirements: Array<{
+    type: string;
+    normalizedValue: Record<string, unknown>;
+    level?: RequirementLevel;
+    hard?: boolean;
+    evidenceStatus?: "CONFIRMED" | "UNKNOWN";
+    citation?: Record<string, unknown>;
+  }>,
+): ExactJobRequirement[] {
+  return requirements.map((item, index) => {
+    const level = item.level ?? (item.hard ? "REQUIRED" : "PREFERRED");
+    const normalizedType = item.type.trim().toUpperCase();
+    return {
+      key: `${normalizedType}:${JSON.stringify(item.normalizedValue)}:${index}`,
+      type: normalizedType,
+      normalizedValue: item.normalizedValue,
+      level,
+      hard: item.hard ?? level === "REQUIRED",
+      evidenceStatus: item.evidenceStatus ?? "CONFIRMED",
+      ...(item.citation ? { citation: item.citation } : {}),
+    };
+  });
+}
+
+export function evaluateExactJobEligibility(
+  opportunity: { status?: string; hardRequirements?: ExactJobRequirement[] },
+  candidate: ExactJobCandidateEvidence[],
+): { eligibility: MatchEligibility; reasonCodes: string[]; evidenceKeys: string[] } {
+  if (opportunity.status && opportunity.status !== "ACTIVE")
+    return { eligibility: "NOT_ELIGIBLE", reasonCodes: ["OPPORTUNITY_CLOSED"], evidenceKeys: [] };
+  const hard = (opportunity.hardRequirements ?? []).filter((item) => item.hard);
+  const reasons: string[] = [];
+  const evidenceKeys: string[] = [];
+  let unknown = false;
+  for (const requirement of hard) {
+    if (requirement.evidenceStatus === "UNKNOWN") {
+      unknown = true;
+      reasons.push("INSUFFICIENT_JOB_EVIDENCE");
+      continue;
+    }
+    const value = requirement.normalizedValue;
+    const matches = candidate
+      .filter((item) => item.status !== "REJECTED")
+      .some((item) => {
+        if (item.type.toUpperCase() !== requirement.type) return false;
+        if (requirement.type === "GRADUATION_YEAR")
+          return Number(item.value.year) === Number(value.year);
+        if (requirement.type === "EXPERIENCE_YEARS")
+          return Number(item.value.years) >= Number(value.minimum);
+        if (requirement.type === "WORK_AUTHORIZATION")
+          return item.value.authorized === value.required;
+        if (requirement.type === "CITIZENSHIP") return item.value.country === value.country;
+        if (requirement.type === "DEGREE")
+          return (
+            item.value.level === value.level &&
+            (value.field == null || item.value.field === value.field)
+          );
+        const candidateValue = item.value.value ?? item.value.skill;
+        const requiredValue = value.value ?? value.skill;
+        return (
+          typeof candidateValue === "string" &&
+          typeof requiredValue === "string" &&
+          candidateValue.toLowerCase() === requiredValue.toLowerCase()
+        );
+      });
+    const contradictory = candidate.some(
+      (item) =>
+        item.status === "CONFIRMED" &&
+        item.type.toUpperCase() === requirement.type &&
+        item.value.contradiction === true,
+    );
+    if (contradictory) {
+      reasons.push(`${requirement.type}_MISMATCH`);
+      return { eligibility: "NOT_ELIGIBLE", reasonCodes: reasons.slice(0, 8), evidenceKeys };
+    }
+    if (matches) evidenceKeys.push(requirement.key);
+    else unknown = true;
+  }
+  if (unknown)
+    return {
+      eligibility: "UNKNOWN",
+      reasonCodes: [...new Set([...reasons, "INSUFFICIENT_CANDIDATE_EVIDENCE"])],
+      evidenceKeys,
+    };
+  return {
+    eligibility: "ELIGIBLE",
+    reasonCodes: ["ALL_HARD_REQUIREMENTS_SATISFIED"],
+    evidenceKeys,
+  };
+}
+
+export function scoreExactJobMatch(
+  requirements: ExactJobRequirement[],
+  candidate: ExactJobCandidateEvidence[],
+  eligibility: MatchEligibility,
+) {
+  const results = requirements.map((requirement) => {
+    const candidateValue = candidate.find(
+      (item) => item.status !== "REJECTED" && item.type.toUpperCase() === requirement.type,
+    )?.value;
+    const left = candidateValue?.value ?? candidateValue?.skill ?? candidateValue?.level;
+    const right =
+      requirement.normalizedValue.value ??
+      requirement.normalizedValue.skill ??
+      requirement.normalizedValue.level;
+    const matched =
+      typeof left === "string" &&
+      typeof right === "string" &&
+      left.toLowerCase() === right.toLowerCase();
+    return {
+      key: requirement.key,
+      level: requirement.level,
+      relation: matched ? "MATCHED" : "UNKNOWN",
+      citation: requirement.citation ?? {},
+    };
+  });
+  const weighted = results.reduce(
+    (sum, result) =>
+      sum +
+      (result.relation === "MATCHED"
+        ? result.level === "REQUIRED"
+          ? 70
+          : result.level === "PREFERRED"
+            ? 20
+            : 10
+        : 0),
+    0,
+  );
+  return {
+    eligibility,
+    score: eligibility === "NOT_ELIGIBLE" ? 0 : Math.min(100, weighted),
+    components: results,
+    algorithmVersion: MATCH_ALGORITHM_VERSION,
+    reasonCodes: results
+      .filter((item) => item.relation !== "MATCHED")
+      .map(() => "NO_EXPLICIT_EVIDENCE"),
+  };
+}
 
 export class ResumeValidationError extends Error {}
 export class ResumeNotFoundError extends Error {}

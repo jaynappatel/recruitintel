@@ -1,9 +1,71 @@
 import { describe, expect, it } from "vitest";
 
-import { deterministicSkillCoverage, extractResumeSkills, validateResumeBytes } from "./resume";
+import {
+  deterministicSkillCoverage,
+  evaluateExactJobEligibility,
+  extractResumeSkills,
+  normalizeJobRequirements,
+  scoreExactJobMatch,
+  validateResumeBytes,
+} from "./resume";
 import { decryptResumeObject, encryptResumeObject } from "./resume-storage";
 
 describe("deterministic resume evidence", () => {
+  it("normalizes versioned requirement taxonomy without alias invention", () => {
+    const requirements = normalizeJobRequirements([
+      { type: "skill", normalizedValue: { skill: "Angular" }, level: "REQUIRED", hard: false },
+      {
+        type: "degree",
+        normalizedValue: { level: "BACHELOR", field: "Computer Science" },
+        level: "PREFERRED",
+      },
+    ]);
+    expect(requirements[0]).toMatchObject({ type: "SKILL", level: "REQUIRED", hard: false });
+    expect(requirements[1]).toMatchObject({ type: "DEGREE", level: "PREFERRED", hard: false });
+    expect(requirements[0]!.key).not.toBe(requirements[1]!.key);
+  });
+
+  it("keeps hard eligibility separate from score and preserves UNKNOWN", () => {
+    const requirements = normalizeJobRequirements([
+      { type: "GRADUATION_YEAR", normalizedValue: { year: 2027 }, hard: true },
+      { type: "SKILL", normalizedValue: { skill: "Python" }, hard: false },
+    ]);
+    const unknown = evaluateExactJobEligibility(
+      { status: "ACTIVE", hardRequirements: requirements },
+      [],
+    );
+    expect(unknown.eligibility).toBe("UNKNOWN");
+    const eligible = evaluateExactJobEligibility(
+      { status: "ACTIVE", hardRequirements: requirements },
+      [{ type: "GRADUATION_YEAR", value: { year: 2027 }, status: "CONFIRMED" }],
+    );
+    expect(eligible.eligibility).toBe("ELIGIBLE");
+    const mismatch = evaluateExactJobEligibility(
+      { status: "ACTIVE", hardRequirements: requirements },
+      [
+        { type: "GRADUATION_YEAR", value: { year: 2026 }, status: "CONFIRMED" },
+        { type: "GRADUATION_YEAR", value: { contradiction: true }, status: "CONFIRMED" },
+      ],
+    );
+    expect(mismatch.eligibility).toBe("NOT_ELIGIBLE");
+    expect(scoreExactJobMatch(requirements, [], mismatch.eligibility).score).toBe(0);
+  });
+
+  it("matches exact skills only and returns bounded explanations", () => {
+    const requirements = normalizeJobRequirements([
+      { type: "SKILL", normalizedValue: { skill: "Python" }, level: "REQUIRED" },
+      { type: "SKILL", normalizedValue: { skill: "PyTorch" }, level: "PREFERRED" },
+    ]);
+    const result = scoreExactJobMatch(
+      requirements,
+      [{ type: "SKILL", value: { skill: "Python" }, status: "CONFIRMED" }],
+      "UNKNOWN",
+    );
+    expect(result.score).toBe(70);
+    expect(result.components[0]!.relation).toBe("MATCHED");
+    expect(result.components[1]!.relation).toBe("UNKNOWN");
+    expect(result.reasonCodes).toEqual(["NO_EXPLICIT_EVIDENCE"]);
+  });
   it("extracts only explicit bounded skills", () => {
     expect(extractResumeSkills("Built services with Python and React.")).toEqual([
       "python",
