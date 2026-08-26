@@ -142,9 +142,14 @@ function event(row: Row): ApplicationEventRecord {
   };
 }
 
-async function getOwned(sql: Query, userId: string, id: string): Promise<ApplicationRecord> {
+async function getOwned(
+  sql: Query,
+  userId: string,
+  id: string,
+  forUpdate = false,
+): Promise<ApplicationRecord> {
   const [row] = await sql.unsafe(
-    `${applicationSelect} where a.id = $1::uuid and a.user_id = $2::uuid`,
+    `${applicationSelect} where a.id = $1::uuid and a.user_id = $2::uuid ${forUpdate ? "for update of a" : ""}`,
     [id, userId],
   );
   if (!row) throw new ApplicationNotFoundError("Application not found");
