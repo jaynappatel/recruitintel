@@ -28,6 +28,10 @@ class ClaimedWork(BaseModel):
     attempt_count: int = Field(ge=1)
     max_attempts: int = Field(ge=1)
     correlation_id: UUID
+    resume_version_id: UUID | None = None
+    opportunity_id: UUID | None = None
+    parser_version: int | None = None
+    algorithm_version: str | None = None
 
 
 class WorkExecutionResult(BaseModel):

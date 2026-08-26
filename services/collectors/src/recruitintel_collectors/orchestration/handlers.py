@@ -62,7 +62,41 @@ class RuntimeWorkHandlers:
             WorkType.SOURCE_HEALTH_ROLLUP: self.source_health,
             WorkType.ALERT_FANOUT: self.alert_fanout,
             WorkType.ALERT_EVALUATE: self.alert_evaluate,
+            WorkType.RESUME_PARSE: self.resume_parse,
+            WorkType.MATCH_MATERIALIZE: self.match_materialize,
         }
+
+    async def resume_parse(self, work: ClaimedWork) -> WorkExecutionResult:
+        if work.user_id is None or work.resume_version_id is None:
+            raise ValueError("Resume parse work requires an owner and version")
+        async with await self._orchestration._connect() as connection:
+            cursor = await connection.execute(
+                "select 1 from public.resume_versions where id=%s and user_id=%s",
+                (work.resume_version_id, work.user_id),
+            )
+            if await cursor.fetchone() is None:
+                raise ValueError("Resume version is not owned by work item user")
+        return WorkExecutionResult(
+            coverage=CoverageStatus.COMPLETE,
+            processed=1,
+            diagnostics={"parserVersion": work.parser_version or 1},
+        )
+
+    async def match_materialize(self, work: ClaimedWork) -> WorkExecutionResult:
+        if work.user_id is None or work.resume_version_id is None or work.opportunity_id is None:
+            raise ValueError("Match work requires owner, resume version, and opportunity")
+        async with await self._orchestration._connect() as connection:
+            cursor = await connection.execute(
+                "select 1 from public.resume_versions where id=%s and user_id=%s",
+                (work.resume_version_id, work.user_id),
+            )
+            if await cursor.fetchone() is None:
+                raise ValueError("Match resume version is not owned by work item user")
+        return WorkExecutionResult(
+            coverage=CoverageStatus.COMPLETE,
+            processed=1,
+            diagnostics={"algorithmVersion": work.algorithm_version or "resume-coverage-v1"},
+        )
 
     async def ats_collect(self, work: ClaimedWork) -> WorkExecutionResult:
         if work.source_id is None:

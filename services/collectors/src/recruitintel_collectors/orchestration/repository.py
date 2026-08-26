@@ -47,6 +47,10 @@ class PostgresOrchestrationRepository:
             attempt_count=row["attempt_count"],
             max_attempts=row["max_attempts"],
             correlation_id=row["correlation_id"],
+            resume_version_id=row.get("resume_version_id"),
+            opportunity_id=row.get("opportunity_id"),
+            parser_version=row.get("parser_version"),
+            algorithm_version=row.get("algorithm_version"),
         )
 
     async def claim(
