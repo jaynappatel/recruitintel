@@ -285,7 +285,7 @@ export async function changeApplicationStatus(
               : input.stage && input.stage !== current.currentStage
                 ? "STAGE_CHANGED"
                 : "STATUS_CHANGED";
-    await tx`insert into public.application_events (application_id, user_id, event_type, from_status, to_status, from_stage, to_stage, occurred_at, source, reason_code, idempotency_key) values (${id}::uuid, ${userId}::uuid, ${eventType}, ${current.currentStatus}, ${input.status}, ${current.currentStage}, ${stage}, ${input.occurredAt ?? null}::timestamptz, 'USER', ${input.reasonCode ?? null}, ${input.idempotencyKey})`;
+    await tx`insert into public.application_events (application_id, user_id, event_type, from_status, to_status, from_stage, to_stage, occurred_at, source, reason_code, idempotency_key) values (${id}::uuid, ${userId}::uuid, ${eventType}, ${current.currentStatus}, ${input.status}, ${current.currentStage}, ${stage}, ${input.occurredAt ?? new Date().toISOString()}::timestamptz, 'USER', ${input.reasonCode ?? null}, ${input.idempotencyKey})`;
     await tx`update public.applications set current_status = ${input.status}, current_stage = ${stage}, applied_at = case when ${input.status} = 'APPLIED' then coalesce(applied_at, ${input.occurredAt ?? null}::timestamptz) else applied_at end, updated_at = now() where id = ${id}::uuid and user_id = ${userId}::uuid`;
     await recordProductEventWith(tx, {
       userId,
@@ -437,12 +437,12 @@ export async function updateInterview(
 ) {
   await getOwned(getDatabase(), userId, applicationId);
   const [row] =
-    await getDatabase()`update public.application_interviews set starts_at=coalesce(${input.startsAt ?? null}::timestamptz,starts_at), ends_at=case when ${input.endsAt === undefined} then ends_at else ${input.endsAt ?? null}::timestamptz end, status=coalesce(${input.status ?? null}::public.application_interview_status,status), result_code=case when ${input.resultCode === undefined} then result_code else ${input.resultCode ?? null} end, updated_at=now() where id=${interviewId}::uuid and application_id=${applicationId}::uuid and user_id=${userId}::uuid returning *`;
+    await getDatabase()`update public.application_interviews set starts_at=coalesce(${input.startsAt ?? null}::timestamptz,starts_at), ends_at=case when ${input.endsAt !== undefined} then ${input.endsAt ?? null}::timestamptz when ${input.startsAt !== undefined} then null else ends_at end, status=coalesce(${input.status ?? null}::public.application_interview_status,status), result_code=case when ${input.resultCode === undefined} then result_code else ${input.resultCode ?? null} end, updated_at=now() where id=${interviewId}::uuid and application_id=${applicationId}::uuid and user_id=${userId}::uuid returning *`;
   if (!row) throw new ApplicationNotFoundError("Interview not found");
   if (row.calendar_item_id && input.startsAt)
     await updateCalendarItem(userId, String(row.calendar_item_id), {
       startsAt: input.startsAt,
-      ...(input.endsAt === undefined ? {} : { endsAt: input.endsAt }),
+      ...(input.endsAt === undefined ? { endsAt: null } : { endsAt: input.endsAt }),
     });
   const eventType =
     input.status === "COMPLETED"
