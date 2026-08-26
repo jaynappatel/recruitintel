@@ -82,6 +82,28 @@ export const applicationAssessmentRequestSchema = z
   })
   .strict();
 
+export const resumeUploadRequestSchema = z
+  .object({
+    originalFilename: z.string().trim().min(1).max(255),
+    mediaType: z.enum(["application/pdf", "text/plain"]),
+    content: z.string().min(1).max(14_000_000),
+  })
+  .strict();
+export const resumeVersionRequestSchema = z
+  .object({
+    extractedText: z.string().min(1).max(200_000),
+  })
+  .strict();
+export const evidenceReviewRequestSchema = z
+  .object({
+    disposition: z.enum(["CONFIRMED", "REJECTED"]),
+    reasonCode: z.string().trim().max(100).optional(),
+  })
+  .strict();
+export const resumeMatchRequestSchema = z
+  .object({ opportunityId: z.uuid(), resumeVersionId: z.uuid() })
+  .strict();
+
 export const eventTypes = [
   "JOB_OPENED",
   "JOB_CHANGED",
