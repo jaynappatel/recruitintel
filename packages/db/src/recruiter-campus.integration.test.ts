@@ -33,8 +33,17 @@ async function reset() {
     await sql`delete from public.companies where id = ${companyId}::uuid`;
     await sql`delete from public.schools where id = ${schoolId}::uuid`;
     await sql`
-      delete from public.service_principals where id = ${workerPrincipalId}::uuid
-    `;
+        delete from public.service_principals where id = ${workerPrincipalId}::uuid
+      `;
+    await sql`
+        insert into public.worker_role_bindings (
+          database_role, service_principal_id, allowed_work_classes, can_schedule
+        ) select current_user, id,
+          array['ATS','GITHUB','WEB_SEARCH','WEB_FETCH','PROJECTION','CALENDAR','PRIVACY','CONTROL']::public.work_class[], true
+        from public.service_principals where id = '97000000-0000-0000-0000-000000000001'::uuid
+        on conflict (database_role) do update set service_principal_id = excluded.service_principal_id,
+          allowed_work_classes = excluded.allowed_work_classes, can_schedule = excluded.can_schedule
+      `;
   } finally {
     await sql.end();
   }
