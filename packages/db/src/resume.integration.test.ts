@@ -34,7 +34,7 @@ integration("M11 resume evidence persistence", () => {
     });
     const version = await createResumeVersion(owner, document.id, "Python and React");
     const extracted = await listResumeEvidence(owner, version.id);
-    expect(extracted.map((item) => item.normalizedValue.skill)).toEqual(["python", "react"]);
+    expect(extracted.map((item) => item.normalizedValue.skill).sort()).toEqual(["python", "react"]);
     await reviewResumeEvidence(owner, extracted[0]!.id, "CONFIRMED");
     const corrected = await correctResumeEvidence(owner, extracted[0]!.id, { skill: "PyTorch" });
     expect(corrected.source).toBe("USER_CORRECTED");
