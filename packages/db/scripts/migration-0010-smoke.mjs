@@ -311,6 +311,12 @@ try {
     "0020_evidence_corrections.sql",
     "0021_resume_object_storage.sql",
     "0022_resume_match_versioning.sql",
+    "0023_m11_orchestration.sql",
+    "0024_m11_runtime_linkage.sql",
+    "0025_m11_worker_role.sql",
+    "0026_m11_claimed_access.sql",
+    "0027_m11_claimed_match_access.sql",
+    "0028_resume_match_unique_fix.sql",
   ]);
   await apply(database, []);
   const [postCounts] = await database`
@@ -431,7 +437,7 @@ try {
   console.log(
     JSON.stringify({
       status: "ok",
-      migration: "0009 -> 0022 (M8 -> M11)",
+      migration: "0009 -> 0028 (M8 -> M11)",
       sourcePostingsPreserved: migrationState.jobs,
       singletonOpportunities: migrationState.opportunities,
       singletonMemberships: migrationState.memberships,
