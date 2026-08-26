@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import type { Sql, TransactionSql } from "postgres";
 import { getDatabase } from "./index";
 import { recordProductEventWith } from "./instrumentation";
+import { createCalendarItem, updateCalendarItem } from "./calendar";
 
 type Query = Sql | TransactionSql;
 type Row = Record<string, unknown>;
@@ -10,6 +12,8 @@ const t = (v: unknown) => (v instanceof Date ? v.toISOString() : v == null ? nul
 export class ApplicationNotFoundError extends Error {}
 export class ApplicationConflictError extends Error {}
 export class ApplicationValidationError extends Error {}
+
+const fingerprint = (value: string) => createHash("sha256").update(value).digest("hex");
 
 export type ApplicationStatus =
   | "SAVED"
@@ -284,9 +288,62 @@ export async function createAssessment(
     idempotencyKey: string;
   },
 ) {
+  const current = await getOwned(getDatabase(), userId, applicationId);
+  const [row] = await getDatabase()`insert into public.application_assessments
+    (application_id, user_id, type, status, due_at, provider_name, idempotency_key)
+    values (${applicationId}::uuid, ${userId}::uuid, ${input.type}, 'RECEIVED',
+      ${input.dueAt ?? null}::timestamptz, ${input.providerName ?? null}, ${input.idempotencyKey})
+    on conflict (user_id, application_id, idempotency_key) do update set updated_at = now() returning *`;
+  if (row && String(row.type) === "OA") {
+    const [existingItem] = input.dueAt
+      ? await getDatabase()`select id from public.calendar_items where user_id=${userId}::uuid and application_assessment_id=${String(row.id)}::uuid and deleted_at is null limit 1`
+      : [];
+    const item =
+      input.dueAt && !existingItem
+        ? await createCalendarItem(userId, {
+            companyId: current.companyId,
+            opportunityId: current.opportunityId,
+            type: "OA",
+            title: "Complete online assessment",
+            startsAt: input.dueAt,
+            allDay: false,
+            timezone: "UTC",
+            status: "TODO",
+            syncEnabled: false,
+            metadata: { applicationId },
+            applicationId,
+            applicationAssessmentId: String(row.id),
+          })
+        : null;
+    await getDatabase()`update public.application_assessments set received_at = coalesce(received_at, now()) where id = ${String(row.id)}::uuid and user_id = ${userId}::uuid`;
+    const calendarItemId = item?.id
+      ? String(item.id)
+      : existingItem?.id
+        ? String(existingItem.id)
+        : null;
+    await getDatabase()`insert into public.application_events (application_id,user_id,event_type,from_status,to_status,from_stage,to_stage,assessment_id,calendar_item_id,source,idempotency_key) values (${applicationId}::uuid,${userId}::uuid,'OA_RECEIVED',${current.currentStatus},'IN_PROCESS',${current.currentStage},'OA',${String(row.id)}::uuid,${calendarItemId}::uuid,'USER',${`oa-received:${String(row.id)}`}) on conflict (user_id,idempotency_key) do nothing`;
+    await getDatabase()`update public.applications set current_status='IN_PROCESS', current_stage='OA', next_action_type='COMPLETE_OA', next_action_at=${input.dueAt ?? null}::timestamptz, updated_at=now() where id=${applicationId}::uuid and user_id=${userId}::uuid`;
+  }
+  return row;
+}
+
+export async function updateAssessment(
+  userId: string,
+  applicationId: string,
+  assessmentId: string,
+  input: {
+    status?: string;
+    dueAt?: string | null;
+    completedAt?: string | null;
+    score?: number | null;
+  },
+) {
   await getOwned(getDatabase(), userId, applicationId);
   const [row] =
-    await getDatabase()`insert into public.application_assessments (application_id, user_id, type, due_at, provider_name, idempotency_key) values (${applicationId}::uuid, ${userId}::uuid, ${input.type}, ${input.dueAt ?? null}::timestamptz, ${input.providerName ?? null}, ${input.idempotencyKey}) on conflict (user_id, application_id, idempotency_key) do update set updated_at = now() returning *`;
+    await getDatabase()`update public.application_assessments set status=coalesce(${input.status ?? null}::public.application_assessment_status,status), due_at=case when ${input.dueAt === undefined} then due_at else ${input.dueAt ?? null}::timestamptz end, completed_at=case when ${input.completedAt === undefined} then completed_at else ${input.completedAt ?? null}::timestamptz end, received_at=coalesce(received_at, case when ${input.status === "COMPLETED"} then now() else null end), updated_at=now() where id=${assessmentId}::uuid and application_id=${applicationId}::uuid and user_id=${userId}::uuid returning *`;
+  if (!row) throw new ApplicationNotFoundError("Assessment not found");
+  if (String(row.status) === "COMPLETED")
+    await getDatabase()`insert into public.application_events (application_id,user_id,event_type,assessment_id,source,idempotency_key) values (${applicationId}::uuid,${userId}::uuid,'OA_COMPLETED',${assessmentId}::uuid,'USER',${`oa-completed:${assessmentId}`}) on conflict (user_id,idempotency_key) do nothing`;
   return row;
 }
 
@@ -299,11 +356,79 @@ export async function createInterview(
     endsAt?: string | null;
     timezone?: string;
     recruiterProfileId?: string | null;
+    idempotencyKey?: string;
   },
+) {
+  const current = await getOwned(getDatabase(), userId, applicationId);
+  const [row] =
+    await getDatabase()`insert into public.application_interviews (application_id, user_id, interview_type, starts_at, ends_at, timezone, recruiter_profile_id) values (${applicationId}::uuid, ${userId}::uuid, ${input.interviewType}, ${input.startsAt}::timestamptz, ${input.endsAt ?? null}::timestamptz, ${input.timezone ?? "UTC"}, ${input.recruiterProfileId ?? null}::uuid) on conflict (user_id, application_id, interview_type, starts_at) where status <> 'CANCELLED' do update set updated_at=now() returning *`;
+  if (!row) throw new ApplicationConflictError("Interview could not be created");
+  const [existingItem] =
+    await getDatabase()`select id from public.calendar_items where user_id=${userId}::uuid and application_interview_id=${String(row.id)}::uuid and deleted_at is null limit 1`;
+  const item = existingItem
+    ? { id: String(existingItem.id) }
+    : await createCalendarItem(userId, {
+        companyId: current.companyId,
+        opportunityId: current.opportunityId,
+        type: "CUSTOM",
+        title: `${input.interviewType} interview`,
+        startsAt: input.startsAt,
+        ...(input.endsAt ? { endsAt: input.endsAt } : {}),
+        allDay: false,
+        timezone: input.timezone ?? "UTC",
+        status: "TODO",
+        syncEnabled: false,
+        metadata: { applicationId },
+        applicationId,
+        applicationInterviewId: String(row.id),
+      });
+  await getDatabase()`update public.application_interviews set calendar_item_id=${item.id}::uuid where id=${String(row.id)}::uuid and user_id=${userId}::uuid and calendar_item_id is null`;
+  await getDatabase()`insert into public.application_events (application_id,user_id,event_type,from_status,to_status,from_stage,to_stage,interview_id,calendar_item_id,source,idempotency_key) values (${applicationId}::uuid,${userId}::uuid,'INTERVIEW_SCHEDULED',${current.currentStatus},'IN_PROCESS',${current.currentStage},'TECHNICAL_INTERVIEW',${String(row.id)}::uuid,${item.id}::uuid,'USER',${`interview-scheduled:${String(row.id)}`}) on conflict (user_id,idempotency_key) do nothing`;
+  return row;
+}
+
+export async function updateInterview(
+  userId: string,
+  applicationId: string,
+  interviewId: string,
+  input: { startsAt?: string; endsAt?: string | null; status?: string; resultCode?: string | null },
 ) {
   await getOwned(getDatabase(), userId, applicationId);
   const [row] =
-    await getDatabase()`insert into public.application_interviews (application_id, user_id, interview_type, starts_at, ends_at, timezone, recruiter_profile_id) values (${applicationId}::uuid, ${userId}::uuid, ${input.interviewType}, ${input.startsAt}::timestamptz, ${input.endsAt ?? null}::timestamptz, ${input.timezone ?? "UTC"}, ${input.recruiterProfileId ?? null}::uuid) returning *`;
-  if (!row) throw new ApplicationConflictError("Interview could not be created");
+    await getDatabase()`update public.application_interviews set starts_at=coalesce(${input.startsAt ?? null}::timestamptz,starts_at), ends_at=case when ${input.endsAt === undefined} then ends_at else ${input.endsAt ?? null}::timestamptz end, status=coalesce(${input.status ?? null}::public.application_interview_status,status), result_code=case when ${input.resultCode === undefined} then result_code else ${input.resultCode ?? null} end, updated_at=now() where id=${interviewId}::uuid and application_id=${applicationId}::uuid and user_id=${userId}::uuid returning *`;
+  if (!row) throw new ApplicationNotFoundError("Interview not found");
+  if (row.calendar_item_id && input.startsAt)
+    await updateCalendarItem(userId, String(row.calendar_item_id), {
+      startsAt: input.startsAt,
+      ...(input.endsAt === undefined ? {} : { endsAt: input.endsAt }),
+    });
+  const eventType =
+    input.status === "COMPLETED"
+      ? "INTERVIEW_COMPLETED"
+      : input.startsAt
+        ? "INTERVIEW_RESCHEDULED"
+        : null;
+  if (eventType)
+    await getDatabase()`insert into public.application_events (application_id,user_id,event_type,interview_id,source,idempotency_key) values (${applicationId}::uuid,${userId}::uuid,${eventType},${interviewId}::uuid,'USER',${`${eventType.toLowerCase()}:${interviewId}:${input.startsAt ?? input.status}`}) on conflict (user_id,idempotency_key) do nothing`;
   return row;
+}
+
+/** Transaction-safe in-app reminder used by the existing M9 alert mailbox. */
+export async function createApplicationAlert(input: {
+  userId: string;
+  applicationId: string;
+  alertType: "APPLICATION_ACTION_DUE" | "OA_DEADLINE_APPROACHING" | "INTERVIEW_UPCOMING";
+  reminderWindow: "NONE" | "SEVEN_DAY" | "THREE_DAY" | "ONE_DAY";
+  title: string;
+  body: string;
+  reasonCodes: string[];
+  occurredAt?: string;
+}) {
+  await getOwned(getDatabase(), input.userId, input.applicationId);
+  const dedupeFingerprint = fingerprint(
+    `${input.userId}:${input.alertType}:${input.applicationId}:${input.reminderWindow}`,
+  );
+  const [row] =
+    await getDatabase()`insert into public.alerts (user_id,alert_type,application_id,reminder_window,rule_version,reason_codes,title,body,dedupe_fingerprint,occurred_at) values (${input.userId}::uuid,${input.alertType},${input.applicationId}::uuid,${input.reminderWindow},'m10-v1',${input.reasonCodes},${input.title},${input.body},${dedupeFingerprint},${input.occurredAt ?? new Date().toISOString()}::timestamptz) on conflict (user_id,dedupe_fingerprint) do nothing returning *`;
+  return row ?? null;
 }

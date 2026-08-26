@@ -10,6 +10,7 @@ const schema = z
     endsAt: z.iso.datetime().nullable().optional(),
     timezone: z.string().trim().min(1).max(100).optional(),
     recruiterProfileId: z.uuid().nullable().optional(),
+    idempotencyKey: z.string().trim().min(1).max(200).optional(),
   })
   .strict();
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {

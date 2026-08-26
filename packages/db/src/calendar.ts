@@ -79,6 +79,9 @@ export interface CalendarItemRecord {
   resolutionMismatch: boolean;
   recruitingDateId: string | null;
   applicationPlanId: string | null;
+  applicationId: string | null;
+  applicationAssessmentId: string | null;
+  applicationInterviewId: string | null;
   type: CalendarItemType;
   title: string;
   description: string | null;
@@ -89,7 +92,7 @@ export interface CalendarItemRecord {
   allDay: boolean;
   timezone: string;
   status: CalendarItemStatus;
-  source: "RECRUITING_INTELLIGENCE" | "USER" | "APPLICATION_PLAN";
+  source: "RECRUITING_INTELLIGENCE" | "USER" | "APPLICATION_PLAN" | "APPLICATION";
   syncEnabled: boolean;
   completedAt: string | null;
   metadata: Record<string, unknown>;
@@ -153,6 +156,9 @@ export interface CalendarItemInput {
   status: CalendarItemStatus;
   syncEnabled: boolean;
   metadata: Record<string, unknown>;
+  applicationId?: string;
+  applicationAssessmentId?: string;
+  applicationInterviewId?: string;
 }
 
 export interface CalendarItemPatch {
@@ -346,6 +352,9 @@ export function mapCalendarItem(row: Row): CalendarItemRecord {
     resolutionMismatch: bool(row.resolution_mismatch),
     recruitingDateId: nullableText(row.recruiting_date_id),
     applicationPlanId: nullableText(row.application_plan_id),
+    applicationId: nullableText(row.application_id),
+    applicationAssessmentId: nullableText(row.application_assessment_id),
+    applicationInterviewId: nullableText(row.application_interview_id),
     type: text(row.type) as CalendarItemType,
     title: text(row.title),
     description: nullableText(row.description),
@@ -370,6 +379,7 @@ const calendarItemSelect = `
   select
     ci.id, ci.company_id, c.canonical_name as company_name, c.slug as company_slug,
     ci.job_id, ci.opportunity_id, ci.recruiting_date_id, ci.application_plan_id,
+    ci.application_id, ci.application_assessment_id, ci.application_interview_id,
     ci.type, ci.title,
     ci.description, ci.starts_at, ci.ends_at, ci.starts_on, ci.ends_on, ci.all_day,
     ci.timezone, ci.status, ci.source, ci.sync_enabled, ci.completed_at, ci.metadata,
@@ -712,15 +722,18 @@ export async function createCalendarItem(
   const completedAt = input.status === "DONE" ? new Date().toISOString() : null;
   const [created] = await sql`
     insert into public.calendar_items (
-      user_id, company_id, job_id, opportunity_id, type, title, description, starts_at, ends_at,
-      starts_on, ends_on, all_day, timezone, status, source, sync_enabled,
+      user_id, company_id, job_id, opportunity_id, application_id,
+      application_assessment_id, application_interview_id, type, title, description,
+      starts_at, ends_at, starts_on, ends_on, all_day, timezone, status, source, sync_enabled,
       completed_at, metadata
     ) values (
       ${userId}::uuid, ${input.companyId ?? null}::uuid, ${input.jobId ?? null}::uuid,
-      ${input.opportunityId ?? null}::uuid, ${input.type}, ${input.title},
+      ${input.opportunityId ?? null}::uuid, ${input.applicationId ?? null}::uuid,
+      ${input.applicationAssessmentId ?? null}::uuid, ${input.applicationInterviewId ?? null}::uuid,
+      ${input.type}, ${input.title},
       ${input.description ?? null}, ${timing.startsAt},
       ${timing.endsAt}, ${timing.startsOn}, ${timing.endsOn}, ${input.allDay},
-      ${input.timezone}, ${input.status}, 'USER', ${input.syncEnabled},
+      ${input.timezone}, ${input.status}, ${input.applicationId ? "APPLICATION" : "USER"}, ${input.syncEnabled},
       ${completedAt}, ${sql.json(input.metadata as never)}
     ) returning id
   `;

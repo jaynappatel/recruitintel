@@ -29,3 +29,5 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return databaseApiError(error);
   }
 }
+
+export const PATCH = POST;
