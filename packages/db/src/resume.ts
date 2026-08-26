@@ -438,6 +438,38 @@ export async function getResumeMatch(userId: string, matchId: string): Promise<R
   return matchRecord(row);
 }
 
+/** Attach an already-recorded recommendation context without creating an impression. */
+export async function linkResumeMatchRecommendation(
+  userId: string,
+  matchId: string,
+  input: { rankingDecisionId?: string | null; recommendationImpressionId?: string | null },
+): Promise<ResumeMatchRecord> {
+  return getDatabase().begin(async (tx) => {
+    const [match] =
+      await tx`select * from public.resume_job_matches where id=${matchId}::uuid and user_id=${userId}::uuid`;
+    if (!match) throw new ResumeNotFoundError("Match not found");
+    if (input.rankingDecisionId) {
+      const [decision] =
+        await tx`select id from public.ranking_decisions where id=${input.rankingDecisionId}::uuid and user_id=${userId}::uuid`;
+      if (!decision)
+        throw new ResumeValidationError("Recommendation decision is not owned by user");
+    }
+    if (input.recommendationImpressionId) {
+      const [impression] =
+        await tx`select id from public.recommendation_impressions where id=${input.recommendationImpressionId}::uuid and user_id=${userId}::uuid and opportunity_id=${String(match.opportunity_id)}::uuid`;
+      if (!impression)
+        throw new ResumeValidationError(
+          "Recommendation impression is not owned by user/opportunity",
+        );
+    }
+    const [row] = await tx`update public.resume_job_matches set
+      ranking_decision_id=coalesce(${input.rankingDecisionId ?? null}::uuid,ranking_decision_id),
+      recommendation_impression_id=coalesce(${input.recommendationImpressionId ?? null}::uuid,recommendation_impression_id)
+      where id=${matchId}::uuid and user_id=${userId}::uuid returning *`;
+    return matchRecord(row as Row);
+  });
+}
+
 export async function deleteResumeDocument(userId: string, documentId: string): Promise<void> {
   await getDatabase()`update public.resume_documents set status='DELETED', deleted_at=coalesce(deleted_at, now()), storage_ciphertext=null, storage_nonce=null, storage_key=null where id=${documentId}::uuid and user_id=${userId}::uuid`;
 }

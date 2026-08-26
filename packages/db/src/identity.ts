@@ -225,6 +225,11 @@ export async function deleteUserAccount(userId: string, privacyRequestId: string
         'SUCCEEDED', '{"credentialCleanup":"best_effort_provider_revoke_then_local_delete"}'
       )
     `;
+    await transaction`
+      update public.work_items set status='CANCELLED', completed_at=now(),
+        cancel_requested_at=coalesce(cancel_requested_at, now())
+      where user_id=${userId}::uuid and status in ('READY','RETRY_WAIT','LEASED','RUNNING')
+    `;
     await transaction`delete from public.users where id = ${userId}::uuid`;
     await transaction`
       update public.privacy_requests set status = 'COMPLETED', completed_at = now(),
