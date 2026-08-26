@@ -109,7 +109,7 @@ try {
     "sources_discovery_fingerprint_key",
     "sources_discovery_fingerprint_check",
     "sources_discovery_confidence_check",
-    "schedules_target_check",
+    "schedules_check",
     "jobs_id_company_unique",
   ];
   const constraints = await sql`

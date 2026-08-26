@@ -73,6 +73,13 @@ async def connect(database_url: str) -> psycopg.AsyncConnection[dict[str, Any]]:
 async def reset(database_url: str) -> None:
     async with await connect(database_url) as connection:
         await connection.execute(
+            "delete from public.work_items where user_id = %s or exclusive_key = %s",
+            (OWNER_ID, f"m9-alert-user:{OWNER_ID}"),
+        )
+        await connection.execute(
+            "delete from public.alert_evaluation_requests where user_id = %s", (OWNER_ID,)
+        )
+        await connection.execute(
             "delete from public.calendar_oauth_states where user_id = %s", (OWNER_ID,)
         )
         await connection.execute(
@@ -105,6 +112,10 @@ async def retire_domain_test_work(database_url: str, request_id: UUID) -> None:
         await connection.execute(
             "delete from public.work_items where calendar_sync_request_id = %s",
             (request_id,),
+        )
+        await connection.execute(
+            "delete from public.work_items where user_id = %s and work_type = 'ALERT_EVALUATE'",
+            (OWNER_ID,),
         )
 
 

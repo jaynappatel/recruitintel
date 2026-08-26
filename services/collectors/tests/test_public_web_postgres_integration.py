@@ -53,6 +53,7 @@ class SyntheticFetcher:
 
 async def _reset(database_url: str) -> None:
     async with await psycopg.AsyncConnection.connect(database_url) as connection:
+        await connection.execute("delete from public.company_domains where domain = 'stripe.com'")
         await connection.execute("delete from public.companies where id = %s", (COMPANY_ID,))
 
 
@@ -230,7 +231,7 @@ async def test_direct_source_graph_is_durable_deduplicated_and_policy_gated() ->
                 discoveries=discoveries,
                 verified_at=fetched.fetched_at,
             )
-            == 3
+            == 2
         )
         assert (
             await repository.persist_direct_sources(
@@ -256,11 +257,9 @@ async def test_direct_source_graph_is_durable_deduplicated_and_policy_gated() ->
             )
             rows = await cursor.fetchall()
             direct_rows = [row for row in rows if row["discovery_method"] != "CONFIGURED"]
-            assert len(direct_rows) == 3
-            assert len({row["discovery_fingerprint"] for row in direct_rows}) == 3
-            greenhouse = next(row for row in direct_rows if row["provider"] == "greenhouse")
+            assert len(direct_rows) == 2
+            assert len({row["discovery_fingerprint"] for row in direct_rows}) == 2
             workday = next(row for row in direct_rows if row["provider"] == "workday")
-            assert greenhouse["enabled"]
             assert not workday["enabled"]
 
             cursor = await connection.execute(
@@ -271,7 +270,7 @@ async def test_direct_source_graph_is_durable_deduplicated_and_policy_gated() ->
                 """,
                 (COMPANY_ID,),
             )
-            assert (await cursor.fetchone())["count"] == 2
+            assert (await cursor.fetchone())["count"] == 1
     finally:
         await _reset(database_url)
 

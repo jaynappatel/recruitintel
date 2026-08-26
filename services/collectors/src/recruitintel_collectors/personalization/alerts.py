@@ -34,9 +34,7 @@ def _set(rows: list[dict[str, Any]], column: str) -> set[str]:
 class PostgresAlertEngine:
     """Bounded M7 worker for deterministic, transactional IN_APP alerts only."""
 
-    def __init__(
-        self, database_url: str, provider: NotificationProvider | None = None
-    ) -> None:
+    def __init__(self, database_url: str, provider: NotificationProvider | None = None) -> None:
         self.database_url = database_url
         self.provider = provider or InAppNotificationProvider()
 

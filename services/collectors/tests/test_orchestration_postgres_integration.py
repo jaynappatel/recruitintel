@@ -69,6 +69,11 @@ class FixtureCollector:
 
 async def reset(url: str) -> None:
     async with await psycopg.AsyncConnection.connect(url) as connection:
+        # The scheduler is global; isolate this fixture from seeded schedules so
+        # the assertion measures only the schedule created by this test.
+        await connection.execute(
+            "update public.schedules set enabled = false where name <> 'integration:scheduled-ats'"
+        )
         await connection.execute("delete from public.companies where id = %s", (COMPANY_ID,))
         await connection.execute("delete from public.source_policies where id = %s", (POLICY_ID,))
         await connection.execute(
