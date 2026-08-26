@@ -79,8 +79,8 @@ class RuntimeWorkHandlers:
             raise ValueError("Resume parse work requires an owner and version")
         async with await self._orchestration._connect() as connection:
             cursor = await connection.execute(
-                "select d.media_type,d.content_hash,d.storage_ciphertext,d.storage_nonce from public.resume_versions v join public.resume_documents d on d.id=v.document_id where v.id=%s and v.user_id=%s and d.user_id=v.user_id and d.status <> 'DELETED'",
-                (work.resume_version_id, work.user_id),
+                "select media_type,content_hash,storage_ciphertext,storage_nonce from public.m11_claimed_resume_object(%s)",
+                (work.id,),
             )
             target = await cursor.fetchone()
             if target is None:
