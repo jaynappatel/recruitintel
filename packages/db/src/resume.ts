@@ -546,6 +546,18 @@ export async function listResumeParseRuns(userId: string, resumeVersionId: strin
   }));
 }
 
+export async function queueResumeParseRun(userId: string, resumeVersionId: string, parserVersion = RESUME_PARSER_VERSION) {
+  const [row] = await getDatabase()`select text_hash from public.resume_versions where id=${resumeVersionId}::uuid and user_id=${userId}::uuid`;
+  if (!row) throw new ResumeNotFoundError("Resume version not found");
+  const idempotencyKey = `api:${resumeVersionId}:${parserVersion}`;
+  const [run] = await getDatabase()`insert into public.resume_parse_runs
+    (user_id,resume_version_id,status,parser_version,input_hash,idempotency_key)
+    values (${userId}::uuid,${resumeVersionId}::uuid,'QUEUED',${parserVersion},${text(row.text_hash)},${idempotencyKey})
+    on conflict (user_id,resume_version_id,idempotency_key) do update set status=case when resume_parse_runs.status='SUCCEEDED' then resume_parse_runs.status else 'QUEUED' end
+    returning *`;
+  return run;
+}
+
 export async function listResumeEvidence(
   userId: string,
   resumeVersionId?: string,

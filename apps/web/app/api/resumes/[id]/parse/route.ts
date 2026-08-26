@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
-import { enqueueM11Work } from "@recruitintel/db";
-import { listResumeParseRuns } from "@recruitintel/db";
+import { enqueueM11Work, listResumeParseRuns, queueResumeParseRun } from "@recruitintel/db";
 import { apiError, databaseApiError } from "@/lib/api";
 import { authenticatedUserOrResponse } from "@/lib/server/authorization";
 
@@ -13,6 +12,7 @@ export async function POST(request: Request, _context: { params: Promise<{ id: s
   if (typeof body?.resumeVersionId !== "string")
     return apiError(400, "INVALID_REQUEST", "resumeVersionId is required");
   try {
+    await queueResumeParseRun(actor.user.id, body.resumeVersionId);
     const fingerprint = createHash("sha256")
       .update(`RESUME_PARSE:${actor.user.id}:${body.resumeVersionId}:1`)
       .digest("hex");

@@ -299,6 +299,10 @@ integration("M10 application lifecycle", () => {
     const item = recommendations.items[0];
     if (!item) throw new Error("Expected seeded opportunity recommendation");
     await openRecommendation(owner, item.impressionId);
+    const contextSql = postgres(databaseUrl!, { max: 1 });
+    const [contextRow] = await contextSql`select ranking_decision_id from public.recommendation_impressions where id=${item.impressionId}::uuid`;
+    await contextSql.end();
+    if (!contextRow) throw new Error("Recommendation context missing");
     const resumeDocument = await createResumeDocument(owner, {
       originalFilename: "recommendation-match.txt",
       mediaType: "text/plain",
@@ -306,7 +310,7 @@ integration("M10 application lifecycle", () => {
     });
     const resumeVersion = await createResumeVersion(owner, resumeDocument.id, "Python TypeScript");
     const match = await materializeResumeJobMatch(owner, resumeVersion.id, item.opportunity.id, {
-      rankingDecisionId: item.rankingDecisionId,
+      rankingDecisionId: String(contextRow.ranking_decision_id),
       recommendationImpressionId: item.impressionId,
     });
     const application = await createApplication(owner, {
