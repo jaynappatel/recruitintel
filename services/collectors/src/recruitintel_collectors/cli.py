@@ -24,6 +24,7 @@ _DEFAULT_WORKER_CLASSES = (
     WorkClass.WEB_FETCH,
     WorkClass.PROJECTION,
     WorkClass.CONTROL,
+    WorkClass.RESUME,
 )
 
 
