@@ -26,6 +26,7 @@ integration("M10 application lifecycle", () => {
     try {
       const [opportunity] =
         await sql`select id from public.job_opportunities where status='ACTIVE' order by id limit 1`;
+      if (!opportunity) throw new Error("seed opportunity missing");
       opportunityId = String(opportunity.id);
       await sql`delete from public.applications where user_id=${owner}::uuid and cycle_key='m10-2026'`;
       await sql`insert into public.users (id,name,email,email_verified,status) values (${second}::uuid,'M10 Second','m10-second@example.test',true,'ACTIVE') on conflict (id) do nothing`;
@@ -67,6 +68,7 @@ integration("M10 application lifecycle", () => {
       dueAt: "2027-01-02T12:00:00.000Z",
       idempotencyKey: "m10-oa",
     });
+    if (!assessment) throw new Error("assessment missing");
     await updateAssessment(owner, a.id, String(assessment.id), {
       status: "COMPLETED",
       completedAt: "2027-01-01T12:00:00.000Z",
@@ -118,8 +120,8 @@ integration("M10 application lifecycle", () => {
         await sql`select count(*)::int as count from public.alerts where user_id=${owner}::uuid and application_id=${a.id}::uuid`;
       const [calendar] =
         await sql`select count(*)::int as count from public.calendar_items where user_id=${owner}::uuid and application_id=${a.id}::uuid`;
-      expect(Number(alerts.count)).toBe(2);
-      expect(Number(calendar.count)).toBe(2);
+      expect(Number(alerts?.count)).toBe(2);
+      expect(Number(calendar?.count)).toBe(2);
     } finally {
       await sql.end();
     }
