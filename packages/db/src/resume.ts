@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { getDatabase } from "./index";
+import { decryptResumeObject, encryptResumeObject } from "./resume-storage";
 
 type Row = Record<string, unknown>;
 const text = (value: unknown): string =>
@@ -217,16 +218,33 @@ export async function createResumeDocument(
   if (!validation.valid) throw new ResumeValidationError(validation.code ?? "INVALID_DOCUMENT");
   const contentHash = hash(bytes);
   const key = input.storageObjectKey ?? `resume/${userId}/${contentHash}`;
+  const encrypted = encryptResumeObject(userId, contentHash, bytes);
   return getDatabase().begin(async (tx) => {
     const [existing] =
       await tx`select * from public.resume_documents where user_id=${userId}::uuid and content_hash=${contentHash}`;
     if (existing) return documentRecord(existing);
     const [row] =
-      await tx`insert into public.resume_documents (user_id,storage_object_key,original_filename,media_type,byte_size,content_hash,status)
-      values (${userId}::uuid,${key},${input.originalFilename},${input.mediaType},${bytes.length},${contentHash},'READY') returning *`;
+      await tx`insert into public.resume_documents (user_id,storage_object_key,original_filename,media_type,byte_size,content_hash,status,storage_key,storage_ciphertext,storage_nonce,storage_key_version)
+      values (${userId}::uuid,${key},${input.originalFilename},${input.mediaType},${bytes.length},${contentHash},'READY',${encrypted.storageKey},${encrypted.ciphertext},${encrypted.nonce},${encrypted.keyVersion}) returning *`;
     if (!row) throw new ResumeValidationError("Resume could not be stored");
     return documentRecord(row);
   });
+}
+
+export async function readResumeObject(userId: string, documentId: string): Promise<Buffer> {
+  const [row] =
+    await getDatabase()`select storage_key,storage_ciphertext,storage_nonce,content_hash from public.resume_documents where id=${documentId}::uuid and user_id=${userId}::uuid and status <> 'DELETED'`;
+  if (!row || !row.storage_key || !row.storage_ciphertext || !row.storage_nonce)
+    throw new ResumeNotFoundError("Resume not found");
+  return decryptResumeObject(userId, text(row.content_hash), {
+    storageKey: text(row.storage_key),
+    ciphertext: row.storage_ciphertext as Buffer,
+    nonce: row.storage_nonce as Buffer,
+  });
+}
+
+export async function deleteResumeDocument(userId: string, documentId: string): Promise<void> {
+  await getDatabase()`update public.resume_documents set status='DELETED', deleted_at=coalesce(deleted_at, now()), storage_ciphertext=null, storage_nonce=null, storage_key=null where id=${documentId}::uuid and user_id=${userId}::uuid`;
 }
 
 export async function createResumeVersion(

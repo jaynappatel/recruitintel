@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { deterministicSkillCoverage, extractResumeSkills, validateResumeBytes } from "./resume";
+import { decryptResumeObject, encryptResumeObject } from "./resume-storage";
 
 describe("deterministic resume evidence", () => {
   it("extracts only explicit bounded skills", () => {
@@ -42,5 +43,17 @@ describe("deterministic resume evidence", () => {
     expect(result.valid).toBe(true);
     expect(result.extractedText.length).toBe(20);
     expect(extractResumeSkills(value)).toEqual(["kubernetes"]);
+  });
+
+  it("encrypts objects with opaque keys and authenticates ciphertext", () => {
+    const bytes = Buffer.from("private resume bytes");
+    const object = encryptResumeObject("user-a", "a".repeat(64), bytes);
+    expect(object.storageKey).toMatch(/^[a-f0-9]{48}$/);
+    expect(object.ciphertext).not.toContain(bytes.toString());
+    expect(decryptResumeObject("user-a", "a".repeat(64), object)).toEqual(bytes);
+    expect(() => decryptResumeObject("user-b", "a".repeat(64), object)).toThrow();
+    expect(() =>
+      decryptResumeObject("user-a", "a".repeat(64), { ...object, storageKey: "../escape" }),
+    ).toThrow();
   });
 });
