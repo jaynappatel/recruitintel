@@ -47,7 +47,14 @@ export function validateResumeBytes(
   if (bytes.length > maxBytes)
     return { valid: false, code: "DOCUMENT_TOO_LARGE", pageCount: null, extractedText: "" };
   if (mediaType === "text/plain") {
-    const extractedText = bytes.toString("utf8").replaceAll("\u0000", "").slice(0, maxCharacters);
+    const extractedText = bytes.toString("utf8").replaceAll("\u0000", "");
+    if (extractedText.length > maxCharacters)
+      return {
+        valid: false,
+        code: "EXTRACTED_TEXT_LIMIT_EXCEEDED",
+        pageCount: null,
+        extractedText: "",
+      };
     if (!extractedText.trim())
       return { valid: false, code: "NO_READABLE_TEXT", pageCount: null, extractedText: "" };
     return { valid: true, code: null, pageCount: null, extractedText };
@@ -61,8 +68,9 @@ export function validateResumeBytes(
     return { valid: false, code: "PAGE_LIMIT_EXCEEDED", pageCount, extractedText: "" };
   const extractedText = [...body.matchAll(/\(([^()]*)\)\s*Tj/g)]
     .map((match) => match[1] ?? "")
-    .join(" ")
-    .slice(0, maxCharacters);
+    .join(" ");
+  if (extractedText.length > maxCharacters)
+    return { valid: false, code: "EXTRACTED_TEXT_LIMIT_EXCEEDED", pageCount, extractedText: "" };
   if (!extractedText.trim())
     return { valid: false, code: "NO_READABLE_TEXT", pageCount, extractedText: "" };
   return { valid: true, code: null, pageCount, extractedText };
