@@ -13,6 +13,11 @@ import {
   updateInterview,
 } from "./applications";
 import { mergeOpportunities, splitOpportunity } from "./opportunities";
+import {
+  listOpportunityRecommendations,
+  openRecommendation,
+  updateRecruitingPreferences,
+} from "./personalization";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? describe : describe.skip;
@@ -269,6 +274,73 @@ integration("M10 application lifecycle", () => {
       expect(Number(counts?.interviews)).toBe(1);
       expect(Number(counts?.calendar_items)).toBe(1);
       expect(Number(counts?.reschedules)).toBe(1);
+    } finally {
+      await sql.end();
+    }
+  });
+
+  it("links a production recommendation impression through application outcome", async () => {
+    const cleanup = postgres(databaseUrl!, { max: 1 });
+    await cleanup`delete from public.applications where user_id=${owner}::uuid and cycle_key='m10-recommendation-e2e'`;
+    await cleanup.end();
+    await updateRecruitingPreferences(owner, {
+      roleFamilies: ["SOFTWARE_ENGINEERING"],
+      earlyCareerTracks: ["INTERNSHIP"],
+      experienceLevels: ["INTERNSHIP"],
+      workplaceModes: ["REMOTE", "HYBRID", "ONSITE"],
+      graduationYear: null,
+    });
+    const recommendations = await listOpportunityRecommendations(owner, {
+      limit: 50,
+      includeIneligible: false,
+      includeLowPriority: true,
+    });
+    const item = recommendations.items[0];
+    if (!item) throw new Error("Expected seeded opportunity recommendation");
+    await openRecommendation(owner, item.impressionId);
+    const application = await createApplication(owner, {
+      opportunityId: item.opportunity.id,
+      cycleKey: "m10-recommendation-e2e",
+      originRecommendationImpressionId: item.impressionId,
+      applicationUrlUsed: "https://apply.example/recommendation-e2e",
+    });
+    await changeApplicationStatus(owner, application.id, {
+      status: "APPLIED",
+      idempotencyKey: "m10-recommendation-submit",
+    });
+    const assessment = await createAssessment(owner, application.id, {
+      type: "OA",
+      idempotencyKey: "m10-recommendation-oa",
+    });
+    if (!assessment) throw new Error("Expected recommendation assessment");
+    await updateAssessment(owner, application.id, String(assessment.id), { status: "COMPLETED" });
+    const interview = await createInterview(owner, application.id, {
+      interviewType: "TECHNICAL",
+      startsAt: "2027-09-01T12:00:00.000Z",
+      endsAt: "2027-09-01T13:00:00.000Z",
+      timezone: "UTC",
+    });
+    await updateInterview(owner, application.id, String(interview.id), { status: "COMPLETED" });
+    await changeApplicationStatus(owner, application.id, {
+      status: "OFFER",
+      idempotencyKey: "m10-recommendation-offer",
+    });
+    const sql = postgres(databaseUrl!, { max: 1 });
+    try {
+      const [link] = await sql`
+        select a.origin_recommendation_impression_id, i.ranking_decision_id,
+          a.current_status::text as status, a.current_stage::text as stage,
+          (select count(*)::int from public.application_events where application_id=a.id) as events
+        from public.applications a
+        join public.recommendation_impressions i on i.id=a.origin_recommendation_impression_id
+        where a.id=${application.id}::uuid and a.user_id=${owner}::uuid
+      `;
+      expect(String(link?.origin_recommendation_impression_id)).toBe(item.impressionId);
+      expect(link?.ranking_decision_id).toBeTruthy();
+      expect(link?.status).toBe("OFFER");
+      expect(link?.stage).toBe("OA");
+      expect(Number(link?.events)).toBeGreaterThanOrEqual(6);
+      await expect(getApplication(second, application.id)).rejects.toThrow();
     } finally {
       await sql.end();
     }

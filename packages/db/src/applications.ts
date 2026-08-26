@@ -231,9 +231,20 @@ export async function listApplications(
   } = {},
 ) {
   const limit = Math.min(Math.max(options.limit ?? 25, 1), 100);
+  const clauses = ["a.user_id = $1::uuid"];
+  const params: string[] = [userId];
+  if (options.status) {
+    params.push(options.status);
+    clauses.push(`a.current_status = $${params.length}::public.application_status`);
+  }
+  if (options.companyId) {
+    params.push(options.companyId);
+    clauses.push(`a.company_id = $${params.length}::uuid`);
+  }
+  if (!options.includeArchived) clauses.push("a.archived_at is null");
   const rows = await getDatabase().unsafe(
-    `${applicationSelect} where a.user_id = $1::uuid ${options.status ? "and a.current_status = $2::public.application_status" : ""} ${options.companyId ? "and a.company_id = $3::uuid" : ""} ${options.includeArchived ? "" : "and a.archived_at is null"} order by a.updated_at desc, a.id desc limit ${limit}`,
-    [userId, options.status ?? null, options.companyId ?? null],
+    `${applicationSelect} where ${clauses.join(" and ")} order by a.updated_at desc, a.id desc limit ${limit}`,
+    params,
   );
   const last = rows[rows.length - 1];
   return { items: rows.map(app), nextCursor: rows.length === limit && last ? s(last.id) : null };

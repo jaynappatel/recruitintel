@@ -140,4 +140,138 @@ integration("authenticated route ownership", () => {
     expect(result.rows[0]?.user_id).toBe(userOneId);
     sessionSpy.mockRestore();
   });
+
+  it("enforces owner isolation across M10 application routes", async () => {
+    const { auth } = await import("./auth");
+    const { createApplication, createAssessment, createInterview } =
+      await import("@recruitintel/db");
+    const opportunityResult = await pool.query(
+      "select id from public.job_opportunities where status = 'ACTIVE' order by id limit 1",
+    );
+    const opportunityId = String(opportunityResult.rows[0].id);
+    const app = await createApplication(userOneId, {
+      opportunityId,
+      cycleKey: "http-idor-m10",
+      applicationUrlUsed: "https://apply.example/http-idor",
+    });
+    const assessment = await createAssessment(userOneId, app.id, {
+      type: "OA",
+      idempotencyKey: "http-idor-oa",
+    });
+    if (!assessment) throw new Error("assessment missing");
+    const interview = await createInterview(userOneId, app.id, {
+      interviewType: "TECHNICAL",
+      startsAt: "2027-07-01T12:00:00.000Z",
+      endsAt: "2027-07-01T13:00:00.000Z",
+      timezone: "UTC",
+    });
+    const user = (id: string) => ({
+      session: {} as never,
+      user: {
+        id,
+        email: `${id}@example.test`,
+        emailVerified: true,
+        name: id,
+        image: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+    let currentUser: string | null = userOneId;
+    const sessionSpy = vi
+      .spyOn(auth.api, "getSession")
+      .mockImplementation(async () => (currentUser ? user(currentUser) : null));
+    const appRoute = await import("../../app/api/applications/[id]/route");
+    const listRoute = await import("../../app/api/applications/route");
+    const statusRoute = await import("../../app/api/applications/[id]/status/route");
+    const timelineRoute = await import("../../app/api/applications/[id]/timeline/route");
+    const assessmentRoute = await import("../../app/api/applications/[id]/assessments/route");
+    const assessmentPatchRoute =
+      await import("../../app/api/applications/[id]/assessments/[assessmentId]/route");
+    const interviewRoute = await import("../../app/api/applications/[id]/interviews/route");
+    const interviewPatchRoute =
+      await import("../../app/api/applications/[id]/interviews/[interviewId]/route");
+    const archiveRoute = await import("../../app/api/applications/[id]/archive/route");
+    const context = { params: Promise.resolve({ id: app.id }) };
+    expect(
+      (await listRoute.GET(new Request("http://localhost:3000/api/applications"))).status,
+    ).toBe(200);
+    expect(
+      (await appRoute.GET(new Request(`http://localhost:3000/api/applications/${app.id}`), context))
+        .status,
+    ).toBe(200);
+    expect((await timelineRoute.GET(new Request("http://localhost:3000"), context)).status).toBe(
+      200,
+    );
+    currentUser = userTwoId;
+    expect(
+      (await listRoute.GET(new Request("http://localhost:3000/api/applications"))).status,
+    ).toBe(200);
+    expect((await appRoute.GET(new Request("http://localhost:3000"), context)).status).toBe(404);
+    expect((await timelineRoute.GET(new Request("http://localhost:3000"), context)).status).toBe(
+      404,
+    );
+    const jsonRequest = (body: unknown) =>
+      new Request("http://localhost:3000", {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: "http://localhost:3000" },
+        body: JSON.stringify(body),
+      });
+    expect(
+      (
+        await statusRoute.POST(
+          jsonRequest({ status: "APPLIED", idempotencyKey: "idor-status" }),
+          context,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await assessmentRoute.POST(
+          jsonRequest({ type: "OA", idempotencyKey: "idor-child" }),
+          context,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await assessmentPatchRoute.PATCH(jsonRequest({ status: "COMPLETED" }), {
+          params: Promise.resolve({ id: app.id, assessmentId: String(assessment.id) }),
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await interviewRoute.POST(
+          jsonRequest({
+            interviewType: "TECHNICAL",
+            startsAt: "2027-08-01T12:00:00.000Z",
+            timezone: "UTC",
+          }),
+          context,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await interviewPatchRoute.PATCH(jsonRequest({ status: "COMPLETED" }), {
+          params: Promise.resolve({ id: app.id, interviewId: String(interview.id) }),
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await archiveRoute.POST(
+          new Request("http://localhost:3000", {
+            method: "POST",
+            headers: { origin: "http://localhost:3000" },
+          }),
+          context,
+        )
+      ).status,
+    ).toBe(404);
+    currentUser = null;
+    expect((await appRoute.GET(new Request("http://localhost:3000"), context)).status).toBe(401);
+    sessionSpy.mockRestore();
+  });
 });

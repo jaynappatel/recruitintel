@@ -759,13 +759,17 @@ export async function listOpportunityRecommendations(
     await transaction`
       update public.opportunity_suppressions suppression set
         released_at = ${asOf}, release_reason = 'MATERIAL_CHANGE'
-      from lateral (
-        select event.material_fingerprint from public.opportunity_change_events event
-        where event.opportunity_id = suppression.opportunity_id
-        order by event.change_version desc limit 1
-      ) current_event
       where suppression.user_id = ${userId}::uuid and suppression.released_at is null
-        and current_event.material_fingerprint <> suppression.basis_material_fingerprint
+        and exists (
+          select 1 from public.opportunity_change_events event
+          where event.opportunity_id = suppression.opportunity_id
+            and event.material_fingerprint <> suppression.basis_material_fingerprint
+            and event.change_version = (
+              select max(latest.change_version)
+              from public.opportunity_change_events latest
+              where latest.opportunity_id = suppression.opportunity_id
+            )
+        )
     `;
 
     const rows = await transaction.unsafe(
