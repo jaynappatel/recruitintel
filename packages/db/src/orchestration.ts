@@ -133,6 +133,26 @@ export async function listSafeWorkItems(options: {
   return { items: rows.map(mapWork), total: number(count?.total) };
 }
 
+export async function enqueueM11Work(input: {
+  workType: "RESUME_PARSE" | "MATCH_MATERIALIZE";
+  userId: string;
+  resumeVersionId?: string;
+  opportunityId?: string;
+  parserVersion?: number;
+  algorithmVersion?: string;
+  idempotencyFingerprint: string;
+}) {
+  if (input.workType === "RESUME_PARSE" && !input.resumeVersionId)
+    throw new Error("Resume parse work requires a resume version");
+  if (input.workType === "MATCH_MATERIALIZE" && (!input.resumeVersionId || !input.opportunityId))
+    throw new Error("Match work requires resume and opportunity targets");
+  const [row] = await getDatabase()`insert into public.work_items
+    (work_type,work_class,user_id,resume_version_id,opportunity_id,parser_version,algorithm_version,idempotency_fingerprint,safe_diagnostics)
+    values (${input.workType}::public.work_type,'RESUME'::public.work_class,${input.userId}::uuid,${input.resumeVersionId ?? null}::uuid,${input.opportunityId ?? null}::uuid,${input.parserVersion ?? null},${input.algorithmVersion ?? null},${input.idempotencyFingerprint},${JSON.stringify({ resumeVersionId: input.resumeVersionId ?? null, opportunityId: input.opportunityId ?? null })}::jsonb)
+    on conflict (idempotency_fingerprint) do update set updated_at=public.work_items.updated_at returning *`;
+  return row;
+}
+
 export async function getSafeWorkItem(id: string): Promise<WorkItemDetailRecord | null> {
   const sql = getDatabase();
   const rows = await sql.unsafe(`${safeWorkSelect} where work.id = $1::uuid`, [id]);
