@@ -96,7 +96,8 @@ export const resumeVersionRequestSchema = z
   .strict();
 export const evidenceReviewRequestSchema = z
   .object({
-    disposition: z.enum(["CONFIRMED", "REJECTED"]),
+    disposition: z.enum(["CONFIRMED", "REJECTED", "CORRECTED"]),
+    normalizedValue: z.record(z.string(), z.unknown()).optional(),
     reasonCode: z.string().trim().max(100).optional(),
   })
   .strict();

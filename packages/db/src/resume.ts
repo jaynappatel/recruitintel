@@ -17,6 +17,7 @@ const iso = (value: unknown): string | null =>
       : typeof value === "string"
         ? value
         : null;
+const nullableText = (value: unknown): string | null => (typeof value === "string" ? value : null);
 const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 
 export const RESUME_PARSER_VERSION = 1;
@@ -24,6 +25,47 @@ export const MATCH_ALGORITHM_VERSION = "resume-coverage-v1";
 
 export class ResumeValidationError extends Error {}
 export class ResumeNotFoundError extends Error {}
+
+export interface ResumeValidationResult {
+  valid: boolean;
+  code: string | null;
+  pageCount: number | null;
+  extractedText: string;
+}
+
+export function validateResumeBytes(
+  bytes: Buffer,
+  mediaType: "application/pdf" | "text/plain",
+  limits: { maxBytes?: number; maxPages?: number; maxCharacters?: number } = {},
+): ResumeValidationResult {
+  const maxBytes = limits.maxBytes ?? 10 * 1024 * 1024;
+  const maxPages = limits.maxPages ?? 50;
+  const maxCharacters = limits.maxCharacters ?? 200_000;
+  if (bytes.length < 1)
+    return { valid: false, code: "EMPTY_DOCUMENT", pageCount: null, extractedText: "" };
+  if (bytes.length > maxBytes)
+    return { valid: false, code: "DOCUMENT_TOO_LARGE", pageCount: null, extractedText: "" };
+  if (mediaType === "text/plain") {
+    const extractedText = bytes.toString("utf8").replaceAll("\u0000", "").slice(0, maxCharacters);
+    if (!extractedText.trim())
+      return { valid: false, code: "NO_READABLE_TEXT", pageCount: null, extractedText: "" };
+    return { valid: true, code: null, pageCount: null, extractedText };
+  }
+  const header = bytes.subarray(0, 5).toString("ascii");
+  const body = bytes.toString("latin1");
+  if (header !== "%PDF-" || !body.includes("%%EOF"))
+    return { valid: false, code: "MALFORMED_PDF", pageCount: null, extractedText: "" };
+  const pageCount = (body.match(/\/Type\s*\/Page(?:\s|\/|>>)/g) ?? []).length;
+  if (pageCount > maxPages)
+    return { valid: false, code: "PAGE_LIMIT_EXCEEDED", pageCount, extractedText: "" };
+  const extractedText = [...body.matchAll(/\(([^()]*)\)\s*Tj/g)]
+    .map((match) => match[1] ?? "")
+    .join(" ")
+    .slice(0, maxCharacters);
+  if (!extractedText.trim())
+    return { valid: false, code: "NO_READABLE_TEXT", pageCount, extractedText: "" };
+  return { valid: true, code: null, pageCount, extractedText };
+}
 
 export type EvidenceReviewStatus =
   | "EXTRACTED"
@@ -171,8 +213,8 @@ export async function createResumeDocument(
   const bytes = typeof input.bytes === "string" ? Buffer.from(input.bytes, "utf8") : input.bytes;
   if (!/^[-\w .()]+\.(pdf|txt)$/i.test(input.originalFilename))
     throw new ResumeValidationError("Unsupported resume filename");
-  if (bytes.length < 1 || bytes.length > 10 * 1024 * 1024)
-    throw new ResumeValidationError("Resume exceeds size limits");
+  const validation = validateResumeBytes(bytes, input.mediaType);
+  if (!validation.valid) throw new ResumeValidationError(validation.code ?? "INVALID_DOCUMENT");
   const contentHash = hash(bytes);
   const key = input.storageObjectKey ?? `resume/${userId}/${contentHash}`;
   return getDatabase().begin(async (tx) => {
@@ -246,6 +288,31 @@ export async function reviewResumeEvidence(
     await tx`insert into public.evidence_confirmations (evidence_id,user_id,disposition,reason_code) values (${evidenceId}::uuid,${userId}::uuid,${disposition},${reasonCode ?? null})`;
     await tx`update public.candidate_evidence set review_status=${disposition}::public.evidence_review_status where id=${evidenceId}::uuid and user_id=${userId}::uuid`;
     return evidenceRecord({ ...row, review_status: disposition });
+  });
+}
+
+export async function correctResumeEvidence(
+  userId: string,
+  evidenceId: string,
+  normalizedValue: Record<string, unknown>,
+  reasonCode?: string,
+) {
+  return getDatabase().begin(async (tx) => {
+    const [rawOriginal] =
+      await tx`select * from public.candidate_evidence where id=${evidenceId}::uuid and user_id=${userId}::uuid and superseded_at is null`;
+    const original = rawOriginal as Row | undefined;
+    if (!original) throw new ResumeNotFoundError("Evidence not found");
+    const [latest] =
+      await tx`select coalesce(max(revision),0)::int as revision from public.candidate_evidence where user_id=${userId}::uuid and coalesce(parent_evidence_id,id)=coalesce(${evidenceId}::uuid,${evidenceId}::uuid)`;
+    const revision = Number(latest?.revision ?? 0) + 1;
+    const evidenceHash = hash(`${evidenceId}\0${revision}\0${JSON.stringify(normalizedValue)}`);
+    const [row] = await tx`insert into public.candidate_evidence
+      (user_id,resume_version_id,evidence_type,normalized_value,source,review_status,page_number,section,source_span,parser_version,evidence_hash,revision,parent_evidence_id)
+      values (${userId}::uuid,${nullableText(original.resume_version_id)},${text(original.evidence_type)},${tx.json(normalizedValue as never)},'USER_CORRECTED','CONFIRMED',${typeof original.page_number === "number" ? original.page_number : null},${nullableText(original.section)},${nullableText(original.source_span)},${Number(original.parser_version ?? 1)},${evidenceHash},${revision},${evidenceId}::uuid) returning *`;
+    if (!row) throw new ResumeValidationError("Evidence correction could not be created");
+    await tx`update public.candidate_evidence set superseded_at=now(), review_status='SUPERSEDED' where id=${evidenceId}::uuid and user_id=${userId}::uuid`;
+    await tx`insert into public.evidence_confirmations (evidence_id,user_id,disposition,replacement_evidence_id,reason_code) values (${evidenceId}::uuid,${userId}::uuid,'SUPERSEDED',${text(row.id)}::uuid,${reasonCode ?? "USER_CORRECTION"})`;
+    return evidenceRecord(row as Row);
   });
 }
 

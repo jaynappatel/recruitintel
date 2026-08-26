@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { reviewResumeEvidence, ResumeNotFoundError } from "@recruitintel/db";
+import { correctResumeEvidence, reviewResumeEvidence, ResumeNotFoundError } from "@recruitintel/db";
 import { evidenceReviewRequestSchema } from "@recruitintel/types";
 import { apiError, validationError, databaseApiError } from "@/lib/api";
 import { authenticatedUserOrResponse } from "@/lib/server/authorization";
@@ -10,11 +10,24 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   const parsed = evidenceReviewRequestSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return validationError(parsed.error);
   try {
+    const evidenceId = (await context.params).id;
+    if (parsed.data.disposition === "CORRECTED") {
+      if (!parsed.data.normalizedValue)
+        return apiError(400, "INVALID_REQUEST", "normalizedValue is required for correction");
+      return NextResponse.json({
+        data: await correctResumeEvidence(
+          actor.user.id,
+          evidenceId,
+          parsed.data.normalizedValue,
+          parsed.data.reasonCode,
+        ),
+      });
+    }
     return NextResponse.json({
       data: await reviewResumeEvidence(
         actor.user.id,
-        (await context.params).id,
-        parsed.data.disposition,
+        evidenceId,
+        parsed.data.disposition as "CONFIRMED" | "REJECTED",
         parsed.data.reasonCode,
       ),
     });
