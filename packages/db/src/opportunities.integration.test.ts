@@ -95,6 +95,7 @@ integration("canonical opportunity manual corrections and M5 compatibility", () 
     await getDatabase().end();
     const sql = postgres(databaseUrl, { max: 1 });
     try {
+      await sql`delete from public.applications where user_id = ${userId}::uuid`;
       await sql`delete from public.companies where id = ${companyId}::uuid`;
       await sql`delete from public.users where id = ${userId}::uuid`;
     } finally {
