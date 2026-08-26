@@ -439,7 +439,7 @@ try {
   console.log(
     JSON.stringify({
       status: "ok",
-      migration: "0009 -> 0028 (M8 -> M11)",
+      migration: "0009 -> 0030 (M8 -> M11)",
       sourcePostingsPreserved: migrationState.jobs,
       singletonOpportunities: migrationState.opportunities,
       singletonMemberships: migrationState.memberships,
