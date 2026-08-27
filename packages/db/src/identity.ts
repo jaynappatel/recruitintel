@@ -363,6 +363,15 @@ export async function exportUserAccount(userId: string) {
     select id,candidate_id,candidate_revision,status,source_policy_id,source_posting_id,opportunity_id,
       application_id,application_plan_id,match_id,result_code,result_metadata,created_at,resolved_at
     from public.browser_ingest_decisions where user_id=${userId}::uuid order by created_at,id`;
+  const modelCalls = await sql`
+    select id,task_type,provider,model,prompt_version,schema_version,redaction_version,input_hash,
+      cache_key,policy_decision,status,input_tokens,output_tokens,estimated_cost_micros,duration_ms,
+      safe_error_code,created_at,completed_at from public.model_calls
+    where user_id=${userId}::uuid order by created_at,id`;
+  const modelOutputs = await sql`
+    select output.id,output.model_call_id,output.task_type,output.output,output.evidence_references,
+      output.validation_status,output.disposition,output.source_fingerprint,output.created_at,output.reviewed_at
+    from public.model_outputs output where output.user_id=${userId}::uuid order by output.created_at,output.id`;
   return {
     user: {
       id: String(user.id),
@@ -385,6 +394,8 @@ export async function exportUserAccount(userId: string) {
     browserSnapshots,
     browserCandidates,
     browserIngestDecisions,
+    modelCalls,
+    modelOutputs,
   };
 }
 

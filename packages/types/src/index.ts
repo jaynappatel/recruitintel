@@ -110,6 +110,17 @@ export const resumeMatchRequestSchema = z
   })
   .strict();
 
+// M13 requests are deliberately small: source text never crosses this contract.
+export const modelExplanationRequestSchema = z
+  .object({
+    matchId: z.uuid(),
+    idempotencyKey: z.string().trim().min(1).max(200),
+  })
+  .strict();
+export const modelOutputDispositionSchema = z
+  .object({ disposition: z.enum(["CONFIRMED", "REJECTED"]) })
+  .strict();
+
 // M12 browser-companion inputs are deliberately structured: the server never
 // accepts raw HTML, browser storage, form values, or an asserted owner ID.
 const browserHttpUrlSchema = z
