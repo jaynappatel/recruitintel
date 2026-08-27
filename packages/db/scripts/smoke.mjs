@@ -99,6 +99,14 @@ try {
             left join public.users owner on owner.id=child.user_id where owner.id is null
           union all select count(*) from public.match_evidence child
             left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.browser_scan_sessions child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.page_snapshots child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.page_job_candidates child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.browser_ingest_decisions child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
           union all select count(*) from public.work_items child
             left join public.users owner on owner.id=child.user_id
             where child.user_id is not null and owner.id is null

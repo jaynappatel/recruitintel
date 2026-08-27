@@ -359,6 +359,7 @@ try {
     "0029_m11_claimed_evidence_write.sql",
     "0030_m11_claimed_evidence_write_fix.sql",
     "0031_m11_runtime_acceptance.sql",
+    "0032_m12_browser_companion.sql",
   ]);
   await apply(database, []);
   const [postCounts] = await database`
@@ -492,7 +493,7 @@ try {
   console.log(
     JSON.stringify({
       status: "ok",
-      migration: "0018 -> 0031 preservation (full 0001 bootstrap)",
+      migration: "0018 -> 0032 preservation (full 0001 bootstrap)",
       sourcePostingsPreserved: migrationState.jobs,
       singletonOpportunities: migrationState.opportunities,
       singletonMemberships: migrationState.memberships,

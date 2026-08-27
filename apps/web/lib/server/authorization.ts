@@ -2,7 +2,10 @@ import { createHash, randomUUID } from "node:crypto";
 
 import {
   activatePendingUser,
+  authenticateExtensionGrant,
   authenticateServicePrincipal,
+  type ExtensionGrantRecord,
+  type ExtensionGrantScope,
   getUserActor,
   type ServicePrincipalRecord,
   type ServiceScope,
@@ -26,6 +29,13 @@ export type ServiceActor = {
   ipHash: string | null;
 };
 
+export type ExtensionActor = {
+  kind: "EXTENSION";
+  grant: ExtensionGrantRecord;
+  requestId: string;
+  ipHash: string | null;
+};
+
 export class AuthorizationError extends Error {
   constructor(
     readonly status: 401 | 403,
@@ -33,6 +43,7 @@ export class AuthorizationError extends Error {
     message: string,
   ) {
     super(message);
+    this.name = "AuthorizationError";
   }
 }
 
@@ -96,6 +107,42 @@ function bearerToken(request: Request): string | null {
   if (!authorization?.startsWith("Bearer ")) return null;
   const token = authorization.slice("Bearer ".length).trim();
   return token || null;
+}
+
+function extensionOrigin(request: Request): string | null {
+  const origin = request.headers.get("origin");
+  return origin && /^chrome-extension:\/\/[a-p]{32}$/.test(origin) ? origin : null;
+}
+
+export function extensionCorsHeaders(request: Request): HeadersInit {
+  const origin = extensionOrigin(request);
+  return origin
+    ? {
+        "access-control-allow-origin": origin,
+        "access-control-allow-headers": "authorization, content-type",
+        "access-control-allow-methods": "GET, POST, OPTIONS",
+        vary: "Origin",
+      }
+    : {};
+}
+
+export async function requireExtensionGrant(
+  request: Request,
+  scope: ExtensionGrantScope,
+): Promise<ExtensionActor> {
+  if (request.method !== "GET" && request.method !== "OPTIONS" && !extensionOrigin(request)) {
+    throw new AuthorizationError(403, "FORBIDDEN", "Extension origin was rejected");
+  }
+  const token = bearerToken(request);
+  if (!token) throw new AuthorizationError(401, "UNAUTHENTICATED", "Extension grant is required");
+  const grant = await authenticateExtensionGrant(token, scope, requestIpHash(request));
+  if (!grant) throw new AuthorizationError(401, "UNAUTHENTICATED", "Extension grant is invalid");
+  return {
+    kind: "EXTENSION",
+    grant,
+    requestId: resolveRequestId(request),
+    ipHash: requestIpHash(request),
+  };
 }
 
 export async function requireAdmin(

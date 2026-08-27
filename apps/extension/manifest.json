@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "RecruitIntel Browser Companion",
+  "version": "0.1.0",
+  "description": "Explicitly scan the current job page and send selected jobs to RecruitIntel.",
+  "permissions": ["activeTab", "scripting", "storage", "sidePanel"],
+  "optional_host_permissions": ["https://*/*", "http://localhost/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "side_panel": { "default_path": "sidepanel.html" },
+  "action": { "default_title": "RecruitIntel: scan this page" },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; base-uri 'none';"
+  }
+}

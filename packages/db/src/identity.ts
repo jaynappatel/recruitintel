@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 import { redactValue } from "@recruitintel/shared";
 
@@ -14,6 +14,19 @@ export type ServiceScope =
   | "WORKER_SCHEDULER"
   | "WORKER_GLOBAL"
   | "WORKER_PRIVACY";
+
+export type ExtensionGrantScope = "PAGE_SCAN" | "JOB_IMPORT";
+
+export interface ExtensionGrantRecord {
+  id: string;
+  userId: string;
+  name: string;
+  scopes: ExtensionGrantScope[];
+  expiresAt: string;
+  revokedAt: string | null;
+  lastUsedAt: string | null;
+  createdAt: string;
+}
 
 export interface UserActorRecord {
   id: string;
@@ -64,6 +77,119 @@ export function serviceTokenPrefix(token: string): string | null {
   if (separator < 0) return null;
   const prefix = token.slice(0, separator);
   return /^ri_(?:admin|worker)_[A-Za-z0-9_-]{8,32}$/.test(prefix) ? prefix : null;
+}
+
+export function extensionTokenPrefix(token: string): string | null {
+  const separator = token.indexOf(".");
+  if (separator < 0) return null;
+  const prefix = token.slice(0, separator);
+  return /^ri_ext_[A-Za-z0-9_-]{8,32}$/.test(prefix) ? prefix : null;
+}
+
+function extensionToken(): string {
+  return `ri_ext_${randomBytes(12).toString("base64url")}.${randomBytes(32).toString("base64url")}`;
+}
+
+function mapExtensionGrant(row: Record<string, unknown>): ExtensionGrantRecord {
+  return {
+    id: text(row.id),
+    userId: text(row.user_id),
+    name: text(row.name),
+    scopes: ((row.scopes as string[]) ?? []) as ExtensionGrantScope[],
+    expiresAt: new Date(row.expires_at as string).toISOString(),
+    revokedAt: row.revoked_at ? new Date(row.revoked_at as string).toISOString() : null,
+    lastUsedAt: row.last_used_at ? new Date(row.last_used_at as string).toISOString() : null,
+    createdAt: new Date(row.created_at as string).toISOString(),
+  };
+}
+
+export async function listExtensionGrants(userId: string): Promise<ExtensionGrantRecord[]> {
+  const sql = getDatabase();
+  const rows = await sql`
+    select id, user_id, name, scopes, expires_at, revoked_at, last_used_at, created_at
+    from public.extension_grants where user_id=${userId}::uuid
+    order by created_at desc, id desc
+  `;
+  return rows.map(mapExtensionGrant);
+}
+
+export async function createExtensionGrant(
+  userId: string,
+  input: { name: string; scopes: ExtensionGrantScope[]; expiresInSeconds: number },
+): Promise<ExtensionGrantRecord & { token: string }> {
+  const scopes = [...new Set(input.scopes)].sort();
+  if (!scopes.length || scopes.some((scope) => scope !== "PAGE_SCAN" && scope !== "JOB_IMPORT")) {
+    throw new Error("Extension grant scopes are invalid");
+  }
+  if (input.expiresInSeconds < 300 || input.expiresInSeconds > 2_592_000) {
+    throw new Error("Extension grant expiry is invalid");
+  }
+  const token = extensionToken();
+  const prefix = extensionTokenPrefix(token);
+  if (!prefix) throw new Error("Extension token generation failed");
+  const sql = getDatabase();
+  const [row] = await sql`
+    insert into public.extension_grants (user_id,name,token_prefix,token_hash,scopes,expires_at)
+    values (${userId}::uuid,${input.name.trim()},${prefix},${hashOpaqueToken(token)},${scopes},
+      now() + (${input.expiresInSeconds}::text || ' seconds')::interval)
+    returning id,user_id,name,scopes,expires_at,revoked_at,last_used_at,created_at
+  `;
+  if (!row) throw new Error("Extension grant creation failed");
+  return { ...mapExtensionGrant(row), token };
+}
+
+export async function refreshExtensionGrant(
+  userId: string,
+  grantId: string,
+  expiresInSeconds: number,
+): Promise<ExtensionGrantRecord & { token: string }> {
+  if (expiresInSeconds < 300 || expiresInSeconds > 2_592_000)
+    throw new Error("Extension grant expiry is invalid");
+  const token = extensionToken();
+  const prefix = extensionTokenPrefix(token);
+  if (!prefix) throw new Error("Extension token generation failed");
+  const sql = getDatabase();
+  const [row] = await sql`
+    update public.extension_grants set token_prefix=${prefix}, token_hash=${hashOpaqueToken(token)},
+      expires_at=now() + (${expiresInSeconds}::text || ' seconds')::interval
+    where id=${grantId}::uuid and user_id=${userId}::uuid and revoked_at is null
+    returning id,user_id,name,scopes,expires_at,revoked_at,last_used_at,created_at
+  `;
+  if (!row) throw new Error("Extension grant was not found");
+  return { ...mapExtensionGrant(row), token };
+}
+
+export async function revokeExtensionGrant(userId: string, grantId: string): Promise<boolean> {
+  const sql = getDatabase();
+  const [row] = await sql`
+    update public.extension_grants set revoked_at=coalesce(revoked_at,now())
+    where id=${grantId}::uuid and user_id=${userId}::uuid returning id
+  `;
+  return Boolean(row);
+}
+
+export async function authenticateExtensionGrant(
+  token: string,
+  requiredScope: ExtensionGrantScope,
+  lastUsedIpHash: string | null = null,
+): Promise<ExtensionGrantRecord | null> {
+  const prefix = extensionTokenPrefix(token);
+  if (!prefix) return null;
+  const supplied = Buffer.from(hashOpaqueToken(token), "hex");
+  const sql = getDatabase();
+  const [row] = await sql`
+    select id,user_id,name,token_hash,scopes,expires_at,revoked_at,last_used_at,created_at
+    from public.extension_grants where token_prefix=${prefix}
+      and revoked_at is null and expires_at > now()
+  `;
+  if (!row || !Array.isArray(row.scopes) || !row.scopes.includes(requiredScope)) return null;
+  const expected = Buffer.from(text(row.token_hash), "hex");
+  if (expected.length !== supplied.length || !timingSafeEqual(expected, supplied)) return null;
+  await sql`
+    update public.extension_grants set last_used_at=now(),last_used_ip_hash=${lastUsedIpHash}
+    where id=${text(row.id)}::uuid
+  `;
+  return mapExtensionGrant(row);
 }
 
 export async function getUserActor(userId: string): Promise<UserActorRecord | null> {
@@ -218,6 +344,25 @@ export async function exportUserAccount(userId: string) {
     await sql`select id, application_id, interview_type, status, starts_at, ends_at,
     timezone, duration_minutes, result_code, created_at, updated_at
     from public.application_interviews where user_id=${userId}::uuid order by created_at,id`;
+  const extensionGrants = await sql`
+    select id,name,scopes,expires_at,revoked_at,last_used_at,created_at
+    from public.extension_grants where user_id=${userId}::uuid order by created_at,id`;
+  const browserScans = await sql`
+    select id,page_url,page_host,page_title,snapshot_fingerprint,protocol_version,status,
+      candidate_count,selected_count,created_at,completed_at
+    from public.browser_scan_sessions where user_id=${userId}::uuid order by created_at,id`;
+  const browserSnapshots = await sql`
+    select id,scan_session_id,page_url,content_fingerprint,extraction_version,json_ld_count,
+      link_count,summary,created_at from public.page_snapshots
+    where user_id=${userId}::uuid order by created_at,id`;
+  const browserCandidates = await sql`
+    select id,scan_session_id,snapshot_id,ordinal,candidate_kind,candidate_fingerprint,job_url,
+      title,company_name,location_text,description_excerpt,rank_score,rank_reasons,revision,created_at
+    from public.page_job_candidates where user_id=${userId}::uuid order by scan_session_id,ordinal,id`;
+  const browserIngestDecisions = await sql`
+    select id,candidate_id,candidate_revision,status,source_policy_id,source_posting_id,opportunity_id,
+      application_id,application_plan_id,match_id,result_code,result_metadata,created_at,resolved_at
+    from public.browser_ingest_decisions where user_id=${userId}::uuid order by created_at,id`;
   return {
     user: {
       id: String(user.id),
@@ -235,6 +380,11 @@ export async function exportUserAccount(userId: string) {
     applicationEvents,
     applicationAssessments,
     applicationInterviews,
+    extensionGrants,
+    browserScans,
+    browserSnapshots,
+    browserCandidates,
+    browserIngestDecisions,
   };
 }
 

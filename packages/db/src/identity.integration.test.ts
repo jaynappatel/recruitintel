@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   authenticateServicePrincipal,
   createPrivacyRequest,
+  createExtensionGrant,
   deleteUserAccount,
   exportUserAccount,
   hashOpaqueToken,
@@ -29,6 +30,7 @@ import {
   readResumeObject,
   reviewResumeEvidence,
 } from "./resume";
+import { uploadBrowserScan } from "./browser-companion";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? describe : describe.skip;
@@ -218,6 +220,26 @@ integration("identity, audit, instrumentation, and privacy", () => {
           encrypted_refresh_token=excluded.encrypted_refresh_token,
           connection_status=excluded.connection_status`;
       const requestId = await createPrivacyRequest(userId, "EXPORT");
+      const extensionGrant = await createExtensionGrant(userId, {
+        name: "privacy export extension",
+        scopes: ["PAGE_SCAN"],
+        expiresInSeconds: 3600,
+      });
+      const browserScan = await uploadBrowserScan(userId, extensionGrant.id, {
+        protocolVersion: 1,
+        pageUrl: "https://privacy-export.example.test/careers?private=1",
+        pageTitle: "Privacy careers",
+        jsonLdCount: 0,
+        linkCount: 1,
+        candidates: [
+          {
+            kind: "GRID",
+            url: "https://privacy-export.example.test/careers/role#private",
+            title: "Privacy Engineer",
+            descriptionExcerpt: "Private browser capture",
+          },
+        ],
+      });
       const exported = await exportUserAccount(userId);
       const [request] = await sql`
         select id, user_id, request_type, status from public.privacy_requests where id = ${requestId}::uuid
@@ -262,6 +284,11 @@ integration("identity, audit, instrumentation, and privacy", () => {
       expect(exported.applicationEvents.length).toBeGreaterThan(0);
       expect(exported.applicationAssessments).toHaveLength(1);
       expect(exported.applicationInterviews).toHaveLength(1);
+      expect(exported.extensionGrants.some((row) => String(row.id) === extensionGrant.id)).toBe(
+        true,
+      );
+      expect(exported.browserScans.some((row) => String(row.id) === browserScan.id)).toBe(true);
+      expect(exported.browserCandidates).toHaveLength(1);
       const serialized = JSON.stringify(exported);
       expect(serialized).not.toContain(secondUserId);
       expect(serialized).not.toContain("user-b-private-marker");
@@ -279,6 +306,7 @@ integration("identity, audit, instrumentation, and privacy", () => {
     const sql = postgres(databaseUrl!, { max: 1 });
     const ciphertext = "v1.account-deletion-encrypted-google-credential";
     let deletedResumeDocumentId = "";
+    let browserScanId = "";
     try {
       const [opportunity] = await sql`
         select id, company_id from public.job_opportunities
@@ -318,6 +346,26 @@ integration("identity, audit, instrumentation, and privacy", () => {
         bytes: "Python privacy deletion",
       });
       deletedResumeDocumentId = document.id;
+      const extensionGrant = await createExtensionGrant(userId, {
+        name: "privacy delete extension",
+        scopes: ["PAGE_SCAN"],
+        expiresInSeconds: 3600,
+      });
+      const browserScan = await uploadBrowserScan(userId, extensionGrant.id, {
+        protocolVersion: 1,
+        pageUrl: "https://privacy-delete.example.test/careers",
+        pageTitle: "Delete careers",
+        jsonLdCount: 0,
+        linkCount: 1,
+        candidates: [
+          {
+            kind: "GRID",
+            url: "https://privacy-delete.example.test/careers/role",
+            title: "Delete Engineer",
+          },
+        ],
+      });
+      browserScanId = browserScan.id;
       const version = await createResumeVersion(userId, document.id, "Python privacy deletion");
       await queueResumeParseRun(userId, version.id);
       await materializeResumeJobMatch(userId, version.id, String(opportunity.id));
@@ -387,7 +435,15 @@ integration("identity, audit, instrumentation, and privacy", () => {
           (select count(*)::int from public.work_items
             where user_id = ${userId}::uuid) as work_items,
           (select count(*)::int from public.resume_documents
-            where user_id = ${secondUserId}::uuid) as second_user_resumes
+            where user_id = ${secondUserId}::uuid) as second_user_resumes,
+          (select count(*)::int from public.extension_grants
+            where user_id = ${userId}::uuid) as extension_grants,
+          (select count(*)::int from public.browser_scan_sessions
+            where user_id = ${userId}::uuid) as browser_scans,
+          (select count(*)::int from public.page_job_candidates
+            where user_id = ${userId}::uuid) as browser_candidates,
+          (select count(*)::int from public.browser_scan_sessions
+            where id = ${browserScanId}::uuid) as deleted_browser_scan
         from public.privacy_requests p where p.id = ${requestId}::uuid
       `;
       expect(result).toMatchObject({
@@ -411,6 +467,10 @@ integration("identity, audit, instrumentation, and privacy", () => {
         resume_matches: 0,
         work_items: 0,
         second_user_resumes: 1,
+        extension_grants: 0,
+        browser_scans: 0,
+        browser_candidates: 0,
+        deleted_browser_scan: 0,
       });
       await expect(readResumeObject(userId, deletedResumeDocumentId)).rejects.toThrow();
     } finally {

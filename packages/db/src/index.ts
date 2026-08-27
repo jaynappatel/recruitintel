@@ -13,6 +13,7 @@ export * from "./recommendation-scoring";
 export * from "./personalization";
 export * from "./applications";
 export * from "./resume";
+export * from "./browser-companion";
 
 export interface CompanyRecord {
   id: string;

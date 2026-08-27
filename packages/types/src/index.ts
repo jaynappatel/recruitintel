@@ -110,6 +110,76 @@ export const resumeMatchRequestSchema = z
   })
   .strict();
 
+// M12 browser-companion inputs are deliberately structured: the server never
+// accepts raw HTML, browser storage, form values, or an asserted owner ID.
+const browserHttpUrlSchema = z
+  .url()
+  .max(2_048)
+  .refine((value) => {
+    try {
+      const url = new URL(value);
+      return (
+        (url.protocol === "https:" || url.protocol === "http:") && !url.username && !url.password
+      );
+    } catch {
+      return false;
+    }
+  }, "URL must be an http(s) URL without credentials");
+
+export const extensionGrantScopeSchema = z.enum(["PAGE_SCAN", "JOB_IMPORT"]);
+export const createExtensionGrantRequestSchema = z
+  .object({
+    name: z.string().trim().min(1).max(100),
+    scopes: z.array(extensionGrantScopeSchema).min(1).max(2),
+    expiresInSeconds: z.number().int().min(300).max(2_592_000).default(86_400),
+  })
+  .strict();
+
+const browserCandidateSchema = z
+  .object({
+    kind: z.enum(["GRID", "SINGLE", "JSON_LD"]),
+    url: browserHttpUrlSchema,
+    title: z.string().trim().min(1).max(300),
+    companyName: z.string().trim().min(1).max(300).nullable().optional(),
+    location: z.string().trim().max(300).default(""),
+    descriptionExcerpt: z.string().trim().max(8_000).default(""),
+    extractionMetadata: z.record(z.string(), z.unknown()).default({}),
+  })
+  .strict();
+
+export const browserScanUploadRequestSchema = z
+  .object({
+    protocolVersion: z.number().int().positive().max(10).default(1),
+    pageUrl: browserHttpUrlSchema,
+    pageTitle: z.string().trim().max(300).default(""),
+    jsonLdCount: z.number().int().min(0).max(25).default(0),
+    linkCount: z.number().int().min(0).max(250).default(0),
+    candidates: z.array(browserCandidateSchema).min(1).max(100),
+  })
+  .strict();
+
+export const browserCandidateSelectionRequestSchema = z
+  .object({
+    candidateRevision: z.number().int().positive(),
+    idempotencyKey: z.string().trim().min(1).max(200),
+  })
+  .strict();
+
+export const browserDecisionApplicationRequestSchema = z
+  .object({
+    cycleKey: z.string().trim().min(1).max(100),
+    applicationUrlUsed: browserHttpUrlSchema.optional(),
+  })
+  .strict();
+export const browserDecisionPlanRequestSchema = z
+  .object({
+    title: z.string().trim().min(1).max(300),
+    targetDate: z.iso.date(),
+    timezone: z.string().trim().min(1).max(100),
+  })
+  .strict();
+export const browserDecisionMatchRequestSchema = z.object({ resumeVersionId: z.uuid() }).strict();
+
 export const eventTypes = [
   "JOB_OPENED",
   "JOB_CHANGED",
