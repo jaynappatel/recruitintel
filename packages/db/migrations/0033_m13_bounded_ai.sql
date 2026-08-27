@@ -15,6 +15,7 @@ create table public.model_calls (
   redaction_version text not null check (length(redaction_version) between 1 and 80),
   input_hash text not null check (input_hash ~ '^[0-9a-f]{64}$'),
   cache_key text not null check (cache_key ~ '^[0-9a-f]{64}$'),
+  cache_scope_id text not null default 'shared' check (length(cache_scope_id) between 1 and 80),
   policy_decision text not null check (policy_decision in ('DETERMINISTIC','MODEL_ALLOWED','ZERO_COST_BLOCKED','BUDGET_BLOCKED','STALE','DELETED')),
   status public.model_call_status not null,
   input_tokens integer not null default 0 check (input_tokens between 0 and 12000),
@@ -24,7 +25,7 @@ create table public.model_calls (
   safe_error_code text check (safe_error_code is null or length(safe_error_code) <= 100),
   created_at timestamptz not null default now(),
   completed_at timestamptz,
-  unique (cache_key)
+  unique (cache_scope_id, cache_key)
 );
 create index model_calls_user_created_idx on public.model_calls (user_id, created_at desc, id);
 

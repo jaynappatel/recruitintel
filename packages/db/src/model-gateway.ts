@@ -18,6 +18,8 @@ export interface EvidenceReference {
 export interface ModelRequest {
   task: ModelTask;
   sourceFingerprint: string;
+  /** Hash of the private owner ID, or `shared` for public-source-only work. */
+  cacheScopeId?: string;
   input: Record<string, unknown>;
   evidence: EvidenceReference[];
   provider?: string;
@@ -55,6 +57,7 @@ export class BoundedModelGateway {
   cacheKey(request: ModelRequest) {
     return digest({
       task: request.task,
+      cacheScopeId: request.cacheScopeId ?? "shared",
       sourceFingerprint: request.sourceFingerprint,
       evidence: request.evidence,
       input: request.input,

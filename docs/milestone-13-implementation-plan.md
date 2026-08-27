@@ -8,7 +8,7 @@ M13 never decides identity, authorization, ownership, canonical opportunity iden
 
 ## Contract
 
-The gateway uses versioned task/schema/prompt/redaction identifiers, input/source hashes, bounded typed input/output, source evidence references, provider-neutral execution, safe statuses, immutable cache keys, and no raw prompt/response persistence. Source content is untrusted data: embedded instructions, URLs, tool requests, secret requests, and eligibility assertions have no authority. Evidence proposals require an existing cited span; unsupported output is rejected, and ambiguity abstains.
+The gateway uses versioned task/schema/prompt/redaction identifiers, input/source hashes, bounded typed input/output, source evidence references, provider-neutral execution, safe statuses, owner-scoped immutable cache keys, and no raw prompt/response persistence. Source content is untrusted data: embedded instructions, URLs, tool requests, secret requests, and eligibility assertions have no authority. Evidence proposals require an existing cited span; unsupported output is rejected, and ambiguity abstains.
 
 `ZERO_COST_MODE=true` blocks paid providers before execution. Local/mock providers are permitted for tests. No provider SDK or network dependency was added. Calls record safe metadata and usage only; prompts, raw resume text, raw DOM, cookies, storage, credentials, and secrets are excluded.
 
