@@ -37,6 +37,13 @@ function render(scan) {
     summary.textContent = `${candidate.location || "Location unknown"} · confidence ${candidate.rankScore}`;
     const select = document.createElement("button");
     select.textContent = "Save selected job";
+    const actions = document.createElement("span");
+    actions.hidden = true;
+    const application = document.createElement("button");
+    application.textContent = "Add to application board";
+    const plan = document.createElement("button");
+    plan.textContent = "Create application plan";
+    actions.append(application, plan);
     select.onclick = async () => {
       select.disabled = true;
       try {
@@ -52,12 +59,49 @@ function render(scan) {
             ? "Saved to RecruitIntel."
             : "Saved privately; policy prevents shared ingestion.",
         );
+        if (decision.status === "RESOLVED") {
+          actions.hidden = false;
+          application.onclick = async () => {
+            application.disabled = true;
+            try {
+              await request(`/api/extension/decisions/${decision.id}/application`, {
+                method: "POST",
+                body: JSON.stringify({ cycleKey: `extension-${crypto.randomUUID()}` }),
+              });
+              setStatus("Added to your application board.");
+            } catch (error) {
+              setStatus(error.message);
+              application.disabled = false;
+            }
+          };
+          plan.onclick = async () => {
+            plan.disabled = true;
+            try {
+              const target = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
+              await request(`/api/extension/decisions/${decision.id}/plan`, {
+                method: "POST",
+                body: JSON.stringify({
+                  title: `Apply: ${candidate.title}`,
+                  targetDate: target,
+                  timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+                }),
+              });
+              setStatus("Created your application plan.");
+            } catch (error) {
+              setStatus(error.message);
+              plan.disabled = false;
+            }
+          };
+        }
       } catch (error) {
         setStatus(error.message);
         select.disabled = false;
       }
     };
-    article.append(title, summary, select);
+    const provenance = document.createElement("p");
+    provenance.className = "muted";
+    provenance.textContent = `${candidate.kind.replace("_", " ")} · ${candidate.url}`;
+    article.append(title, summary, provenance, select, actions);
     candidates.append(article);
   }
 }
