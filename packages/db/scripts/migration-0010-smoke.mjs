@@ -307,6 +307,45 @@ try {
     "0016_m10_runtime_completion.sql",
     "0017_alert_enqueue_conflict_repair.sql",
     "0018_application_calendar_idempotency.sql",
+  ]);
+  const [preM11Application] = await database`
+    insert into public.applications (
+      user_id,opportunity_id,source_posting_id,company_id,cycle_key,current_status,
+      current_stage,application_url_used,target_snapshot
+    ) values (
+      ${user.id},
+      (select opportunity_id from public.job_opportunity_postings
+        where job_id=${postMigrationJob.id} and valid_to is null),
+      ${postMigrationJob.id},${company.id},'pre-m11-preservation','APPLIED','OA',
+      'https://m8.example/apply/pre-m11','{"fixture":"pre-m11"}'::jsonb
+    ) returning id,opportunity_id,source_posting_id
+  `;
+  const [preM11Event] = await database`
+    insert into public.application_events (
+      application_id,user_id,event_type,to_status,to_stage,source,idempotency_key
+    ) values (
+      ${preM11Application.id},${user.id},'APPLICATION_SUBMITTED','APPLIED','OA','USER',
+      'pre-m11-preservation-submit'
+    ) returning id
+  `;
+  const [preM11Assessment] = await database`
+    insert into public.application_assessments (
+      application_id,user_id,type,status,received_at,completed_at,idempotency_key
+    ) values (
+      ${preM11Application.id},${user.id},'OA','COMPLETED',now(),now(),
+      'pre-m11-preservation-oa'
+    ) returning id
+  `;
+  const [preM11Interview] = await database`
+    insert into public.application_interviews (
+      application_id,user_id,interview_type,status,starts_at,ends_at,timezone
+    ) values (
+      ${preM11Application.id},${user.id},'TECHNICAL','COMPLETED',
+      '2027-01-02T12:00:00Z','2027-01-02T13:00:00Z','UTC'
+    ) returning id
+  `;
+
+  await apply(database, [
     "0019_resume_evidence_matching.sql",
     "0020_evidence_corrections.sql",
     "0021_resume_object_storage.sql",
@@ -319,6 +358,7 @@ try {
     "0028_resume_match_unique_fix.sql",
     "0029_m11_claimed_evidence_write.sql",
     "0030_m11_claimed_evidence_write_fix.sql",
+    "0031_m11_runtime_acceptance.sql",
   ]);
   await apply(database, []);
   const [postCounts] = await database`
@@ -334,6 +374,15 @@ try {
       ,(select count(*)::int from public.resume_documents where user_id=${user.id}) as resume_documents
       ,(select count(*)::int from public.resume_versions where user_id=${user.id}) as resume_versions
       ,(select count(*)::int from public.candidate_evidence where user_id=${user.id}) as evidence
+      ,(select count(*)::int from public.applications where id=${preM11Application.id}
+        and opportunity_id=${preM11Application.opportunity_id}
+        and source_posting_id=${preM11Application.source_posting_id}) as pre_m11_applications
+      ,(select count(*)::int from public.application_events where id=${preM11Event.id}
+        and application_id=${preM11Application.id}) as pre_m11_events
+      ,(select count(*)::int from public.application_assessments where id=${preM11Assessment.id}
+        and application_id=${preM11Application.id}) as pre_m11_assessments
+      ,(select count(*)::int from public.application_interviews where id=${preM11Interview.id}
+        and application_id=${preM11Application.id}) as pre_m11_interviews
   `;
   if (
     postCounts.watches !== preCounts.watches ||
@@ -346,7 +395,11 @@ try {
     postCounts.users !== 2 ||
     postCounts.resume_documents !== 0 ||
     postCounts.resume_versions !== 0 ||
-    postCounts.evidence !== 0
+    postCounts.evidence !== 0 ||
+    postCounts.pre_m11_applications !== 1 ||
+    postCounts.pre_m11_events !== 1 ||
+    postCounts.pre_m11_assessments !== 1 ||
+    postCounts.pre_m11_interviews !== 1
   ) {
     throw new Error("M9 to M10 migration did not preserve private/shared state or ciphertext");
   }
@@ -439,7 +492,7 @@ try {
   console.log(
     JSON.stringify({
       status: "ok",
-      migration: "0009 -> 0030 (M8 -> M11)",
+      migration: "0018 -> 0031 preservation (full 0001 bootstrap)",
       sourcePostingsPreserved: migrationState.jobs,
       singletonOpportunities: migrationState.opportunities,
       singletonMemberships: migrationState.memberships,

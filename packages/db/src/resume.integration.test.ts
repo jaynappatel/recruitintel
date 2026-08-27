@@ -7,6 +7,7 @@ import {
   createResumeVersion,
   deleteResumeDocument,
   listResumeEvidence,
+  materializeRequirementSet,
   materializeResumeJobMatch,
   readResumeObject,
   ResumeConflictError,
@@ -134,8 +135,9 @@ integration("M11 resume evidence persistence", () => {
 
   it("creates a new match version when evidence changes", async () => {
     const sql = postgres(databaseUrl!, { max: 1 });
-    const [opportunity] =
-      await sql`select id from public.job_opportunities where status='ACTIVE' limit 1`;
+    const [opportunity] = await sql`select id from public.job_opportunities
+        where status='ACTIVE' and company_id='10000000-0000-0000-0000-000000000001'::uuid
+        limit 1`;
     await sql.end();
     if (!opportunity) return;
     const document = await createResumeDocument(owner, {
@@ -151,6 +153,45 @@ integration("M11 resume evidence persistence", () => {
     expect(second.id).not.toBe(first.id);
     expect(first.resumeVersionId).toBe(version.id);
     expect(second.resumeVersionId).toBe(version.id);
+  });
+
+  it("serializes duplicate uploads, versions, requirement sets, and exact matches", async () => {
+    const content = "M11 concurrency Python TypeScript SQL";
+    const documents = await Promise.all(
+      Array.from({ length: 8 }, (_, index) =>
+        createResumeDocument(owner, {
+          originalFilename: `concurrent-${index}.txt`,
+          mediaType: "text/plain",
+          bytes: content,
+        }),
+      ),
+    );
+    expect(new Set(documents.map((item) => item.id)).size).toBe(1);
+    const documentId = documents[0]!.id;
+    const versions = await Promise.all(
+      Array.from({ length: 4 }, () => createResumeVersion(owner, documentId, content)),
+    );
+    expect(new Set(versions.map((item) => item.versionNumber))).toEqual(new Set([1, 2, 3, 4]));
+
+    const sql = postgres(databaseUrl!, { max: 1 });
+    const [opportunity] = await sql`select id from public.job_opportunities
+        where status='ACTIVE' and company_id='10000000-0000-0000-0000-000000000001'::uuid
+        order by id limit 1`;
+    await sql.end();
+    if (!opportunity) throw new Error("Seed opportunity missing");
+    const opportunityId = String(opportunity.id);
+    const requirementSets = await Promise.all(
+      Array.from({ length: 8 }, () => materializeRequirementSet(opportunityId)),
+    );
+    expect(new Set(requirementSets.map((item) => String(item.id))).size).toBe(1);
+    const matches = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        materializeResumeJobMatch(owner, versions[0]!.id, opportunityId),
+      ),
+    );
+    expect(new Set(matches.map((item) => item.id)).size).toBe(1);
+    expect(new Set(matches.map((item) => item.evidenceFingerprint)).size).toBe(1);
+    expect(new Set(matches.map((item) => item.requirementInputFingerprint)).size).toBe(1);
   });
 
   it("enforces compound M11 ownership at the database boundary", async () => {
@@ -172,8 +213,9 @@ integration("M11 resume evidence persistence", () => {
     await expect(sql`insert into public.candidate_evidence
       (user_id,resume_version_id,evidence_type,normalized_value,source,evidence_hash)
       values (${otherOwner}::uuid,${av.id}::uuid,'SKILL','{"skill":"Python"}'::jsonb,'DETERMINISTIC_PARSE',${"f".repeat(64)})`).rejects.toThrow();
-    const [opportunity] =
-      await sql`select id from public.job_opportunities where status='ACTIVE' limit 1`;
+    const [opportunity] = await sql`select id from public.job_opportunities
+        where status='ACTIVE' and company_id='10000000-0000-0000-0000-000000000001'::uuid
+        limit 1`;
     if (opportunity) {
       const [application] =
         await sql`select id from public.applications where user_id=${owner}::uuid limit 1`;
@@ -185,7 +227,7 @@ integration("M11 resume evidence persistence", () => {
     }
     await sql.end();
     await expect(reviewResumeEvidence(otherOwner, ae.id, "CONFIRMED")).rejects.toThrow();
-    await expect(deleteResumeDocument(otherOwner, a.id)).resolves.toBeUndefined();
+    await expect(deleteResumeDocument(otherOwner, a.id)).rejects.toThrow("Resume not found");
     await expect(readResumeObject(owner, a.id)).resolves.toEqual(Buffer.from("Python"));
   });
 });

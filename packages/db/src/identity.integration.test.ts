@@ -7,6 +7,7 @@ import {
   authenticateServicePrincipal,
   createPrivacyRequest,
   deleteUserAccount,
+  exportUserAccount,
   hashOpaqueToken,
   recordAuditEvent,
   serviceTokenPrefix,
@@ -19,6 +20,15 @@ import {
   createAssessment,
   createInterview,
 } from "./applications";
+import {
+  createResumeDocument,
+  createResumeVersion,
+  listResumeEvidence,
+  materializeResumeJobMatch,
+  queueResumeParseRun,
+  readResumeObject,
+  reviewResumeEvidence,
+} from "./resume";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? describe : describe.skip;
@@ -150,11 +160,13 @@ integration("identity, audit, instrumentation, and privacy", () => {
     }
   });
 
-  it("keeps the privacy export request owner-scoped for M10 application data", async () => {
+  it("exports policy-approved M10/M11 data without secrets or another user's data", async () => {
     const sql = postgres(databaseUrl!, { max: 1 });
     try {
       const [opportunity] = await sql`
-        select id from public.job_opportunities where status = 'ACTIVE' order by id limit 1
+        select id from public.job_opportunities
+        where status = 'ACTIVE' and company_id='10000000-0000-0000-0000-000000000001'::uuid
+        order by id limit 1
       `;
       if (!opportunity) throw new Error("Seed opportunity missing");
       const application = await createApplication(userId, {
@@ -177,7 +189,36 @@ integration("identity, audit, instrumentation, and privacy", () => {
         endsAt: "2027-06-01T13:00:00.000Z",
         timezone: "UTC",
       });
+      const document = await createResumeDocument(userId, {
+        originalFilename: "privacy-export-m11.txt",
+        mediaType: "text/plain",
+        bytes: "Python TypeScript privacy export",
+      });
+      const version = await createResumeVersion(
+        userId,
+        document.id,
+        "Python TypeScript privacy export",
+      );
+      await queueResumeParseRun(userId, version.id);
+      const evidence = (await listResumeEvidence(userId, version.id))[0];
+      if (!evidence) throw new Error("Resume evidence missing");
+      await reviewResumeEvidence(userId, evidence.id, "CONFIRMED");
+      const match = await materializeResumeJobMatch(userId, version.id, String(opportunity.id));
+      await createResumeDocument(secondUserId, {
+        originalFilename: "user-b-private-marker.txt",
+        mediaType: "text/plain",
+        bytes: "USER_B_PRIVATE_MARKER",
+      });
+      await sql`insert into public.user_sessions (expires_at, token, user_id)
+        values (now()+interval '1 hour','privacy-export-session-secret',${userId}::uuid)`;
+      await sql`insert into public.calendar_connections
+        (user_id,provider,encrypted_refresh_token,connection_status)
+        values (${userId}::uuid,'GOOGLE','privacy-export-google-secret','CONNECTED')
+        on conflict (user_id,provider) do update set
+          encrypted_refresh_token=excluded.encrypted_refresh_token,
+          connection_status=excluded.connection_status`;
       const requestId = await createPrivacyRequest(userId, "EXPORT");
+      const exported = await exportUserAccount(userId);
       const [request] = await sql`
         select id, user_id, request_type, status from public.privacy_requests where id = ${requestId}::uuid
       `;
@@ -198,7 +239,37 @@ integration("identity, audit, instrumentation, and privacy", () => {
       expect(Number(counts?.assessments)).toBe(1);
       expect(Number(counts?.interviews)).toBe(1);
       expect(Number(counts?.other_user_apps)).toBe(0);
-      expect(JSON.stringify(request)).not.toMatch(/token|secret|credential/i);
+      expect(exported.resumes.some((row) => String(row.id) === document.id)).toBe(true);
+      expect(exported.versions.some((row) => String(row.id) === version.id)).toBe(true);
+      expect(exported.parseRuns.some((row) => String(row.resume_version_id) === version.id)).toBe(
+        true,
+      );
+      expect(exported.evidence.some((row) => String(row.id) === evidence.id)).toBe(true);
+      expect(exported.evidenceConfirmations).toHaveLength(1);
+      expect(exported.matches.some((row) => String(row.id) === match.id)).toBe(true);
+      expect(exported.matches).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: match.id,
+            requirement_set_version: match.requirementSetVersion,
+            requirement_algorithm_version: match.requirementAlgorithmVersion,
+            requirement_input_fingerprint: match.requirementInputFingerprint,
+            evidence_fingerprint: match.evidenceFingerprint,
+          }),
+        ]),
+      );
+      expect(exported.applications.some((row) => String(row.id) === application.id)).toBe(true);
+      expect(exported.applicationEvents.length).toBeGreaterThan(0);
+      expect(exported.applicationAssessments).toHaveLength(1);
+      expect(exported.applicationInterviews).toHaveLength(1);
+      const serialized = JSON.stringify(exported);
+      expect(serialized).not.toContain(secondUserId);
+      expect(serialized).not.toContain("user-b-private-marker");
+      expect(serialized).not.toContain("privacy-export-session-secret");
+      expect(serialized).not.toContain("privacy-export-google-secret");
+      expect(serialized).not.toMatch(
+        /encrypted_refresh_token|storage_ciphertext|storage_key|session_token/i,
+      );
     } finally {
       await sql.end();
     }
@@ -207,9 +278,12 @@ integration("identity, audit, instrumentation, and privacy", () => {
   it("deletes private state and encrypted credentials while retaining a minimized request record", async () => {
     const sql = postgres(databaseUrl!, { max: 1 });
     const ciphertext = "v1.account-deletion-encrypted-google-credential";
+    let deletedResumeDocumentId = "";
     try {
       const [opportunity] = await sql`
-        select id, company_id from public.job_opportunities where status = 'ACTIVE' order by id limit 1
+        select id, company_id from public.job_opportunities
+        where status = 'ACTIVE' and company_id='10000000-0000-0000-0000-000000000001'::uuid
+        order by id limit 1
       `;
       if (!opportunity) throw new Error("Seed opportunity missing");
       const userApplication = await createApplication(userId, {
@@ -238,6 +312,18 @@ integration("identity, audit, instrumentation, and privacy", () => {
         endsAt: "2027-05-02T13:00:00.000Z",
         timezone: "UTC",
       });
+      const document = await createResumeDocument(userId, {
+        originalFilename: "privacy-delete-m11.txt",
+        mediaType: "text/plain",
+        bytes: "Python privacy deletion",
+      });
+      deletedResumeDocumentId = document.id;
+      const version = await createResumeVersion(userId, document.id, "Python privacy deletion");
+      await queueResumeParseRun(userId, version.id);
+      await materializeResumeJobMatch(userId, version.id, String(opportunity.id));
+      await expect(readResumeObject(userId, document.id)).resolves.toEqual(
+        Buffer.from("Python privacy deletion"),
+      );
       await sql`
         insert into public.user_identities (issuer, account_id, provider_id, user_id)
         values (
@@ -252,6 +338,9 @@ integration("identity, audit, instrumentation, and privacy", () => {
         insert into public.calendar_connections (
           user_id, provider, encrypted_refresh_token, connection_status
         ) values (${userId}::uuid, 'GOOGLE', ${ciphertext}, 'CONNECTED')
+        on conflict (user_id,provider) do update set
+          encrypted_refresh_token=excluded.encrypted_refresh_token,
+          connection_status=excluded.connection_status
       `;
     } finally {
       await sql.end();
@@ -280,9 +369,25 @@ integration("identity, audit, instrumentation, and privacy", () => {
           (select count(*)::int from public.applications
             where user_id = ${secondUserId}::uuid) as second_user_applications,
           (select count(*)::int from public.job_opportunities
-            where id = (select id from public.job_opportunities where status = 'ACTIVE' order by id limit 1)) as shared_opportunities,
+            where id = (select id from public.job_opportunities
+              where status = 'ACTIVE' and company_id='10000000-0000-0000-0000-000000000001'::uuid
+              order by id limit 1)) as shared_opportunities,
           (select count(*)::int from public.calendar_connections
-            where encrypted_refresh_token = ${ciphertext}) as credentials
+            where encrypted_refresh_token = ${ciphertext}) as credentials,
+          (select count(*)::int from public.resume_documents
+            where user_id = ${userId}::uuid) as resume_documents,
+          (select count(*)::int from public.resume_versions
+            where user_id = ${userId}::uuid) as resume_versions,
+          (select count(*)::int from public.resume_parse_runs
+            where user_id = ${userId}::uuid) as resume_parse_runs,
+          (select count(*)::int from public.candidate_evidence
+            where user_id = ${userId}::uuid) as candidate_evidence,
+          (select count(*)::int from public.resume_job_matches
+            where user_id = ${userId}::uuid) as resume_matches,
+          (select count(*)::int from public.work_items
+            where user_id = ${userId}::uuid) as work_items,
+          (select count(*)::int from public.resume_documents
+            where user_id = ${secondUserId}::uuid) as second_user_resumes
         from public.privacy_requests p where p.id = ${requestId}::uuid
       `;
       expect(result).toMatchObject({
@@ -299,7 +404,15 @@ integration("identity, audit, instrumentation, and privacy", () => {
         second_user_applications: 1,
         shared_opportunities: 1,
         credentials: 0,
+        resume_documents: 0,
+        resume_versions: 0,
+        resume_parse_runs: 0,
+        candidate_evidence: 0,
+        resume_matches: 0,
+        work_items: 0,
+        second_user_resumes: 1,
       });
+      await expect(readResumeObject(userId, deletedResumeDocumentId)).rejects.toThrow();
     } finally {
       await verify.end();
     }

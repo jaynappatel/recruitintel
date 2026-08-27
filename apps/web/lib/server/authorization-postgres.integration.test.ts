@@ -274,4 +274,206 @@ integration("authenticated route ownership", () => {
     expect((await appRoute.GET(new Request("http://localhost:3000"), context)).status).toBe(401);
     sessionSpy.mockRestore();
   });
+
+  it("denies USER_B across every M11 private resource without mutating USER_A", async () => {
+    const { auth } = await import("./auth");
+    const {
+      createApplication,
+      createResumeDocument,
+      createResumeVersion,
+      listResumeEvidence,
+      materializeResumeJobMatch,
+    } = await import("@recruitintel/db");
+    const opportunityResult = await pool.query(
+      `select id from public.job_opportunities
+       where status='ACTIVE' and company_id='10000000-0000-0000-0000-000000000001'
+       order by id limit 1`,
+    );
+    const opportunityId = String(opportunityResult.rows[0].id);
+    const document = await createResumeDocument(userOneId, {
+      originalFilename: "m11-http-idor.txt",
+      mediaType: "text/plain",
+      bytes: "Python React SQL",
+    });
+    const version = await createResumeVersion(userOneId, document.id, "Python React SQL");
+    const evidence = (await listResumeEvidence(userOneId, version.id))[0];
+    if (!evidence) throw new Error("evidence missing");
+    const match = await materializeResumeJobMatch(userOneId, version.id, opportunityId);
+    const application = await createApplication(userOneId, {
+      opportunityId,
+      cycleKey: "http-idor-m11",
+      applicationUrlUsed: "https://apply.example/http-idor-m11",
+    });
+    const user = (id: string) => ({
+      session: {} as never,
+      user: {
+        id,
+        email: `${id}@example.test`,
+        emailVerified: true,
+        name: id,
+        image: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+    const sessionSpy = vi.spyOn(auth.api, "getSession").mockResolvedValue(user(userTwoId));
+    const documentRoute = await import("../../app/api/resumes/[id]/route");
+    const versionsRoute = await import("../../app/api/resumes/[id]/versions/route");
+    const parseRoute = await import("../../app/api/resumes/[id]/parse/route");
+    const evidenceRoute = await import("../../app/api/resumes/[id]/evidence/route");
+    const standaloneEvidenceRoute = await import("../../app/api/resume-evidence/[id]/route");
+    const matchesRoute = await import("../../app/api/resume-matches/route");
+    const applicationMatchRoute = await import("../../app/api/applications/[id]/match/route");
+    const resumesRoute = await import("../../app/api/resumes/route");
+    const documentContext = { params: Promise.resolve({ id: document.id }) };
+    const applicationContext = { params: Promise.resolve({ id: application.id }) };
+    const jsonRequest = (path: string, body: unknown, method = "POST") =>
+      new Request(`http://localhost:3000${path}`, {
+        method,
+        headers: { "content-type": "application/json", origin: "http://localhost:3000" },
+        body: JSON.stringify(body),
+      });
+    const before = await pool.query(
+      `select
+         (select count(*)::int from public.resume_versions where document_id=$1) versions,
+         (select count(*)::int from public.resume_parse_runs where resume_version_id=$2) parse_runs,
+         (select count(*)::int from public.work_items where user_id=$3 and resume_version_id=$2) work,
+         (select count(*)::int from public.evidence_confirmations where evidence_id=$4) confirmations,
+         (select review_status::text from public.candidate_evidence where id=$4) evidence_status,
+         (select match_id from public.applications where id=$5) application_match,
+         (select encode(storage_ciphertext,'hex') from public.resume_documents where id=$1) ciphertext`,
+      [document.id, version.id, userOneId, evidence.id, application.id],
+    );
+
+    expect((await resumesRoute.GET(new Request("http://localhost:3000/api/resumes"))).status).toBe(
+      200,
+    );
+    expect(
+      (await documentRoute.GET(new Request("http://localhost:3000"), documentContext)).status,
+    ).toBe(404);
+    expect(
+      (await versionsRoute.GET(new Request("http://localhost:3000"), documentContext)).status,
+    ).toBe(404);
+    expect(
+      (
+        await versionsRoute.POST(
+          jsonRequest(`/api/resumes/${document.id}/versions`, { extractedText: "Forbidden" }),
+          documentContext,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await parseRoute.GET(
+          new Request(
+            `http://localhost:3000/api/resumes/${document.id}/parse?resumeVersionId=${version.id}`,
+          ),
+          documentContext,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await parseRoute.POST(
+          jsonRequest(`/api/resumes/${document.id}/parse`, { resumeVersionId: version.id }),
+          documentContext,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await evidenceRoute.GET(
+          new Request(
+            `http://localhost:3000/api/resumes/${document.id}/evidence?resumeVersionId=${version.id}`,
+          ),
+          documentContext,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await evidenceRoute.POST(
+          jsonRequest(`/api/resumes/${document.id}/evidence`, {
+            resumeVersionId: version.id,
+            evidenceId: evidence.id,
+            action: "CONFIRMED",
+          }),
+          documentContext,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await standaloneEvidenceRoute.PATCH(
+          jsonRequest(`/api/resume-evidence/${evidence.id}`, { disposition: "REJECTED" }, "PATCH"),
+          { params: Promise.resolve({ id: evidence.id }) },
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await matchesRoute.GET(
+          new Request(`http://localhost:3000/api/resume-matches?id=${match.id}`),
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await matchesRoute.POST(
+          jsonRequest("/api/resume-matches", {
+            resumeVersionId: version.id,
+            opportunityId,
+          }),
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await applicationMatchRoute.POST(
+          jsonRequest(`/api/applications/${application.id}/match`, {
+            resumeVersionId: version.id,
+            matchId: match.id,
+          }),
+          applicationContext,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await documentRoute.DELETE(
+          new Request(`http://localhost:3000/api/resumes/${document.id}`, {
+            method: "DELETE",
+            headers: { origin: "http://localhost:3000" },
+          }),
+          documentContext,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await resumesRoute.POST(
+          jsonRequest("/api/resumes", {
+            userId: userOneId,
+            originalFilename: "browser-owner.txt",
+            mediaType: "text/plain",
+            content: Buffer.from("forbidden owner field").toString("base64"),
+          }),
+        )
+      ).status,
+    ).toBe(400);
+
+    const after = await pool.query(
+      `select
+         (select count(*)::int from public.resume_versions where document_id=$1) versions,
+         (select count(*)::int from public.resume_parse_runs where resume_version_id=$2) parse_runs,
+         (select count(*)::int from public.work_items where user_id=$3 and resume_version_id=$2) work,
+         (select count(*)::int from public.evidence_confirmations where evidence_id=$4) confirmations,
+         (select review_status::text from public.candidate_evidence where id=$4) evidence_status,
+         (select match_id from public.applications where id=$5) application_match,
+         (select encode(storage_ciphertext,'hex') from public.resume_documents where id=$1) ciphertext`,
+      [document.id, version.id, userOneId, evidence.id, application.id],
+    );
+    expect(after.rows[0]).toEqual(before.rows[0]);
+    sessionSpy.mockRestore();
+  });
 });

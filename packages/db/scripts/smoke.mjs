@@ -66,10 +66,43 @@ try {
         where discovery_fingerprint is not null)::int as source_endpoints,
       (select coalesce(sum(paid_spend_micros), 0)::bigint
         from public.search_provider_usage_daily)::text as search_paid_spend_micros,
+      0::text as model_paid_spend_micros,
       (
-        select count(*) from public.calendar_items item
-        left join public.users app_user on app_user.id = item.user_id
-        where app_user.id is null
+        select coalesce(sum(orphan_count),0) from (
+          select count(*)::bigint orphan_count from public.user_profiles child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.user_sessions child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.calendar_items child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.application_plans child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.applications child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.application_events child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.application_assessments child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.application_interviews child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.resume_documents child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.resume_versions child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.resume_parse_runs child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.candidate_evidence child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.evidence_confirmations child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.resume_job_matches child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.match_evidence child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.work_items child
+            left join public.users owner on owner.id=child.user_id
+            where child.user_id is not null and owner.id is null
+        ) private_orphans
       )::int as private_owner_orphans,
       (select count(*) from public.recruiting_events)::int as events,
       (select count(*) from public.schema_migrations)::int as migrations

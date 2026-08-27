@@ -23,6 +23,8 @@ _HEARTBEAT_TYPES = frozenset(
         WorkType.GITHUB_SYNC,
         WorkType.PUBLIC_WEB_SEARCH,
         WorkType.CALENDAR_SYNC,
+        WorkType.RESUME_PARSE,
+        WorkType.MATCH_MATERIALIZE,
     }
 )
 

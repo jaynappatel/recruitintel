@@ -6,7 +6,9 @@ import re
 from collections.abc import Mapping
 from pathlib import Path
 
+import psycopg
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from psycopg.types.json import Jsonb
 
 from recruitintel_collectors.adapters import GreenhouseCollector, LeverCollector
 from recruitintel_collectors.calendar.encryption import AesGcmCredentialCipher
@@ -79,8 +81,8 @@ class RuntimeWorkHandlers:
             raise ValueError("Resume parse work requires an owner and version")
         async with await self._orchestration._connect() as connection:
             cursor = await connection.execute(
-                "select media_type,content_hash,storage_ciphertext,storage_nonce from public.m11_claimed_resume_object(%s)",
-                (work.id,),
+                "select media_type,content_hash,storage_ciphertext,storage_nonce from public.m11_claimed_resume_object(%s,%s)",
+                (work.id, work.lease_token),
             )
             target = await cursor.fetchone()
             if target is None:
@@ -125,73 +127,69 @@ class RuntimeWorkHandlers:
                 )
                 if re.search(rf"(?i)(^|[^a-z0-9+#]){re.escape(skill)}($|[^a-z0-9+#])", text)
             }
-            for skill in skills:
-                evidence_hash = hashlib.sha256(
-                    f"{work.resume_version_id}\0skill\0{skill}".encode()
-                ).hexdigest()
-                await connection.execute(
-                    "select public.m11_record_claimed_evidence(%s,%s,%s,%s)",
-                    (work.id, skill, text[:500], evidence_hash),
-                )
-            await connection.execute(
-                "insert into public.resume_parse_runs (user_id,resume_version_id,status,parser_version,input_hash,diagnostics,error_code,idempotency_key,started_at,completed_at) values (%s,%s,'SUCCEEDED',%s,%s,%s::jsonb,null,%s,now(),now()) on conflict (user_id,resume_version_id,idempotency_key) do update set status='SUCCEEDED',completed_at=now(),diagnostics=excluded.diagnostics",
+            evidence = [
+                {
+                    "skill": skill,
+                    "evidenceHash": hashlib.sha256(
+                        f"{work.resume_version_id}\0skill\0{skill}".encode()
+                    ).hexdigest(),
+                }
+                for skill in sorted(skills)
+            ]
+            cursor = await connection.execute(
+                "select public.m11_complete_claimed_parse(%s,%s,%s,%s,%s,%s,%s) as inserted",
                 (
-                    work.user_id,
-                    work.resume_version_id,
+                    work.id,
+                    work.lease_token,
                     work.parser_version or 1,
                     target["content_hash"],
-                    '{"bounded":true}' ,
-                    f"worker:{work.resume_version_id}:{work.parser_version or 1}",
+                    Jsonb(evidence),
+                    text[:500],
+                    Jsonb({"bounded": True, "evidenceCount": len(evidence)}),
                 ),
             )
+            completed = await cursor.fetchone()
         return WorkExecutionResult(
             coverage=CoverageStatus.COMPLETE,
             discovered=len(skills),
             processed=1,
-            diagnostics={"parserVersion": work.parser_version or 1, "evidenceCount": len(skills)},
+            diagnostics={
+                "parserVersion": work.parser_version or 1,
+                "evidenceCount": len(skills),
+                "insertedEvidence": int(completed["inserted"] if completed else 0),
+            },
         )
 
     async def match_materialize(self, work: ClaimedWork) -> WorkExecutionResult:
         if work.user_id is None or work.resume_version_id is None or work.opportunity_id is None:
             raise ValueError("Match work requires owner, resume version, and opportunity")
-        async with await self._orchestration._connect() as connection:
-            cursor = await connection.execute(
-                "select requirement_set_id from public.m11_claimed_match_inputs(%s) limit 1",
-                (work.id,),
-            )
-            claimed = await cursor.fetchone()
-            if claimed is None:
-                raise M11PermanentError("Match resume version is not owned by work item user")
-            cursor = await connection.execute(
-                "select evidence_id,evidence_hash,review_version,requirement_set_id from public.m11_claimed_match_inputs(%s)",
-                (work.id,),
-            )
-            evidence = await cursor.fetchall()
-            requirement = evidence[0] if evidence else claimed
-            digest = hashlib.sha256(
-                "|".join(
-                    sorted(
-                        f"{row['evidence_id']}:{row['evidence_hash']}:{row['review_version']}"
-                        for row in evidence
-                    )
-                ).encode()
-            ).hexdigest()
-            await connection.execute(
-                "insert into public.resume_job_matches (user_id,resume_version_id,opportunity_id,requirement_set_id,eligibility,reason_codes,algorithm_version,idempotency_key,evidence_fingerprint) values (%s,%s,%s,%s,'UNKNOWN',ARRAY['WORKER_MATERIALIZED'],%s,%s,%s) on conflict (user_id,resume_version_id,opportunity_id,requirement_set_id,algorithm_version,evidence_fingerprint) do update set generated_at=now()",
-                (
-                    work.user_id,
-                    work.resume_version_id,
-                    work.opportunity_id,
-                    requirement["requirement_set_id"],
-                    work.algorithm_version or "resume-coverage-v1",
-                    f"{work.resume_version_id}:{work.opportunity_id}:{requirement['requirement_set_id']}:{digest}",
-                    digest,
-                ),
-            )
+        try:
+            async with await self._orchestration._connect() as connection:
+                cursor = await connection.execute(
+                    "select * from public.m11_materialize_claimed_match(%s,%s)",
+                    (work.id, work.lease_token),
+                )
+                match = await cursor.fetchone()
+                if match is None:
+                    raise M11PermanentError("Match target is unavailable")
+        except psycopg.Error as error:
+            primary = getattr(error.diag, "message_primary", "")
+            if primary in {
+                "MATCH_TARGET_UNAVAILABLE",
+                "MATCH_REQUIREMENT_SET_MISSING",
+                "MATCH_OPPORTUNITY_MISSING",
+            }:
+                raise M11PermanentError("Match target is unavailable") from None
+            raise
         return WorkExecutionResult(
             coverage=CoverageStatus.COMPLETE,
             processed=1,
-            diagnostics={"algorithmVersion": work.algorithm_version or "resume-coverage-v1"},
+            diagnostics={
+                "algorithmVersion": work.algorithm_version or "resume-coverage-v1",
+                "eligibility": str(match["eligibility"]),
+                "score": int(match["score"]) if match["score"] is not None else None,
+                "created": bool(match["inserted"]),
+            },
         )
 
     async def ats_collect(self, work: ClaimedWork) -> WorkExecutionResult:

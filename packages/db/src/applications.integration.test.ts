@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  bindApplicationMatch,
   changeApplicationStatus,
   createApplication,
   createApplicationAlert,
@@ -18,7 +19,12 @@ import {
   openRecommendation,
   updateRecruitingPreferences,
 } from "./personalization";
-import { createResumeDocument, createResumeVersion, materializeResumeJobMatch } from "./resume";
+import {
+  createResumeDocument,
+  createResumeVersion,
+  getResumeMatch,
+  materializeResumeJobMatch,
+} from "./resume";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? describe : describe.skip;
@@ -32,8 +38,9 @@ integration("M10 application lifecycle", () => {
     process.env.DATABASE_URL = databaseUrl;
     const sql = postgres(databaseUrl!, { max: 1 });
     try {
-      const [opportunity] =
-        await sql`select id from public.job_opportunities where status='ACTIVE' order by id limit 1`;
+      const [opportunity] = await sql`select id from public.job_opportunities
+          where status='ACTIVE' and company_id='10000000-0000-0000-0000-000000000001'::uuid
+          order by id limit 1`;
       if (!opportunity) throw new Error("seed opportunity missing");
       opportunityId = String(opportunity.id);
       await sql`delete from public.applications where user_id=${owner}::uuid and cycle_key='m10-2026'`;
@@ -295,13 +302,16 @@ integration("M10 application lifecycle", () => {
       limit: 50,
       includeIneligible: false,
       includeLowPriority: true,
+      company: "stripe",
     });
     const item = recommendations.items[0];
     if (!item) throw new Error("Expected seeded opportunity recommendation");
     await openRecommendation(owner, item.impressionId);
     const contextSql = postgres(databaseUrl!, { max: 1 });
-    const [contextRow] = await contextSql`select ranking_decision_id from public.recommendation_impressions where id=${item.impressionId}::uuid`;
-    await contextSql.end();
+    const [contextRow] = await contextSql`select ranking_decision_id,score
+      from public.recommendation_impressions where id=${item.impressionId}::uuid`;
+    const [impressionCountBefore] = await contextSql`select count(*)::int as count
+      from public.recommendation_impressions where user_id=${owner}::uuid`;
     if (!contextRow) throw new Error("Recommendation context missing");
     const resumeDocument = await createResumeDocument(owner, {
       originalFilename: "recommendation-match.txt",
@@ -313,18 +323,22 @@ integration("M10 application lifecycle", () => {
       rankingDecisionId: String(contextRow.ranking_decision_id),
       recommendationImpressionId: item.impressionId,
     });
+    const [impressionCountAfter] = await contextSql`select count(*)::int as count
+      from public.recommendation_impressions where user_id=${owner}::uuid`;
+    await contextSql.end();
+    expect(Number(impressionCountAfter?.count)).toBe(Number(impressionCountBefore?.count));
+    await expect(
+      materializeResumeJobMatch(second, resumeVersion.id, item.opportunity.id, {
+        recommendationImpressionId: item.impressionId,
+      }),
+    ).rejects.toThrow();
     const application = await createApplication(owner, {
       opportunityId: item.opportunity.id,
       cycleKey: "m10-recommendation-e2e",
       originRecommendationImpressionId: item.impressionId,
       applicationUrlUsed: "https://apply.example/recommendation-e2e",
     });
-    const bound = await (await import("./applications")).bindApplicationMatch(
-      owner,
-      application.id,
-      resumeVersion.id,
-      match.id,
-    );
+    const bound = await bindApplicationMatch(owner, application.id, resumeVersion.id, match.id);
     expect(bound.matchId).toBe(match.id);
     await changeApplicationStatus(owner, application.id, {
       status: "APPLIED",
@@ -347,10 +361,29 @@ integration("M10 application lifecycle", () => {
       status: "OFFER",
       idempotencyKey: "m10-recommendation-offer",
     });
+    const preservedMatch = await getResumeMatch(owner, match.id);
+    expect(preservedMatch).toMatchObject({
+      id: match.id,
+      opportunityId: match.opportunityId,
+      resumeVersionId: match.resumeVersionId,
+      requirementSetId: match.requirementSetId,
+      requirementSetVersion: match.requirementSetVersion,
+      requirementAlgorithmVersion: match.requirementAlgorithmVersion,
+      requirementInputFingerprint: match.requirementInputFingerprint,
+      evidenceFingerprint: match.evidenceFingerprint,
+      algorithmVersion: match.algorithmVersion,
+      eligibility: match.eligibility,
+      score: match.score,
+      reasonCodes: match.reasonCodes,
+      rankingDecisionId: String(contextRow.ranking_decision_id),
+      recommendationImpressionId: item.impressionId,
+      citations: match.citations,
+    });
     const sql = postgres(databaseUrl!, { max: 1 });
     try {
       const [link] = await sql`
         select a.origin_recommendation_impression_id, a.match_id, i.ranking_decision_id,
+          i.score as impression_score,
           a.current_status::text as status, a.current_stage::text as stage,
           (select count(*)::int from public.application_events where application_id=a.id) as events
         from public.applications a
@@ -360,10 +393,14 @@ integration("M10 application lifecycle", () => {
       expect(String(link?.origin_recommendation_impression_id)).toBe(item.impressionId);
       expect(String(link?.match_id)).toBe(match.id);
       expect(link?.ranking_decision_id).toBeTruthy();
+      expect(Number(link?.impression_score)).toBe(Number(contextRow.score));
       expect(link?.status).toBe("OFFER");
       expect(link?.stage).toBe("OA");
       expect(Number(link?.events)).toBeGreaterThanOrEqual(6);
       await expect(getApplication(second, application.id)).rejects.toThrow();
+      await expect(
+        bindApplicationMatch(second, application.id, resumeVersion.id, match.id),
+      ).rejects.toThrow();
     } finally {
       await sql.end();
     }
@@ -436,6 +473,10 @@ integration("M10 application canonical opportunity resolution", () => {
       await sql`delete from public.applications where user_id in (${owner}::uuid, ${second}::uuid)
         and opportunity_id in (${firstOpportunityId}::uuid, ${secondOpportunityId}::uuid)
         and cycle_key like 'm10-resolution-%'`;
+      await sql`delete from public.resume_documents where user_id=${owner}::uuid
+        and original_filename='m11-resolution-history.txt'`;
+      await sql`delete from public.job_requirement_sets
+        where opportunity_id in (${firstOpportunityId}::uuid,${secondOpportunityId}::uuid)`;
       await sql`delete from public.companies where id = ${resolutionCompanyId}::uuid`;
     } finally {
       await sql.end();
@@ -443,12 +484,42 @@ integration("M10 application canonical opportunity resolution", () => {
   });
 
   it("preserves private application targets through merge, split, and re-merge", async () => {
+    const resumeDocument = await createResumeDocument(owner, {
+      originalFilename: "m11-resolution-history.txt",
+      mediaType: "text/plain",
+      bytes: "Python TypeScript immutable M11 match history",
+    });
+    const resumeVersion = await createResumeVersion(
+      owner,
+      resumeDocument.id,
+      "Python TypeScript immutable M11 match history",
+    );
+    const historicalMatch = await materializeResumeJobMatch(
+      owner,
+      resumeVersion.id,
+      secondOpportunityId,
+    );
+    const immutableMatchInput = {
+      opportunityId: historicalMatch.opportunityId,
+      resumeVersionId: historicalMatch.resumeVersionId,
+      requirementSetId: historicalMatch.requirementSetId,
+      requirementSetVersion: historicalMatch.requirementSetVersion,
+      requirementAlgorithmVersion: historicalMatch.requirementAlgorithmVersion,
+      requirementInputFingerprint: historicalMatch.requirementInputFingerprint,
+      evidenceFingerprint: historicalMatch.evidenceFingerprint,
+      algorithmVersion: historicalMatch.algorithmVersion,
+      eligibility: historicalMatch.eligibility,
+      score: historicalMatch.score,
+      reasonCodes: historicalMatch.reasonCodes,
+      citations: historicalMatch.citations,
+    };
     const userA = await createApplication(owner, {
       opportunityId: secondOpportunityId,
       sourcePostingId: resolutionSecondJobId,
       cycleKey: "m10-resolution-a",
       applicationUrlUsed: "https://apply.example/m10-resolution-a",
     });
+    await bindApplicationMatch(owner, userA.id, resumeVersion.id, historicalMatch.id);
     const userB = await createApplication(second, {
       opportunityId: firstOpportunityId,
       sourcePostingId: resolutionFirstJobId,
@@ -487,8 +558,14 @@ integration("M10 application canonical opportunity resolution", () => {
     expect(merged.resolutionMismatch).toBe(true);
     expect(merged.currentStatus).toBe(before.currentStatus);
     expect(merged.currentStage).toBe(before.currentStage);
+    expect(await getResumeMatch(owner, historicalMatch.id)).toMatchObject({
+      ...immutableMatchInput,
+      resolvedOpportunity: { id: firstOpportunityId },
+      resolutionMismatch: true,
+    });
     expect((await getApplication(second, userB.id)).opportunityId).toBe(firstOpportunityId);
     await expect(getApplication(second, userA.id)).rejects.toThrow();
+    await expect(getResumeMatch(second, historicalMatch.id)).rejects.toThrow();
 
     await splitOpportunity({
       opportunityId: firstOpportunityId,
@@ -502,6 +579,11 @@ integration("M10 application canonical opportunity resolution", () => {
     expect(split.sourcePostingId).toBe(resolutionSecondJobId);
     expect(split.resolvedOpportunity?.id).toBe(secondOpportunityId);
     expect(split.resolutionMismatch).toBe(false);
+    expect(await getResumeMatch(owner, historicalMatch.id)).toMatchObject({
+      ...immutableMatchInput,
+      resolvedOpportunity: { id: secondOpportunityId },
+      resolutionMismatch: false,
+    });
     expect(await getApplicationTimeline(owner, userA.id)).toHaveLength(beforeTimeline.length);
 
     await mergeOpportunities({
@@ -515,6 +597,11 @@ integration("M10 application canonical opportunity resolution", () => {
     expect(remerged.opportunityId).toBe(secondOpportunityId);
     expect(remerged.resolvedOpportunity?.id).toBe(firstOpportunityId);
     expect(remerged.resolutionMismatch).toBe(true);
+    expect(await getResumeMatch(owner, historicalMatch.id)).toMatchObject({
+      ...immutableMatchInput,
+      resolvedOpportunity: { id: firstOpportunityId },
+      resolutionMismatch: true,
+    });
     expect(await getApplicationTimeline(owner, userA.id)).toHaveLength(beforeTimeline.length);
     const sql = postgres(databaseUrl!, { max: 1 });
     try {
@@ -527,7 +614,11 @@ integration("M10 application canonical opportunity resolution", () => {
           (select count(*)::int from public.calendar_items where application_id = ${userA.id}::uuid and deleted_at is null) calendar_items,
           (select count(*)::int from public.application_events where application_id = ${userA.id}::uuid and user_id = ${owner}::uuid) owned_events,
           (select count(*)::int from public.job_resolution_decisions where company_id = ${resolutionCompanyId}::uuid
-            and idempotency_key in ('m10-resolution-merge','m10-resolution-split','m10-resolution-remerge')) decisions
+            and idempotency_key in ('m10-resolution-merge','m10-resolution-split','m10-resolution-remerge')) decisions,
+          (select count(*)::int from public.resume_job_matches where id=${historicalMatch.id}::uuid
+            and user_id=${owner}::uuid and opportunity_id=${secondOpportunityId}::uuid) historical_matches,
+          (select count(*)::int from public.job_resolution_decisions where company_id=${resolutionCompanyId}::uuid
+            and decision_source='MANUAL') lineage_rows
       `;
       expect(Number(counts?.events)).toBe(beforeTimeline.length);
       expect(Number(counts?.assessments)).toBe(1);
@@ -536,6 +627,8 @@ integration("M10 application canonical opportunity resolution", () => {
       expect(Number(counts?.calendar_items)).toBe(1);
       expect(Number(counts?.owned_events)).toBe(beforeTimeline.length);
       expect(Number(counts?.decisions)).toBe(3);
+      expect(Number(counts?.historical_matches)).toBe(1);
+      expect(Number(counts?.lineage_rows)).toBe(3);
     } finally {
       await sql.end();
     }

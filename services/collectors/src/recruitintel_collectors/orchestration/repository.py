@@ -9,7 +9,7 @@ from psycopg.types.json import Jsonb
 
 from recruitintel_collectors.redaction import redact_value
 
-from .enums import CoverageStatus, WorkClass, WorkStatus
+from .enums import CoverageStatus, FailureClassification, WorkClass, WorkStatus, WorkType
 from .models import ClaimedWork, WorkExecutionResult, WorkFailure
 
 
@@ -75,20 +75,32 @@ class PostgresOrchestrationRepository:
                 )
                 rows = await cursor.fetchall()
                 if rows:
-                    cursor = await connection.execute(
-                        """
-                        select id, work_item_id, lease_token from public.work_attempts
-                        where work_item_id = any(%s::uuid[]) and lease_token = any(%s::uuid[])
-                        """,
-                        (
-                            [row["id"] for row in rows],
-                            [row["lease_token"] for row in rows],
-                        ),
-                    )
-                    attempts = {
-                        (row["work_item_id"], row["lease_token"]): row["id"]
-                        for row in await cursor.fetchall()
-                    }
+                    if set(classes) == {WorkClass.RESUME}:
+                        attempts: dict[tuple[UUID, UUID], UUID] = {}
+                        for row in rows:
+                            cursor = await connection.execute(
+                                "select public.m11_claimed_attempt_id(%s, %s) as id",
+                                (row["id"], row["lease_token"]),
+                            )
+                            attempt = await cursor.fetchone()
+                            if attempt is None:
+                                raise RuntimeError("claimed M11 work has no attempt")
+                            attempts[(row["id"], row["lease_token"])] = attempt["id"]
+                    else:
+                        cursor = await connection.execute(
+                            """
+                            select id, work_item_id, lease_token from public.work_attempts
+                            where work_item_id = any(%s::uuid[]) and lease_token = any(%s::uuid[])
+                            """,
+                            (
+                                [row["id"] for row in rows],
+                                [row["lease_token"] for row in rows],
+                            ),
+                        )
+                        attempts = {
+                            (row["work_item_id"], row["lease_token"]): row["id"]
+                            for row in await cursor.fetchall()
+                        }
                     for row in rows:
                         row["attempt_id"] = attempts[(row["id"], row["lease_token"])]
         return tuple(self._claimed(row) for row in rows)
@@ -117,6 +129,16 @@ class PostgresOrchestrationRepository:
         return await self._finish(work, succeeded=True, result=result, failure=None)
 
     async def finish_failure(self, work: ClaimedWork, failure: WorkFailure) -> WorkStatus:
+        if work.work_type is WorkType.RESUME_PARSE:
+            terminal = (
+                failure.classification is FailureClassification.NON_RETRYABLE
+                or work.attempt_count >= work.max_attempts
+            )
+            async with await self._connect() as connection:
+                await connection.execute(
+                    "select public.m11_mark_claimed_parse_failure(%s, %s, %s, %s)",
+                    (work.id, work.lease_token, failure.code, terminal),
+                )
         return await self._finish(
             work,
             succeeded=False,

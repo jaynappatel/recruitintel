@@ -276,15 +276,32 @@ export async function bindApplicationMatch(
   matchId: string,
 ) {
   return getDatabase().begin(async (tx) => {
-    await getOwned(tx, userId, applicationId);
-    const [match] = await tx`select id, resume_version_id, opportunity_id
+    const owned = await getOwned(tx, userId, applicationId);
+    if (
+      (owned.resumeVersionId && owned.resumeVersionId !== resumeVersionId) ||
+      (owned.matchId && owned.matchId !== matchId)
+    )
+      throw new ApplicationValidationError("Application resume/match binding is immutable");
+    const [match] = await tx`select id, resume_version_id, opportunity_id,
+      recommendation_impression_id
       from public.resume_job_matches where id=${matchId}::uuid and user_id=${userId}::uuid`;
     if (!match || String(match.resume_version_id) !== resumeVersionId)
       throw new ApplicationValidationError("Match is not owned by application user/version");
-    const [application] = await tx`select opportunity_id from public.applications
+    const [application] = await tx`select opportunity_id,origin_recommendation_impression_id
+      from public.applications
       where id=${applicationId}::uuid and user_id=${userId}::uuid`;
     if (!application || String(application.opportunity_id) !== String(match.opportunity_id))
       throw new ApplicationValidationError("Match opportunity does not match application");
+    if (
+      application.origin_recommendation_impression_id != null &&
+      match.recommendation_impression_id != null &&
+      String(application.origin_recommendation_impression_id) !==
+        String(match.recommendation_impression_id)
+    )
+      throw new ApplicationValidationError(
+        "Application and match recommendation attribution do not match",
+      );
+    if (owned.matchId === matchId && owned.resumeVersionId === resumeVersionId) return owned;
     const [row] = await tx`update public.applications set
       resume_version_id=${resumeVersionId}::uuid, match_id=${matchId}::uuid, updated_at=now()
       where id=${applicationId}::uuid and user_id=${userId}::uuid

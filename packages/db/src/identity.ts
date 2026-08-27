@@ -179,17 +179,45 @@ export async function exportUserAccount(userId: string) {
   const versions =
     await sql`select id, document_id, version_number, text_hash, parser_version, created_at, superseded_at
     from public.resume_versions where user_id=${userId}::uuid order by created_at,id`;
+  const parseRuns = await sql`select id, resume_version_id, status, parser_version, input_hash,
+    diagnostics, error_code, idempotency_key, started_at, completed_at, created_at
+    from public.resume_parse_runs where user_id=${userId}::uuid order by created_at,id`;
   const evidence =
     await sql`select id, resume_version_id, evidence_type, normalized_value, source, review_status,
     page_number, section, source_span, parser_version, revision, parent_evidence_id, created_at, superseded_at
     from public.candidate_evidence where user_id=${userId}::uuid order by created_at,id`;
-  const matches =
-    await sql`select id, resume_version_id, opportunity_id, requirement_set_id, eligibility, score,
-    reason_codes, algorithm_version, generated_at, ranking_decision_id, recommendation_impression_id
-    from public.resume_job_matches where user_id=${userId}::uuid order by generated_at,id`;
+  const evidenceConfirmations =
+    await sql`select id, evidence_id, disposition, replacement_evidence_id, reason_code, created_at
+    from public.evidence_confirmations where user_id=${userId}::uuid order by created_at,id`;
+  const matches = await sql`select match.id, match.resume_version_id, match.opportunity_id,
+    match.requirement_set_id, requirement.version as requirement_set_version,
+    requirement.algorithm_version as requirement_algorithm_version,
+    requirement.input_fingerprint as requirement_input_fingerprint,
+    match.eligibility, match.score, match.reason_codes, match.algorithm_version,
+    match.evidence_fingerprint, match.generated_at, match.ranking_decision_id,
+    match.recommendation_impression_id
+    from public.resume_job_matches match
+    join public.job_requirement_sets requirement on requirement.id=match.requirement_set_id
+    where match.user_id=${userId}::uuid order by match.generated_at,match.id`;
+  const matchEvidence =
+    await sql`select id, match_id, requirement_key, relation, evidence_id, reason_code, citation
+    from public.match_evidence where user_id=${userId}::uuid order by match_id,requirement_key,id`;
   const applications =
     await sql`select id, opportunity_id, resume_version_id, match_id, current_status, current_stage,
-    cycle_key, created_at, updated_at from public.applications where user_id=${userId}::uuid order by created_at,id`;
+    origin_recommendation_impression_id, cycle_key, created_at, updated_at
+    from public.applications where user_id=${userId}::uuid order by created_at,id`;
+  const applicationEvents =
+    await sql`select id, application_id, event_type, from_status, to_status, from_stage,
+    to_stage, occurred_at, recorded_at, source, reason_code, schema_version, idempotency_key
+    from public.application_events where user_id=${userId}::uuid order by recorded_at,id`;
+  const applicationAssessments =
+    await sql`select id, application_id, type as assessment_type, status, received_at, due_at,
+    completed_at, provider_name, created_at, updated_at
+    from public.application_assessments where user_id=${userId}::uuid order by created_at,id`;
+  const applicationInterviews =
+    await sql`select id, application_id, interview_type, status, starts_at, ends_at,
+    timezone, duration_minutes, result_code, created_at, updated_at
+    from public.application_interviews where user_id=${userId}::uuid order by created_at,id`;
   return {
     user: {
       id: String(user.id),
@@ -198,9 +226,15 @@ export async function exportUserAccount(userId: string) {
     },
     resumes,
     versions,
+    parseRuns,
     evidence,
+    evidenceConfirmations,
     matches,
+    matchEvidence,
     applications,
+    applicationEvents,
+    applicationAssessments,
+    applicationInterviews,
   };
 }
 

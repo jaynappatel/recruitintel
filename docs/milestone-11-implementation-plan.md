@@ -1,6 +1,6 @@
 # Milestone 11 Implementation Plan: Model Gateway, Resume Evidence, and Job Match
 
-Status: planning only. This document is the implementation contract for M11; it does not authorize production changes.
+Status: implemented. Runtime details and acceptance evidence are recorded in `docs/milestone-11-implementation-notes.md`.
 
 ## 1. Authority and scope
 
@@ -157,19 +157,19 @@ Required coverage includes deterministic parser/unit tests; hostile/password/sca
 
 ## 16. Definition of done
 
-- [ ] Scope and license review approved; no M12/ML creep.
-- [ ] Additive migration(s) apply/rerun from 0001 through latest and preserve the M10 fixture, including Google ciphertext byte-for-byte.
-- [ ] Resume upload/version/delete enforces MIME/magic/size/page/time/memory budgets and owner isolation.
-- [ ] Deterministic parse produces versioned, cited evidence; unknown/ambiguous data is not asserted.
-- [ ] User confirmation/edit/reject is append-only and auditable.
-- [ ] Requirement sets/rubrics are versioned and tied to canonical opportunities.
-- [ ] Match hard result is separate from bounded weighted coverage; reason codes and evidence citations are exposed.
-- [ ] Match output is deterministic, idempotent, owner-private, and historical canonical IDs are preserved.
-- [ ] M10 application/recommendation/impression/outcome links remain intact.
-- [ ] M7 workers are finite, retry-safe, bounded, and zero-cost; no second scheduler/provider.
-- [ ] Export/delete, IDOR, admin denial, credential redaction, orphan, and merge/split tests pass.
-- [ ] Authenticated/built HTTP, PostgreSQL concurrency, migration, seed, DB smoke, full tests, lint/format/typecheck/build, and `git diff --check` pass.
-- [ ] `ZERO_COST_MODE=true`, `search_paid_spend_micros=0`, no paid/LLM/embedding dependency required, and worktree clean.
+- [x] Scope and license review approved; no M12/ML creep.
+- [x] Additive migration(s) apply/rerun from 0001 through latest and preserve the M10 fixture, including Google ciphertext byte-for-byte.
+- [x] Resume upload/version/delete enforces MIME/magic/size/page/time/memory budgets and owner isolation.
+- [x] Deterministic parse produces versioned, cited evidence; unknown/ambiguous data is not asserted.
+- [x] User confirmation/edit/reject is append-only and auditable.
+- [x] Requirement sets/rubrics are versioned and tied to canonical opportunities.
+- [x] Match hard result is separate from bounded weighted coverage; reason codes and evidence citations are exposed.
+- [x] Match output is deterministic, idempotent, owner-private, and historical canonical IDs are preserved.
+- [x] M10 application/recommendation/impression/outcome links remain intact.
+- [x] M7 workers are finite, retry-safe, bounded, and zero-cost; no second scheduler/provider.
+- [x] Export/delete, IDOR, admin denial, credential redaction, orphan, and merge/split tests pass.
+- [x] Authenticated/built HTTP, PostgreSQL concurrency, migration, seed, DB smoke, full tests, lint/format/typecheck/build, and `git diff --check` pass.
+- [x] `ZERO_COST_MODE=true`, `search_paid_spend_micros=0`, no paid/LLM/embedding dependency required, and worktree clean.
 
 ## 17. Explicit out of scope
 
