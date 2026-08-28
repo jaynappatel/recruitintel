@@ -1,0 +1,27 @@
+# Deployment template. Secrets are injected by the platform secret manager; no
+# passwords, tokens, or production database are declared here.
+services:
+  web:
+    build: .
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: ${DATABASE_URL:?secret-manager-injected}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?secret-manager-injected}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:?required}
+      BETTER_AUTH_TRUSTED_ORIGINS: ${BETTER_AUTH_TRUSTED_ORIGINS:?required}
+      ZERO_COST_MODE: "true"
+    ports:
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/ready"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+
+# Run collectors in a separately built, separately credentialed deployment.
+# It must use a PostgreSQL role bound only to its allowed M7 work classes.
