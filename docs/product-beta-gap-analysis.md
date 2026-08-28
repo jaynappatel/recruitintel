@@ -1,6 +1,6 @@
 # Product beta gap analysis (post-M15)
 
-Status: **PROPOSED — REQUIRES USER APPROVAL**. This is a documentation-only audit of `baae274`, 35 migrations through `0035_m15_operations.sql`, and the actual Next.js, extension, TypeScript, Python, SQL, test, and operations surfaces. It does not authorize code.
+Status: **APPROVED**. Explicitly approved after roadmap-design commit `99c13e4` (`docs: define post-M15 RecruitIntel roadmap`). This is a documentation-only audit of `baae274`, 35 migrations through `0035_m15_operations.sql`, and the actual Next.js, extension, TypeScript, Python, SQL, test, and operations surfaces. M16 is authorized by the approved roadmap; later milestones retain their stated approval gates.
 
 ## Executive finding
 

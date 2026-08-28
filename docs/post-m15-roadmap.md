@@ -1,6 +1,6 @@
 # Post-M15 RecruitIntel roadmap
 
-Status: **PROPOSED — REQUIRES USER APPROVAL**. This is the authoritative candidate sequence after M15 for review; it does **not** authorize M16 or any implementation. It composes the completed M1–M15 architecture at `baae274`.
+Status: **APPROVED**. Explicitly approved after roadmap-design commit `99c13e4` (`docs: define post-M15 RecruitIntel roadmap`). M16 is authorized for implementation; M17–M20 require their own approval before implementation, and M21 remains conditional on genuine M14 readiness evidence. This approved sequence composes the completed M1–M15 architecture at `baae274`.
 
 ## Sequence
 

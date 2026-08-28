@@ -12,11 +12,14 @@ models, fonts, fixtures, and provider terms are treated as separate rights.
 ## Post-M15 roadmap status
 
 Milestones 1–15 are complete through `baae274` and migration
-`0035_m15_operations.sql`. The post-M15 sequence is intentionally not yet
-authorized for implementation. See [the proposed post-M15 roadmap](post-m15-roadmap.md)
-and its [product-beta capability and journey analysis](product-beta-gap-analysis.md).
-They are **PROPOSED — REQUIRES USER APPROVAL** and supersede this document's
-historic “recommended next milestone” section for post-M15 planning only.
+`0035_m15_operations.sql`. The post-M15 sequence was explicitly approved after
+roadmap-design commit `99c13e4` (`docs: define post-M15 RecruitIntel roadmap`).
+See [the approved post-M15 roadmap](post-m15-roadmap.md) and its
+[product-beta capability and journey analysis](product-beta-gap-analysis.md).
+M16 is authorized; M17–M20 require their own approval before implementation,
+and M21 remains conditional on genuine M14 readiness evidence. These documents
+supersede this document's historic “recommended next milestone” section for
+post-M15 planning.
 
 Implementation status update (2026-08-25): Gate 5.1, Milestones 6-9, Gate 7.1A, and corrective
 Gate 7.1A.1 are complete. Milestone 10 remains unstarted until separately approved.
