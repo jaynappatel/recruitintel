@@ -15,6 +15,7 @@ export * from "./applications";
 export * from "./resume";
 export * from "./browser-companion";
 export * from "./model-gateway";
+export * from "./analytics";
 
 export interface CompanyRecord {
   id: string;

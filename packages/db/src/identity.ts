@@ -372,6 +372,15 @@ export async function exportUserAccount(userId: string) {
     select output.id,output.model_call_id,output.task_type,output.output,output.evidence_references,
       output.validation_status,output.disposition,output.source_fingerprint,output.created_at,output.reviewed_at
     from public.model_outputs output where output.user_id=${userId}::uuid order by output.created_at,output.id`;
+  const analytics =
+    await sql`select fact_type,occurred_at,entity_type,metric_value,transformation_version
+    from public.analytics_facts where user_id=${userId}::uuid order by occurred_at,id`;
+  const experimentParticipation =
+    await sql`select assignment,assigned_at from public.experiment_assignments
+    where user_id=${userId}::uuid order by assigned_at,id`;
+  const shadowPredictions =
+    await sql`select model_version_id,subject_id,as_of_time,prediction,reason_codes,created_at
+    from public.model_predictions where user_id=${userId}::uuid and shadow order by created_at,id`;
   return {
     user: {
       id: String(user.id),
@@ -396,6 +405,9 @@ export async function exportUserAccount(userId: string) {
     browserIngestDecisions,
     modelCalls,
     modelOutputs,
+    analytics,
+    experimentParticipation,
+    shadowPredictions,
   };
 }
 

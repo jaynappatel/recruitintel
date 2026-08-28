@@ -6,6 +6,39 @@ export const clientProductEventTypes = [
   "INTERVIEW_INTEL_VIEWED",
   "SOURCE_POSTING_SELECTED",
 ] as const;
+
+// M14 responses are aggregate-only. They intentionally contain no private rows or features.
+export const personalAnalyticsSchema = z.object({
+  impressions: z.number().int().nonnegative(),
+  applications: z.number().int().nonnegative(),
+  oaProgressions: z.number().int().nonnegative(),
+  interviewProgressions: z.number().int().nonnegative(),
+  offers: z.number().int().nonnegative(),
+});
+export const dataReadinessTaskSchema = z.enum([
+  "PERSONALIZED_RANKING",
+  "OPENING_FORECAST",
+  "SOURCE_ANOMALY",
+  "RESUME_OUTCOME",
+  "INTERVIEW_TOPIC",
+]);
+export const dataReadinessSchema = z.object({
+  taskType: dataReadinessTaskSchema,
+  status: z.enum(["READY", "NOT_READY"]),
+  eligibleSampleCount: z.number().int().nonnegative(),
+  positiveLabelCount: z.number().int().nonnegative(),
+  negativeLabelCount: z.number().int().nonnegative(),
+  userCount: z.number().int().nonnegative(),
+  companyCount: z.number().int().nonnegative(),
+  timeSpanDays: z.number().int().nonnegative(),
+  missingFeatureRate: z.number().min(0).max(1),
+  classImbalance: z.number().nullable(),
+  outcomeDelayDays: z.number().nullable(),
+  duplicateCount: z.number().int().nonnegative(),
+  leakageRisks: z.array(z.string()),
+  labelConfidence: z.enum(["HIGH", "MEDIUM", "LOW"]),
+  reasons: z.array(z.string()),
+});
 export const clientProductEventSchema = z
   .object({
     eventType: z.enum(clientProductEventTypes),
