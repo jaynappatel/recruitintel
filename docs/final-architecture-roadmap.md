@@ -9,6 +9,15 @@ does not replace legal review, and did not modify production code or the
 Claude-owned frontend. Root repository licenses, nested code licenses, datasets,
 models, fonts, fixtures, and provider terms are treated as separate rights.
 
+## Post-M15 roadmap status
+
+Milestones 1–15 are complete through `baae274` and migration
+`0035_m15_operations.sql`. The post-M15 sequence is intentionally not yet
+authorized for implementation. See [the proposed post-M15 roadmap](post-m15-roadmap.md)
+and its [product-beta capability and journey analysis](product-beta-gap-analysis.md).
+They are **PROPOSED — REQUIRES USER APPROVAL** and supersede this document's
+historic “recommended next milestone” section for post-M15 planning only.
+
 Implementation status update (2026-08-25): Gate 5.1, Milestones 6-9, Gate 7.1A, and corrective
 Gate 7.1A.1 are complete. Milestone 10 remains unstarted until separately approved.
 Milestone 6 replaced the configured owner/static admin runtime with authenticated users, hashed
