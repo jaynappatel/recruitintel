@@ -77,6 +77,38 @@ export function ApplicationsPanel() {
     await open(updated);
   }
 
+  async function createAssessment() {
+    if (!selected) return;
+    const response = await fetch(`/api/applications/${selected.id}/assessments`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "ONLINE_ASSESSMENT",
+        dueAt: null,
+        providerName: null,
+        idempotencyKey: crypto.randomUUID(),
+      }),
+    });
+    if (!response.ok) return setError("The OA record could not be created.");
+    await transition("IN_PROCESS", "OA");
+  }
+
+  async function createInterview() {
+    if (!selected) return;
+    const response = await fetch(`/api/applications/${selected.id}/interviews`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        interviewType: "INTERVIEW",
+        startsAt: new Date(Date.now() + 86_400_000).toISOString(),
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+        idempotencyKey: crypto.randomUUID(),
+      }),
+    });
+    if (!response.ok) return setError("The interview could not be created.");
+    await transition("IN_PROCESS", "TECHNICAL_INTERVIEW");
+  }
+
   if (loading)
     return (
       <div className="surface p-6 text-sm text-[var(--muted)]">
@@ -169,17 +201,17 @@ export function ApplicationsPanel() {
               </button>
               <button
                 className="rounded-lg border border-[var(--line)] px-3 py-2 text-sm font-bold"
-                onClick={() => void transition("IN_PROCESS", "OA")}
+                onClick={() => void createAssessment()}
                 type="button"
               >
-                Record OA
+                Add OA
               </button>
               <button
                 className="rounded-lg border border-[var(--line)] px-3 py-2 text-sm font-bold"
-                onClick={() => void transition("IN_PROCESS", "TECHNICAL_INTERVIEW")}
+                onClick={() => void createInterview()}
                 type="button"
               >
-                Record interview
+                Add interview
               </button>
               <button
                 className="rounded-lg border border-[var(--line)] px-3 py-2 text-sm font-bold"
