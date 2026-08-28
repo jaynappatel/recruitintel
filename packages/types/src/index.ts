@@ -845,6 +845,7 @@ export const listQuerySchema = z.object({
 });
 
 export const jobsQuerySchema = listQuerySchema.extend({
+  query: z.string().trim().max(120).optional(),
   companyId: databaseUuidSchema.optional(),
   roleFamily: roleFamilySchema.optional(),
   earlyCareerOnly: z

@@ -25,6 +25,7 @@ export function ResumesPanel() {
   const [versions, setVersions] = useState<Version[]>([]);
   const [evidence, setEvidence] = useState<Evidence[]>([]);
   const [text, setText] = useState("");
+  const [correction, setCorrection] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -128,6 +129,27 @@ export function ResumesPanel() {
       return;
     }
     await loadEvidence(selected.id, versions[0].id);
+  }
+  async function correct(item: Evidence) {
+    if (!selected) return;
+    let normalizedValue: Record<string, unknown>;
+    try {
+      normalizedValue = JSON.parse(correction[item.id] ?? "");
+    } catch {
+      setMessage('Correction must be valid JSON, for example {"skill":"TypeScript"}.');
+      return;
+    }
+    const response = await fetch(`/api/resume-evidence/${item.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ disposition: "CORRECTED", normalizedValue }),
+    });
+    if (!response.ok) {
+      setMessage("Correction could not be saved; refresh and try again.");
+      return;
+    }
+    setMessage("Correction saved as a new append-only evidence revision.");
+    await loadEvidence(selected.id, versions[0]?.id ?? "");
   }
   async function remove() {
     if (!selected || !confirm("Delete this encrypted resume and its private evidence?")) return;
@@ -251,6 +273,25 @@ export function ResumesPanel() {
                             type="button"
                           >
                             Reject
+                          </button>
+                          <input
+                            aria-label={`Correction for ${item.evidenceType}`}
+                            className="min-w-0 flex-1 rounded border border-[var(--line)] px-2 py-1 text-xs"
+                            onChange={(event) =>
+                              setCorrection((current) => ({
+                                ...current,
+                                [item.id]: event.target.value,
+                              }))
+                            }
+                            placeholder='{"skill":"…"}'
+                            value={correction[item.id] ?? ""}
+                          />
+                          <button
+                            className="text-sm font-bold text-[var(--forest)]"
+                            onClick={() => void correct(item)}
+                            type="button"
+                          >
+                            Correct
                           </button>
                         </div>
                       ) : null}
