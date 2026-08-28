@@ -3,6 +3,7 @@
 import clsx from "clsx";
 import {
   Activity,
+  ClipboardList,
   Bell,
   Bookmark,
   Building2,
@@ -10,6 +11,7 @@ import {
   CalendarDays,
   LayoutDashboard,
   Radar,
+  FileText,
   Settings,
   Sparkles,
 } from "lucide-react";
@@ -21,6 +23,8 @@ const navigation = [
   { href: "/companies", label: "Companies", icon: Building2 },
   { href: "/jobs", label: "Jobs", icon: BriefcaseBusiness },
   { href: "/opportunities", label: "Recommendations", icon: Sparkles },
+  { href: "/applications", label: "Applications", icon: ClipboardList },
+  { href: "/resumes", label: "Resumes", icon: FileText },
   { href: "/watchlist", label: "Watchlist", icon: Bookmark },
   { href: "/alerts", label: "Alerts", icon: Bell },
   { href: "/events", label: "Event stream", icon: Activity },

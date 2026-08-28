@@ -7,6 +7,7 @@ import { humanizeEnum } from "@recruitintel/shared";
 import { DatabaseError } from "@/components/database-error";
 import { PageHeader } from "@/components/page-header";
 import { WatchButton } from "@/components/personalization/watch-button";
+import { OpportunityActions } from "@/components/opportunity-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -66,6 +67,7 @@ export default async function OpportunityPage({ params }: { params: Promise<{ id
             Open authoritative application <ArrowUpRight className="size-4" />
           </a>
         )}
+        <OpportunityActions opportunityId={opportunity.id} />
       </section>
     </>
   );

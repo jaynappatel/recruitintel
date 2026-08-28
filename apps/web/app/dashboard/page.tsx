@@ -11,6 +11,7 @@ import { EventList } from "@/components/event-list";
 import { JobList } from "@/components/job-list";
 import { PageHeader } from "@/components/page-header";
 import { RecommendationsPanel } from "@/components/personalization/recommendations-panel";
+import { OnboardingChecklist } from "@/components/onboarding-checklist";
 
 export const dynamic = "force-dynamic";
 
@@ -63,6 +64,7 @@ export default async function DashboardPage() {
         title="Recruiting signal desk"
       />
       <DemoNotice />
+      <OnboardingChecklist />
 
       <section
         aria-label="Summary metrics"

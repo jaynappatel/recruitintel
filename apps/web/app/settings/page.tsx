@@ -1,5 +1,6 @@
 import { GoogleCalendarCard } from "@/components/settings/google-calendar-card";
 import { RecruitingPreferencesCard } from "@/components/settings/recruiting-preferences-card";
+import { AccountControlsCard } from "@/components/settings/account-controls-card";
 import { PageHeader } from "@/components/page-header";
 
 export const metadata = { title: "Settings" };
@@ -54,6 +55,14 @@ export default function SettingsPage() {
           title="Integrations"
         >
           <GoogleCalendarCard />
+        </SettingsSection>
+
+        <SettingsSection
+          description="Manage the browser companion, review real activity totals, export private data, or close your account."
+          eyebrow="Privacy and devices"
+          title="Account controls"
+        >
+          <AccountControlsCard />
         </SettingsSection>
       </div>
     </>
