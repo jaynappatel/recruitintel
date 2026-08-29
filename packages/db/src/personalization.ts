@@ -1204,8 +1204,8 @@ export async function listDailyWorkflow(
        coalesce(ci.description, 'Scheduled recruiting work'), coalesce(ci.starts_at, ci.created_at),
        null, ci.id::text, false, (ci.status = 'DONE')
      from public.calendar_items ci
-     where ci.user_id=$1::uuid and ci.deleted_at is null and ci.status='TODO'
-       and ci.starts_at >= $2::timestamptz and ci.starts_at <= $3::timestamptz
+       where ci.user_id=$1::uuid and ci.deleted_at is null and ci.status='TODO'
+       and ci.starts_at <= $3::timestamptz
      union all
      select 'APPLICATION', a.id::text, a.next_action_type::text,
        coalesce(nullif(a.next_action_reason,''), 'Application follow-up'),
