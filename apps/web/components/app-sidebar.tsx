@@ -3,6 +3,7 @@
 import clsx from "clsx";
 import {
   Activity,
+  CheckCircle2,
   ClipboardList,
   Bell,
   Bookmark,
@@ -20,6 +21,7 @@ import { usePathname } from "next/navigation";
 
 const navigation = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/today", label: "Today", icon: CheckCircle2 },
   { href: "/companies", label: "Companies", icon: Building2 },
   { href: "/jobs", label: "Jobs", icon: BriefcaseBusiness },
   { href: "/opportunities", label: "Recommendations", icon: Sparkles },

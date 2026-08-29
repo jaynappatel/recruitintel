@@ -54,9 +54,17 @@ export default async function DashboardPage() {
     <>
       <PageHeader
         action={
-          <div className="rounded-full border border-[var(--line)] bg-white px-3 py-2 text-xs font-bold text-[var(--forest)] shadow-sm">
-            <span className="mr-2 inline-block size-2 rounded-full bg-emerald-500" />
-            Deterministic pipeline
+          <div className="flex items-center gap-3">
+            <Link
+              className="rounded-full bg-[var(--forest)] px-3 py-2 text-xs font-bold text-white"
+              href="/today"
+            >
+              Open today&apos;s queue
+            </Link>
+            <div className="rounded-full border border-[var(--line)] bg-white px-3 py-2 text-xs font-bold text-[var(--forest)] shadow-sm">
+              <span className="mr-2 inline-block size-2 rounded-full bg-emerald-500" />
+              Deterministic pipeline
+            </div>
           </div>
         }
         description="Monitor source-backed recruiting changes without confusing activity with prediction."

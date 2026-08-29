@@ -821,6 +821,18 @@ export const notificationPreferencesSchema = z.object({
   settingsVersion: z.number().int().positive(),
   updatedAt: z.iso.datetime(),
 });
+export const dailyWorkflowItemSchema = z.object({
+  id: databaseUuidSchema,
+  source: z.enum(["ALERT", "CALENDAR", "APPLICATION"]),
+  kind: z.string().min(1),
+  title: z.string().min(1),
+  reason: z.string().min(1),
+  dueAt: z.iso.datetime().nullable(),
+  urgency: z.enum(["OVERDUE", "TODAY", "UPCOMING"]),
+  href: z.string().min(1),
+  alertId: databaseUuidSchema.nullable(),
+  completed: z.boolean(),
+});
 
 export const recruitingEventSchema = z.object({
   id: databaseUuidSchema,

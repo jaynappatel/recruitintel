@@ -1142,6 +1142,7 @@ function mapAlert(row: Row): AlertRecord {
         ? "READ"
         : "UNREAD";
   const subject = [
+    ["APPLICATION", row.application_id, "/applications/"],
     ["OPPORTUNITY", row.opportunity_id, "/opportunities/"],
     ["RECRUITER", row.recruiter_profile_id, "/recruiters/"],
     ["SCHOOL", row.school_id, "/schools/"],
@@ -1169,6 +1170,84 @@ function mapAlert(row: Row): AlertRecord {
     dismissedAt: nullableTimestamp(row.dismissed_at),
     expiresAt: nullableTimestamp(row.expires_at),
   };
+}
+
+export interface DailyWorkflowItem {
+  id: string;
+  source: "ALERT" | "CALENDAR" | "APPLICATION";
+  kind: string;
+  title: string;
+  reason: string;
+  dueAt: string | null;
+  urgency: "OVERDUE" | "TODAY" | "UPCOMING";
+  href: string;
+  alertId: string | null;
+  completed: boolean;
+}
+
+/** A transient, owner-scoped now/next queue composed from canonical M9/M10 state. */
+export async function listDailyWorkflow(
+  userId: string,
+  now = new Date(),
+): Promise<DailyWorkflowItem[]> {
+  const end = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const rows = await getDatabase().unsafe(
+    `select 'ALERT'::text as source, alert.id::text as id, alert.alert_type::text as kind,
+       alert.title, alert.body as reason, alert.occurred_at as due_at, alert.id::text as alert_id,
+       coalesce(alert.application_id, alert.opportunity_id, alert.calendar_item_id)::text as target_id,
+       (alert.application_id is not null) as is_application, false as completed
+     from public.alerts alert
+     where alert.user_id=$1::uuid and alert.dismissed_at is null
+       and alert.superseded_by_alert_id is null and (alert.expires_at is null or alert.expires_at >= $2::timestamptz)
+     union all
+     select 'CALENDAR', ci.id::text, ci.type::text, ci.title,
+       coalesce(ci.description, 'Scheduled recruiting work'), coalesce(ci.starts_at, ci.created_at),
+       null, ci.id::text, false, (ci.status = 'DONE')
+     from public.calendar_items ci
+     where ci.user_id=$1::uuid and ci.deleted_at is null and ci.status='TODO'
+       and ci.starts_at >= $2::timestamptz and ci.starts_at <= $3::timestamptz
+     union all
+     select 'APPLICATION', a.id::text, a.next_action_type::text,
+       coalesce(nullif(a.next_action_reason,''), 'Application follow-up'),
+       coalesce(nullif(a.next_action_reason,''), 'Application action is due'), a.next_action_at,
+       null, a.id::text, true, false
+     from public.applications a
+     where a.user_id=$1::uuid and a.archived_at is null and a.next_action_at is not null
+       and a.next_action_at <= $3::timestamptz
+     order by due_at nulls last, id
+     limit 100`,
+    [userId, now.toISOString(), end.toISOString()],
+  );
+  const today = now.toISOString().slice(0, 10);
+  return rows.map((row) => {
+    const dueAt =
+      row.due_at instanceof Date
+        ? row.due_at.toISOString()
+        : row.due_at
+          ? String(row.due_at)
+          : null;
+    const dueDate = dueAt?.slice(0, 10);
+    return {
+      id: String(row.id),
+      source: String(row.source) as DailyWorkflowItem["source"],
+      kind: String(row.kind),
+      title: String(row.title),
+      reason: String(row.reason),
+      dueAt,
+      urgency:
+        dueAt && new Date(dueAt) < now ? "OVERDUE" : dueDate === today ? "TODAY" : "UPCOMING",
+      href:
+        row.source === "ALERT" && row.is_application
+          ? `/applications/${String(row.target_id)}`
+          : row.source === "CALENDAR"
+            ? `/calendar?item=${String(row.target_id)}`
+            : row.source === "APPLICATION"
+              ? `/applications/${String(row.target_id)}`
+              : `/alerts/${String(row.alert_id)}`,
+      alertId: row.alert_id ? String(row.alert_id) : null,
+      completed: Boolean(row.completed),
+    };
+  });
 }
 
 export async function listAlerts(
