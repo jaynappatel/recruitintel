@@ -7,7 +7,7 @@ export default function WatchlistPage() {
   return (
     <>
       <PageHeader
-        description="Your private company, opportunity, recruiter, and school intent—history included."
+        description="Everything you're watching — companies, opportunities, recruiters, and schools — with your history for each."
         eyebrow="Private intent"
         title="Watchlist"
       />

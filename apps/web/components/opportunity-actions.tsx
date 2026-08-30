@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useState } from "react";
 
+import { Button, buttonVariants } from "@/components/ui/button";
+
 export function OpportunityActions({ opportunityId }: { opportunityId: string }) {
   const [message, setMessage] = useState<string | null>(null);
   async function addApplication() {
@@ -16,7 +18,7 @@ export function OpportunityActions({ opportunityId }: { opportunityId: string })
       }),
     });
     if (response.ok) {
-      setMessage("Added to your private application board.");
+      setMessage("Added to your application board.");
       return;
     }
     setMessage(
@@ -27,17 +29,8 @@ export function OpportunityActions({ opportunityId }: { opportunityId: string })
   }
   return (
     <div className="mt-6 flex flex-wrap items-center gap-3">
-      <button
-        className="rounded-xl bg-[var(--panel)] px-4 py-2.5 text-sm font-bold text-white"
-        onClick={() => void addApplication()}
-        type="button"
-      >
-        Track application
-      </button>
-      <Link
-        className="rounded-xl border border-[var(--line)] px-4 py-2.5 text-sm font-bold"
-        href="/resumes"
-      >
+      <Button onClick={() => void addApplication()}>Track application</Button>
+      <Link className={buttonVariants({ variant: "secondary" })} href="/resumes">
         Review resume match
       </Link>
       {message ? (

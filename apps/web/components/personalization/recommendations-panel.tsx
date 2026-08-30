@@ -1,12 +1,23 @@
 "use client";
 
-import { AlertTriangle, ArrowRight, CheckCircle2, LoaderCircle, X } from "lucide-react";
+import { AlertTriangle, ArrowRight, CheckCircle2, X } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { humanizeEnum } from "@recruitintel/shared";
 
+import { Badge, type BadgeTone } from "@/components/ui/badge";
+import { NoticeBanner } from "@/components/ui/notice-banner";
+import { Spinner } from "@/components/ui/spinner";
+
 import { WatchButton } from "./watch-button";
+
+const categoryTone: Record<Recommendation["category"], BadgeTone> = {
+  HIGH_PRIORITY: "accent",
+  MEDIUM_PRIORITY: "neutral",
+  LOW_PRIORITY: "neutral",
+  NOT_ELIGIBLE: "danger",
+};
 
 type Recommendation = {
   impressionId: string;
@@ -100,13 +111,13 @@ export function RecommendationsPanel({ compact = false }: { compact?: boolean })
 
   if (loading) {
     return (
-      <div className="surface grid min-h-40 place-items-center text-sm text-[var(--muted)]">
-        <LoaderCircle className="mr-2 inline size-4 animate-spin" /> Loading recommendations
+      <div className="surface grid min-h-40 place-items-center">
+        <Spinner label="Loading recommendations…" />
       </div>
     );
   }
   if (error) {
-    return <div className="surface p-6 text-sm text-red-800">{error}</div>;
+    return <NoticeBanner tone="error">{error}</NoticeBanner>;
   }
 
   return (
@@ -115,7 +126,7 @@ export function RecommendationsPanel({ compact = false }: { compact?: boolean })
         <div className="surface flex items-center justify-between gap-4 p-4 text-sm">
           <span>Dismissed {undo.title}. It can resurface after a material change.</span>
           <button
-            className="font-bold text-[var(--forest)] underline"
+            className="font-bold text-[var(--accent)] underline"
             onClick={restore}
             type="button"
           >
@@ -125,8 +136,8 @@ export function RecommendationsPanel({ compact = false }: { compact?: boolean })
       )}
       {items.length === 0 ? (
         <div className="surface p-6 text-sm text-[var(--muted)]">
-          No canonical opportunities are available for this view. Add explicit preferences or
-          watches to improve prioritization.
+          Nothing to review right now. Set your preferences or watch a company to see more
+          opportunities here.
         </div>
       ) : (
         items.map((item) => (
@@ -144,31 +155,30 @@ export function RecommendationsPanel({ compact = false }: { compact?: boolean })
                 <WatchButton entityId={item.opportunity.id} entityType="OPPORTUNITY" />
                 <button
                   aria-label={`Dismiss ${item.opportunity.title}`}
-                  className="rounded-lg p-2 text-[var(--muted)] hover:bg-black/5"
+                  className="rounded-[var(--radius-sm)] p-2 text-[var(--muted)] hover:bg-[var(--surface-soft)]"
                   onClick={() => dismiss(item)}
                   type="button"
                 >
-                  <X className="size-4" />
+                  <X aria-hidden="true" className="size-4" />
                 </button>
               </div>
             </div>
 
             <div className="mt-4 flex flex-wrap items-center gap-2">
               <span className="rounded-full bg-[var(--panel)] px-3 py-1.5 text-xs font-bold text-white">
-                Recommendation Score: {item.recommendationScore ?? "Not enough evidence"}
+                Priority score: {item.recommendationScore ?? "Not enough evidence"}
               </span>
-              <span className="rounded-full border border-[var(--line)] px-3 py-1.5 text-xs font-bold">
-                {humanizeEnum(item.category)}
-              </span>
+              <Badge tone={categoryTone[item.category]}>{humanizeEnum(item.category)}</Badge>
               <span className="text-xs text-[var(--muted)]">
                 {humanizeEnum(item.eligibility)} · {item.evidenceCoverage.toLowerCase()} evidence
               </span>
             </div>
 
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
               <div>
                 <div className="mb-2 flex items-center gap-1 text-xs font-bold uppercase">
-                  <CheckCircle2 className="size-3.5 text-emerald-700" /> Reasons
+                  <CheckCircle2 aria-hidden="true" className="size-3.5 text-[var(--success)]" />{" "}
+                  Reasons
                 </div>
                 <ul className="m-0 space-y-1 pl-5 text-sm">
                   {item.reasons.slice(0, compact ? 3 : 8).map((reason) => (
@@ -178,10 +188,10 @@ export function RecommendationsPanel({ compact = false }: { compact?: boolean })
               </div>
               {(item.potentialMismatches.length > 0 || item.hardConstraints.length > 0) && (
                 <div>
-                  <div className="mb-2 flex items-center gap-1 text-xs font-bold uppercase">
-                    <AlertTriangle className="size-3.5 text-amber-700" /> Unknowns or mismatches
+                  <div className="mb-2 flex items-center gap-1 text-xs font-bold uppercase text-[var(--warning)]">
+                    <AlertTriangle aria-hidden="true" className="size-3.5" /> Unknowns or mismatches
                   </div>
-                  <ul className="m-0 space-y-1 pl-5 text-sm text-[var(--muted)]">
+                  <ul className="m-0 space-y-1 pl-5 text-sm">
                     {[...item.hardConstraints, ...item.potentialMismatches]
                       .slice(0, compact ? 3 : 8)
                       .map((reason) => (
@@ -192,15 +202,14 @@ export function RecommendationsPanel({ compact = false }: { compact?: boolean })
               )}
             </div>
 
-            <div className="mt-5 flex items-center justify-between border-t border-[var(--line)] pt-4">
-              <span className="text-xs text-[var(--muted)]">Algorithm {item.algorithmVersion}</span>
+            <div className="mt-5 flex items-center justify-end border-t border-[var(--line)] pt-4">
               <Link
-                className="inline-flex items-center gap-1 text-sm font-bold text-[var(--forest)]"
+                className="inline-flex items-center gap-1 text-sm font-bold text-[var(--accent)]"
                 href={`/opportunities/${item.opportunity.id}`}
                 onClick={() => opened(item)}
                 prefetch={false}
               >
-                Review opportunity <ArrowRight className="size-4" />
+                Review opportunity <ArrowRight aria-hidden="true" className="size-4" />
               </Link>
             </div>
           </article>

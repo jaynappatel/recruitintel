@@ -91,15 +91,15 @@ export function WatchButton({
         type="button"
       >
         {loading ? (
-          <LoaderCircle className="size-4 animate-spin" />
+          <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
         ) : watch ? (
-          <BookmarkCheck className="size-4" />
+          <BookmarkCheck aria-hidden="true" className="size-4" />
         ) : (
-          <Bookmark className="size-4" />
+          <Bookmark aria-hidden="true" className="size-4" />
         )}
         {watch ? "Watching" : "Watch"}
       </button>
-      {error && <span className="max-w-56 text-right text-xs text-red-700">{error}</span>}
+      {error && <span className="max-w-56 text-right text-xs text-[var(--danger)]">{error}</span>}
     </div>
   );
 }

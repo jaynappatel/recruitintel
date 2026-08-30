@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarDays, Check, Loader2, RefreshCw, TriangleAlert, Unlink } from "lucide-react";
+import { CalendarDays, Loader2, RefreshCw, TriangleAlert, Unlink } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import {
@@ -16,6 +16,10 @@ import type {
   GoogleCalendarOption,
   GoogleCalendarStatus,
 } from "@/lib/types/calendar";
+import { Button } from "@/components/ui/button";
+import { NoticeBanner } from "@/components/ui/notice-banner";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Toggle } from "@/components/ui/toggle";
 
 const SYNC_TOGGLES: Array<{
   key: keyof GoogleCalendarStatus["preferences"];
@@ -78,28 +82,32 @@ export function GoogleCalendarCard() {
   }, [integration?.status]);
 
   if (!integration && !error) {
-    return <div className="surface h-40 animate-pulse" />;
+    return <Skeleton className="h-40" />;
   }
 
   if (!integration) {
     return (
-      <div className="surface p-5">
-        <p className="m-0 text-sm font-semibold text-red-800">{error}</p>
-        <button
-          className="mt-3 rounded-xl border border-[var(--line)] bg-white px-4 py-2 text-sm font-bold"
-          onClick={() => {
-            setError(null);
-            getGoogleCalendarStatus()
-              .then(setIntegration)
-              .catch((caught: unknown) => {
-                setError(caught instanceof Error ? caught.message : "Calendar API unavailable.");
-              });
-          }}
-          type="button"
-        >
-          Try again
-        </button>
-      </div>
+      <NoticeBanner
+        action={
+          <Button
+            onClick={() => {
+              setError(null);
+              getGoogleCalendarStatus()
+                .then(setIntegration)
+                .catch((caught: unknown) => {
+                  setError(caught instanceof Error ? caught.message : "Calendar API unavailable.");
+                });
+            }}
+            size="sm"
+            variant="secondary"
+          >
+            Try again
+          </Button>
+        }
+        tone="error"
+      >
+        {error}
+      </NoticeBanner>
     );
   }
 
@@ -182,12 +190,12 @@ export function GoogleCalendarCard() {
               </p>
             )}
             {status === "REAUTH_REQUIRED" && (
-              <p className="m-0 flex items-center gap-1.5 text-xs font-semibold text-amber-800">
+              <p className="m-0 flex items-center gap-1.5 text-xs font-semibold text-[var(--warning)]">
                 <TriangleAlert className="size-3" /> Reauthorization required
               </p>
             )}
             {status === "ERROR" && (
-              <p className="m-0 flex items-center gap-1.5 text-xs font-semibold text-red-700">
+              <p className="m-0 flex items-center gap-1.5 text-xs font-semibold text-[var(--danger)]">
                 <TriangleAlert className="size-3" /> Calendar connection error
               </p>
             )}
@@ -232,7 +240,7 @@ export function GoogleCalendarCard() {
               </button>
             )}
             <button
-              className="inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2.5 text-sm font-bold text-[var(--muted)] transition hover:text-red-700"
+              className="inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2.5 text-sm font-bold text-[var(--muted)] transition hover:text-[var(--danger)]"
               onClick={disconnect}
               type="button"
             >
@@ -255,7 +263,9 @@ export function GoogleCalendarCard() {
       {(message || error) && (
         <div
           className={`border-t border-[var(--line)] px-5 py-3 text-sm font-semibold ${
-            error ? "bg-red-50 text-red-800" : "bg-emerald-50 text-emerald-800"
+            error
+              ? "bg-[var(--danger-bg)] text-[var(--danger)]"
+              : "bg-[var(--success-bg)] text-[var(--success)]"
           }`}
           role="status"
         >
@@ -307,7 +317,7 @@ export function GoogleCalendarCard() {
             <p className="mb-4 text-xs text-[var(--muted)]">Loading Google calendars…</p>
           )}
           {calendars !== null && calendars.length === 0 && (
-            <p className="mb-4 text-xs font-semibold text-amber-800">
+            <p className="mb-4 text-xs font-semibold text-[var(--warning)]">
               No owned Google calendars are available for synchronization.
             </p>
           )}
@@ -316,19 +326,12 @@ export function GoogleCalendarCard() {
             {SYNC_TOGGLES.map(({ key, label }) => (
               <li className="flex items-center justify-between gap-3" key={key}>
                 <span className="text-sm font-semibold">{label}</span>
-                <button
-                  aria-pressed={integration.preferences[key]}
-                  className={`relative h-6 w-10 shrink-0 rounded-full transition ${
-                    integration.preferences[key] ? "bg-[var(--panel)]" : "bg-[var(--line)]"
-                  }`}
-                  onClick={async () => {
+                <Toggle
+                  label={label}
+                  onChange={async (next) => {
                     setError(null);
                     try {
-                      setIntegration(
-                        await updateGoogleCalendar({
-                          preferences: { [key]: !integration.preferences[key] },
-                        }),
-                      );
+                      setIntegration(await updateGoogleCalendar({ preferences: { [key]: next } }));
                     } catch (caught) {
                       setError(
                         caught instanceof Error
@@ -337,18 +340,8 @@ export function GoogleCalendarCard() {
                       );
                     }
                   }}
-                  type="button"
-                >
-                  <span
-                    className={`absolute top-0.5 grid size-5 place-items-center rounded-full bg-white shadow transition ${
-                      integration.preferences[key] ? "left-[calc(100%-1.375rem)]" : "left-0.5"
-                    }`}
-                  >
-                    {integration.preferences[key] && (
-                      <Check className="size-3 text-[var(--panel)]" strokeWidth={3} />
-                    )}
-                  </span>
-                </button>
+                  pressed={integration.preferences[key]}
+                />
               </li>
             ))}
           </ul>

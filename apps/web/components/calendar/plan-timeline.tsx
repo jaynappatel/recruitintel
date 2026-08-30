@@ -63,7 +63,7 @@ export function ApplicationPlanTimeline({
               </span>
             </span>
           </label>
-          {error && <p className="mb-3 text-sm font-semibold text-red-800">{error}</p>}
+          {error && <p className="mb-3 text-sm font-semibold text-[var(--danger)]">{error}</p>}
           <button
             className="rounded-xl bg-[var(--panel)] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[var(--panel-bright)] disabled:opacity-60"
             disabled={activating}
@@ -86,7 +86,7 @@ export function ApplicationPlanTimeline({
           </button>
         </div>
       ) : (
-        <p className="mt-5 mb-0 text-xs font-bold tracking-wide text-emerald-700 uppercase">
+        <p className="mt-5 mb-0 text-xs font-bold tracking-wide text-[var(--success)] uppercase">
           {plan.status === "ACTIVE" ? "Plan active" : plan.status.toLowerCase()}
         </p>
       )}

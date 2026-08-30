@@ -7,7 +7,7 @@ export default function AlertsPage() {
   return (
     <>
       <PageHeader
-        description="Conservative, meaningful updates from canonical opportunities and existing recruiting intelligence."
+        description="Meaningful updates about the opportunities and companies you're tracking — we keep the noise down."
         eyebrow="In-app only"
         title="Alerts"
       />

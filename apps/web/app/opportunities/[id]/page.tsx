@@ -8,6 +8,8 @@ import { DatabaseError } from "@/components/database-error";
 import { PageHeader } from "@/components/page-header";
 import { WatchButton } from "@/components/personalization/watch-button";
 import { OpportunityActions } from "@/components/opportunity-actions";
+import { NoticeBanner } from "@/components/ui/notice-banner";
+import { buttonVariants } from "@/components/ui/button";
 
 export const dynamic = "force-dynamic";
 
@@ -25,11 +27,11 @@ export default async function OpportunityPage({ params }: { params: Promise<{ id
       <PageHeader
         action={<WatchButton entityId={opportunity.id} entityType="OPPORTUNITY" />}
         description={`${opportunity.company.name} · ${opportunity.location || "Location not specified"}`}
-        eyebrow="Canonical opportunity"
+        eyebrow="Opportunity"
         title={opportunity.title}
       />
       <section className="surface p-6">
-        <dl className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        <dl className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {[
             ["Lifecycle", humanizeEnum(opportunity.lifecycleStatus)],
             ["Role family", humanizeEnum(opportunity.roleFamily)],
@@ -52,19 +54,19 @@ export default async function OpportunityPage({ params }: { params: Promise<{ id
           ))}
         </dl>
         {opportunity.status === "SUPERSEDED" && opportunity.supersededById && (
-          <p className="mt-5 mb-0 rounded-xl bg-amber-50 p-4 text-sm text-amber-900">
-            This historical opportunity was superseded. Your original watch remains traceable; the
-            resolved successor is {opportunity.supersededById}.
-          </p>
+          <NoticeBanner className="mt-5" compact tone="warning">
+            This listing has been replaced by a newer posting. Your watch history is kept, and the
+            new posting is {opportunity.supersededById}.
+          </NoticeBanner>
         )}
         {opportunity.applicationUrl && (
           <a
-            className="mt-6 inline-flex items-center gap-2 rounded-xl bg-[var(--panel)] px-4 py-2.5 text-sm font-bold text-white"
+            className={buttonVariants({ className: "mt-6" })}
             href={opportunity.applicationUrl}
             rel="noreferrer"
             target="_blank"
           >
-            Open authoritative application <ArrowUpRight className="size-4" />
+            Open application <ArrowUpRight aria-hidden="true" className="size-4" />
           </a>
         )}
         <OpportunityActions opportunityId={opportunity.id} />

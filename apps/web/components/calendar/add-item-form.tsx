@@ -88,7 +88,7 @@ export function AddCalendarItemForm({
       </div>
 
       {error && (
-        <p className="m-0 rounded-lg bg-red-50 px-3 py-2 text-sm font-semibold text-red-800">
+        <p className="m-0 rounded-lg bg-[var(--danger-bg)] px-3 py-2 text-sm font-semibold text-[var(--danger)]">
           {error}
         </p>
       )}
@@ -149,7 +149,7 @@ export function AddCalendarItemForm({
         All-day item
       </label>
 
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="flex flex-col gap-1.5 text-sm font-semibold">
           {allDay ? "Start date" : "Date"}
           <input
@@ -199,7 +199,7 @@ export function AddCalendarItemForm({
         )}
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="flex flex-col gap-1.5 text-sm font-semibold">
           Timezone
           <input

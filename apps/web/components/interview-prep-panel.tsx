@@ -1,7 +1,12 @@
 "use client";
 
-import { LoaderCircle } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+
+import { humanizeEnum } from "@recruitintel/shared";
+
+import { Badge } from "@/components/ui/badge";
+import { NoticeBanner } from "@/components/ui/notice-banner";
+import { Spinner } from "@/components/ui/spinner";
 
 type Plan = {
   id: string;
@@ -14,7 +19,8 @@ type Plan = {
     key: string;
     type: string;
     value: Record<string, unknown>;
-    status: string;
+    status: "CONFIRMED" | "UNKNOWN";
+    evidence: string | null;
     action: string;
   }>;
   questionIntelligence: { items: unknown[]; excludedReason: string };
@@ -40,7 +46,7 @@ export function InterviewPrepPanel({ interviewId }: { interviewId: string }) {
     const response = await fetch(`/api/interviews/${interviewId}/prep`, { cache: "no-store" });
     if (response.status === 404) {
       const created = await fetch(`/api/interviews/${interviewId}/prep`, { method: "POST" });
-      if (!created.ok) throw new Error("Preparation cannot be created for this interview.");
+      if (!created.ok) throw new Error("Preparation can't be created for this interview.");
       setPlan((await created.json()).data);
     } else if (!response.ok)
       throw new Error(
@@ -73,21 +79,11 @@ export function InterviewPrepPanel({ interviewId }: { interviewId: string }) {
     }
     setPlan((await response.json()).data);
   }
-  if (loading)
-    return (
-      <div className="surface p-6 text-sm text-[var(--muted)]">
-        <LoaderCircle className="mr-2 inline size-4 animate-spin" />
-        Loading interview preparation…
-      </div>
-    );
+  if (loading) return <Spinner className="surface p-6" label="Loading interview prep…" />;
   if (!plan)
-    return (
-      <div className="surface p-6 text-sm text-red-800">
-        {error ?? "Preparation is unavailable."}
-      </div>
-    );
+    return <NoticeBanner tone="error">{error ?? "Preparation is unavailable."}</NoticeBanner>;
   return (
-    <div className="grid gap-6 lg:grid-cols-[1.25fr_0.75fr]" aria-live="polite">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1.25fr_0.75fr]" aria-live="polite">
       <main className="space-y-6">
         <section className="surface p-6">
           <div className="eyebrow">Application-linked preparation</div>
@@ -95,8 +91,8 @@ export function InterviewPrepPanel({ interviewId }: { interviewId: string }) {
             {plan.company.name} · {plan.roleTitle ?? "Role unknown"}
           </h2>
           <p className="text-sm text-[var(--muted)]">
-            {plan.interview.type} · Stage:{" "}
-            {plan.stage === "NONE" ? "UNKNOWN — general preparation" : plan.stage} ·{" "}
+            {humanizeEnum(plan.interview.type)} · Stage:{" "}
+            {plan.stage === "NONE" ? "Unknown — general preparation" : humanizeEnum(plan.stage)} ·{" "}
             <time dateTime={plan.interview.startsAt}>
               {new Date(plan.interview.startsAt).toLocaleString()}
             </time>
@@ -118,25 +114,44 @@ export function InterviewPrepPanel({ interviewId }: { interviewId: string }) {
           ) : null}
         </section>
         <section className="surface p-6">
-          <h2 className="mt-0 font-serif text-2xl">Job requirements and evidence boundaries</h2>
+          <h2 className="mt-0 font-serif text-2xl">Job requirements and what we know</h2>
           {plan.requirements.length ? (
-            <ul className="space-y-3 pl-5 text-sm">
+            <ul className="m-0 space-y-3 p-0">
               {plan.requirements.map((requirement) => (
-                <li key={requirement.key}>
-                  <strong>{requirement.type}</strong> · {requirement.action}{" "}
-                  <span className="text-[var(--muted)]">({requirement.status})</span>
+                <li
+                  className="list-none rounded-[var(--radius-sm)] border border-[var(--line)] p-3"
+                  key={requirement.key}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <strong className="text-sm">{humanizeEnum(requirement.type)}</strong>
+                    <Badge tone={requirement.status === "CONFIRMED" ? "success" : "warning"}>
+                      {requirement.status === "CONFIRMED" ? "Confirmed" : "Needs evidence"}
+                    </Badge>
+                  </div>
+                  <p
+                    className={
+                      requirement.status === "CONFIRMED"
+                        ? "mt-1 mb-0 text-sm text-[var(--muted)]"
+                        : "mt-1 mb-0 text-sm font-medium"
+                    }
+                  >
+                    {requirement.action}
+                  </p>
                 </li>
               ))}
             </ul>
           ) : (
             <p className="text-sm text-[var(--muted)]">
-              No canonical job requirements are available. Preparation stays general.
+              We don&apos;t have structured requirements for this job yet — preparation stays
+              general.
             </p>
           )}
         </section>
         <section className="surface p-6">
           <h2 className="mt-0 font-serif text-2xl">Public question intelligence</h2>
-          <p className="text-sm text-[var(--muted)]">{plan.questionIntelligence.excludedReason}</p>
+          <NoticeBanner compact tone="info">
+            {plan.questionIntelligence.excludedReason}
+          </NoticeBanner>
         </section>
       </main>
       <aside className="surface p-6">
@@ -161,7 +176,11 @@ export function InterviewPrepPanel({ interviewId }: { interviewId: string }) {
             </li>
           ))}
         </ul>
-        {error ? <p className="mt-4 text-sm text-red-800">{error}</p> : null}
+        {error ? (
+          <NoticeBanner className="mt-4" compact tone="error">
+            {error}
+          </NoticeBanner>
+        ) : null}
       </aside>
     </div>
   );

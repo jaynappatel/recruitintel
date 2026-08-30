@@ -1,9 +1,13 @@
 "use client";
 
-import { LoaderCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { humanizeEnum } from "@recruitintel/shared";
+
+import { Button } from "@/components/ui/button";
+import { NoticeBanner } from "@/components/ui/notice-banner";
+import { Spinner } from "@/components/ui/spinner";
+import { Toggle } from "@/components/ui/toggle";
 
 const roleFamilies = [
   "SOFTWARE_ENGINEERING",
@@ -123,6 +127,7 @@ export function RecruitingPreferencesCard() {
   const [locationText, setLocationText] = useState("");
   const [targetSchoolIds, setTargetSchoolIds] = useState<string[]>([]);
   const [status, setStatus] = useState("Loading private settings…");
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     void Promise.all([
@@ -145,17 +150,12 @@ export function RecruitingPreferencesCard() {
         setStatus("");
       })
       .catch((error: unknown) =>
-        setStatus(error instanceof Error ? error.message : "Settings unavailable"),
+        setLoadError(error instanceof Error ? error.message : "Settings unavailable"),
       );
   }, []);
 
-  if (!preferences || !notifications)
-    return (
-      <div className="text-sm text-[var(--muted)]">
-        <LoaderCircle className="mr-2 inline size-4 animate-spin" />
-        {status}
-      </div>
-    );
+  if (loadError) return <NoticeBanner tone="error">{loadError}</NoticeBanner>;
+  if (!preferences || !notifications) return <Spinner label={status} />;
 
   async function savePreferences() {
     setStatus("Saving…");
@@ -194,7 +194,7 @@ export function RecruitingPreferencesCard() {
 
   return (
     <div className="flex flex-col gap-8">
-      <div className="grid gap-5 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
         <label className="text-sm font-semibold">
           Graduation year
           <input
@@ -323,13 +323,7 @@ export function RecruitingPreferencesCard() {
         </span>
       </label>
       <div className="flex items-center gap-3">
-        <button
-          className="rounded-xl bg-[var(--panel)] px-4 py-2.5 text-sm font-bold text-white"
-          onClick={savePreferences}
-          type="button"
-        >
-          Save recruiting preferences
-        </button>
+        <Button onClick={savePreferences}>Save recruiting preferences</Button>
         <span className="text-xs text-[var(--muted)]">{status}</span>
       </div>
 
@@ -338,33 +332,31 @@ export function RecruitingPreferencesCard() {
           <div>
             <div className="text-sm font-semibold">In-app alerts</div>
             <div className="text-xs text-[var(--muted)]">
-              M9 does not send email, SMS, or push notifications.
+              Alerts show up in RecruitIntel only — we never send email, SMS, or push notifications.
             </div>
           </div>
-          <input
-            checked={notifications.inAppEnabled}
-            onChange={(event) =>
-              void saveNotifications({ ...notifications, inAppEnabled: event.target.checked })
-            }
-            type="checkbox"
+          <Toggle
+            label="In-app alerts"
+            onChange={(next) => void saveNotifications({ ...notifications, inAppEnabled: next })}
+            pressed={notifications.inAppEnabled}
           />
         </div>
         <div className="divide-y divide-[var(--line)]">
           {alertTypes.map((type) => (
-            <label className="flex items-center justify-between gap-4 py-2.5 text-sm" key={type}>
+            <div className="flex items-center justify-between gap-4 py-2.5 text-sm" key={type}>
               <span>{humanizeEnum(type)}</span>
-              <input
-                checked={notifications.alertTypes[type] ?? false}
+              <Toggle
                 disabled={!notifications.inAppEnabled}
-                onChange={(event) =>
+                label={humanizeEnum(type)}
+                onChange={(next) =>
                   void saveNotifications({
                     ...notifications,
-                    alertTypes: { ...notifications.alertTypes, [type]: event.target.checked },
+                    alertTypes: { ...notifications.alertTypes, [type]: next },
                   })
                 }
-                type="checkbox"
+                pressed={notifications.alertTypes[type] ?? false}
               />
-            </label>
+            </div>
           ))}
         </div>
       </div>

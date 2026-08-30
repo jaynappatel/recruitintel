@@ -7,7 +7,7 @@ export default function OpportunitiesPage() {
   return (
     <>
       <PageHeader
-        description="Canonical opportunities ranked from your explicit preferences. Scores prioritize review; they are not hiring probabilities."
+        description="Ranked using the preferences you set. These scores help you prioritize review — they're not a prediction of who gets hired."
         eyebrow="Private opportunity queue"
         title="Recommendations"
       />

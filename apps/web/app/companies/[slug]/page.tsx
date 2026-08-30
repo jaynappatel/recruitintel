@@ -47,7 +47,7 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
         <div className="glass-dark p-6 text-white md:p-8">
           <div className="flex flex-wrap items-start justify-between gap-6">
             <div className="flex items-center gap-4">
-              <div className="grid size-16 place-items-center rounded-2xl bg-[var(--mint)] font-serif text-3xl font-semibold text-[var(--forest)]">
+              <div className="grid size-16 place-items-center rounded-2xl bg-[var(--accent)] font-serif text-3xl font-semibold text-white">
                 {company.canonicalName.charAt(0)}
               </div>
               <div>
@@ -73,7 +73,7 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
               </Link>
               {company.careersUrl && (
                 <a
-                  className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-bold text-[var(--forest)]"
+                  className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-bold text-[var(--ink)]"
                   href={company.careersUrl}
                   rel="noreferrer"
                   target="_blank"
@@ -84,7 +84,7 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
             </div>
           </div>
         </div>
-        <div className="grid gap-px bg-[var(--line)] sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-px bg-[var(--line)] sm:grid-cols-3">
           {[
             { label: "Open jobs", value: company.openJobCount, icon: Building2 },
             { label: "Early-career", value: company.earlyCareerJobCount, icon: RadioTower },
@@ -95,7 +95,7 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
             },
           ].map(({ label, value, icon: Icon }) => (
             <div className="flex items-center gap-3 bg-white p-5" key={label}>
-              <Icon className="size-4 text-[var(--forest-bright)]" />
+              <Icon aria-hidden="true" className="size-4 text-[var(--accent)]" />
               <div>
                 <div className="text-[0.67rem] font-bold tracking-wide text-[var(--muted)] uppercase">
                   {label}
@@ -108,22 +108,22 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
       </header>
 
       <div className="mb-6 flex gap-2 overflow-x-auto">
-        {["Overview", "Jobs", "Signals", "Timeline", "Sources"].map((tab, index) => (
-          <span
-            className={`shrink-0 rounded-full px-4 py-2 text-xs font-bold ${
-              index === 0
-                ? "bg-[var(--forest)] text-white"
-                : "border border-[var(--line)] bg-white text-[var(--muted)]"
-            }`}
-            key={tab}
+        {[
+          { label: "Jobs", href: "#jobs" },
+          { label: "Signals", href: "#signals" },
+        ].map((tab) => (
+          <a
+            className="shrink-0 rounded-full border border-[var(--line)] bg-white px-4 py-2 text-xs font-bold text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--ink)]"
+            href={tab.href}
+            key={tab.label}
           >
-            {tab}
-          </span>
+            {tab.label}
+          </a>
         ))}
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-        <section className="surface overflow-hidden">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+        <section className="surface overflow-hidden" id="jobs">
           <div className="border-b border-[var(--line)] p-5">
             <div className="eyebrow mb-1">Current state</div>
             <h2 className="m-0 font-serif text-2xl font-semibold">Open roles</h2>
@@ -140,7 +140,7 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
           )}
         </section>
 
-        <section className="surface overflow-hidden">
+        <section className="surface overflow-hidden" id="signals">
           <div className="border-b border-[var(--line)] p-5">
             <div className="eyebrow mb-1">Historical evidence</div>
             <h2 className="m-0 font-serif text-2xl font-semibold">Latest signals</h2>
@@ -156,7 +156,7 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
       </div>
 
       <div className="mt-6 text-sm text-[var(--muted)]">
-        <Link className="font-bold text-[var(--forest)] hover:underline" href="/companies">
+        <Link className="font-bold text-[var(--accent)] hover:underline" href="/companies">
           ← All companies
         </Link>
       </div>

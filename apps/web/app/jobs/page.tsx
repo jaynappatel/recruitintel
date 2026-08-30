@@ -5,6 +5,7 @@ import { DatabaseError } from "@/components/database-error";
 import { EmptyState } from "@/components/empty-state";
 import { JobList } from "@/components/job-list";
 import { PageHeader } from "@/components/page-header";
+import { buttonVariants } from "@/components/ui/button";
 
 export const dynamic = "force-dynamic";
 
@@ -46,7 +47,7 @@ export default async function JobsPage({
   return (
     <>
       <PageHeader
-        description="Current normalized job state from configured sources. Unchanged source polls refresh liveness without creating noisy events."
+        description="Open roles collected directly from the career sites and job boards we track, kept current as they change."
         eyebrow="Opportunity index"
         title="Open jobs"
       />
@@ -71,10 +72,7 @@ export default async function JobsPage({
             <option value="true">Internship / new grad</option>
           </select>
         </label>
-        <button
-          className="rounded-lg bg-[var(--panel)] px-4 py-2.5 text-sm font-bold text-white"
-          type="submit"
-        >
+        <button className={buttonVariants()} type="submit">
           Search
         </button>
       </form>
@@ -84,7 +82,7 @@ export default async function JobsPage({
         </section>
       ) : (
         <EmptyState
-          copy="Run a configured Greenhouse or Lever source to populate jobs."
+          copy="No jobs match right now. Try adjusting your search, or check back soon — new roles are added automatically as they're posted."
           title="No open jobs"
         />
       )}

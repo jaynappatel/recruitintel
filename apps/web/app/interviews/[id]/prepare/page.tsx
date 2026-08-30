@@ -12,7 +12,7 @@ export default async function InterviewPreparePage({
       <PageHeader
         eyebrow="Interview preparation"
         title="Prepare with evidence"
-        description="A private, deterministic plan linked to your scheduled interview. Public question observations are shown only after license approval."
+        description="A private prep plan built around your scheduled interview. Publicly shared interview questions appear here once verified."
       />
       <InterviewPrepPanel interviewId={id} />
     </>

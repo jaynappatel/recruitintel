@@ -7,7 +7,7 @@ export default function TodayPage() {
   return (
     <>
       <PageHeader
-        description="A deterministic queue composed from your alerts, application actions, and calendar work."
+        description="Everything due today, pulled from your alerts, application follow-ups, and calendar."
         eyebrow="Daily workflow"
         title="What should I do today?"
       />

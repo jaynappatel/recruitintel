@@ -207,7 +207,7 @@ export function CalendarApp() {
   return (
     <div className="flex flex-col gap-6">
       {error && (
-        <div className="surface border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800">
+        <div className="surface border-[var(--danger-border)] bg-[var(--danger-bg)] p-4 text-sm font-semibold text-[var(--danger)]">
           {error}
         </div>
       )}
@@ -291,7 +291,7 @@ export function CalendarApp() {
         />
       )}
 
-      <div className="grid gap-6 xl:grid-cols-[1.6fr_1fr]">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.6fr_1fr]">
         <div className="flex flex-col gap-6">
           {loading ? (
             <div className="surface grid h-64 place-items-center text-sm text-[var(--muted)]">

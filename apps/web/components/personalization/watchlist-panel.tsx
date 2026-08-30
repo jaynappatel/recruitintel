@@ -1,10 +1,13 @@
 "use client";
 
-import { LoaderCircle, Trash2 } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { humanizeEnum } from "@recruitintel/shared";
+
+import { NoticeBanner } from "@/components/ui/notice-banner";
+import { Spinner } from "@/components/ui/spinner";
 
 type Watch = {
   id: string;
@@ -68,19 +71,17 @@ export function WatchlistPanel() {
   }
 
   if (loading) {
-    return (
-      <div className="surface p-6 text-sm text-[var(--muted)]">
-        <LoaderCircle className="mr-2 inline size-4 animate-spin" />
-        Loading watch history
-      </div>
-    );
+    return <Spinner className="surface p-6" label="Loading your watchlist…" />;
   }
-  if (error && items.length === 0)
-    return <div className="surface p-6 text-sm text-red-800">{error}</div>;
+  if (error && items.length === 0) return <NoticeBanner tone="error">{error}</NoticeBanner>;
   return (
     <div className="surface overflow-hidden">
       {error && (
-        <div className="border-b border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>
+        <div className="p-3">
+          <NoticeBanner compact tone="error">
+            {error}
+          </NoticeBanner>
+        </div>
       )}
       {items.length === 0 ? (
         <p className="m-0 p-6 text-sm text-[var(--muted)]">Nothing watched yet.</p>
@@ -88,7 +89,7 @@ export function WatchlistPanel() {
         <div className="divide-y divide-[var(--line)]">
           {items.map((item) => (
             <article
-              className="grid gap-4 p-5 lg:grid-cols-[minmax(0,1fr)_14rem_14rem_auto] lg:items-center"
+              className="grid grid-cols-1 gap-4 p-5 lg:grid-cols-[minmax(0,1fr)_14rem_14rem_auto] lg:items-center"
               key={item.id}
             >
               <div>
@@ -107,7 +108,7 @@ export function WatchlistPanel() {
                   {humanizeEnum(item.origin)}
                 </div>
                 {item.resolvedSuccessor && (
-                  <p className="mt-2 mb-0 text-sm text-amber-800">
+                  <p className="mt-2 mb-0 text-sm text-[var(--warning)]">
                     Historical target retained. Resolved successor:{" "}
                     <Link
                       className="font-bold underline"
@@ -158,12 +159,12 @@ export function WatchlistPanel() {
               )}
               <button
                 aria-label={`Remove ${item.entityLabel}`}
-                className="rounded-lg p-2 text-[var(--muted)] hover:bg-black/5 disabled:opacity-40"
+                className="rounded-[var(--radius-sm)] p-2 text-[var(--muted)] hover:bg-[var(--surface-soft)] disabled:opacity-40"
                 disabled={item.state !== "ACTIVE"}
                 onClick={() => void remove(item.id)}
                 type="button"
               >
-                <Trash2 className="size-4" />
+                <Trash2 aria-hidden="true" className="size-4" />
               </button>
             </article>
           ))}

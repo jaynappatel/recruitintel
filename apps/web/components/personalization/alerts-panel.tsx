@@ -1,10 +1,13 @@
 "use client";
 
-import { Bell, CheckCheck, LoaderCircle, X } from "lucide-react";
+import { Bell, CheckCheck, X } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { humanizeEnum } from "@recruitintel/shared";
+
+import { NoticeBanner } from "@/components/ui/notice-banner";
+import { Spinner } from "@/components/ui/spinner";
 
 type Alert = {
   id: string;
@@ -82,14 +85,8 @@ export function AlertsPanel() {
       );
   }
 
-  if (loading)
-    return (
-      <div className="surface p-6 text-sm text-[var(--muted)]">
-        <LoaderCircle className="mr-2 inline size-4 animate-spin" />
-        Loading alerts
-      </div>
-    );
-  if (error) return <div className="surface p-6 text-sm text-red-800">{error}</div>;
+  if (loading) return <Spinner className="surface p-6" label="Loading alerts…" />;
+  if (error) return <NoticeBanner tone="error">{error}</NoticeBanner>;
   return (
     <div className="surface overflow-hidden">
       <div className="flex justify-end border-b border-[var(--line)] p-3">
@@ -98,14 +95,15 @@ export function AlertsPanel() {
           onClick={markAllRead}
           type="button"
         >
-          <CheckCheck className="size-4" /> Mark all read
+          <CheckCheck aria-hidden="true" className="size-4" /> Mark all read
         </button>
       </div>
       {items.length === 0 ? (
         <div className="grid min-h-40 place-items-center p-6 text-center text-sm text-[var(--muted)]">
           <div>
-            <Bell className="mx-auto mb-2 size-5" />
-            No in-app alerts yet.
+            <Bell aria-hidden="true" className="mx-auto mb-2 size-5" />
+            Nothing here yet — meaningful updates about your tracked companies and opportunities
+            will show up here.
           </div>
         </div>
       ) : (
@@ -129,16 +127,16 @@ export function AlertsPanel() {
                 </div>
                 <button
                   aria-label="Dismiss alert"
-                  className="rounded-lg p-2 hover:bg-black/5"
+                  className="rounded-[var(--radius-sm)] p-2 hover:bg-[var(--surface-soft)]"
                   onClick={() => void dismiss(item.id)}
                   type="button"
                 >
-                  <X className="size-4" />
+                  <X aria-hidden="true" className="size-4" />
                 </button>
               </div>
               {item.entity && item.state !== "DISMISSED" && (
                 <Link
-                  className="mt-3 inline-block text-sm font-bold text-[var(--forest)] underline"
+                  className="mt-3 inline-block text-sm font-bold text-[var(--accent)] underline"
                   href={item.entity.href}
                   onClick={() => void open(item)}
                   prefetch={false}

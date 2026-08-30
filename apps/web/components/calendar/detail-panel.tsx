@@ -110,7 +110,7 @@ export function CalendarDetailPanel({
 
       <div className="space-y-4 p-5">
         {error && (
-          <p className="m-0 rounded-lg bg-red-50 px-3 py-2 text-sm font-semibold text-red-800">
+          <p className="m-0 rounded-lg bg-[var(--danger-bg)] px-3 py-2 text-sm font-semibold text-[var(--danger)]">
             {error}
           </p>
         )}
@@ -125,7 +125,7 @@ export function CalendarDetailPanel({
                 value={title}
               />
             </label>
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label className="flex flex-col gap-1.5 text-sm font-semibold">
                 {allDay ? "Start date" : "Date"}
                 <input
@@ -236,7 +236,7 @@ export function CalendarDetailPanel({
                 Cancel
               </button>
               <button
-                className="ml-auto inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-bold text-red-700"
+                className="ml-auto inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-bold text-[var(--danger)]"
                 onClick={async () => {
                   if (!window.confirm("Delete this calendar item?")) return;
                   setSaving(true);
@@ -391,8 +391,8 @@ export function CalendarDetailPanel({
               </label>
             )}
             {!companyId && !companySlug && (
-              <p className="mb-3 text-sm font-semibold text-amber-800">
-                A canonical company association is required to create a plan.
+              <p className="mb-3 text-sm font-semibold text-[var(--warning)]">
+                Pick a company to create a plan.
               </p>
             )}
             <button

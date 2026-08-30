@@ -18,7 +18,7 @@ import { statusLabels } from "./labels";
  */
 const styles: Record<CalendarStatus, { className: string; icon: typeof CalendarCheck }> = {
   CONFIRMED: {
-    className: "border-emerald-300 bg-emerald-600 text-white",
+    className: "border-[var(--success)] bg-[var(--success)] text-white",
     icon: CalendarCheck,
   },
   ESTIMATED: {

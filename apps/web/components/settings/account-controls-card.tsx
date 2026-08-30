@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from "react";
 
+import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
+
 type Grant = { id: string; name: string; status: string; expiresAt: string };
 type Analytics = {
   impressions: number;
@@ -14,6 +17,7 @@ type Analytics = {
 export function AccountControlsCard() {
   const [grants, setGrants] = useState<Grant[]>([]);
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
+  const [analyticsError, setAnalyticsError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [oneTimeToken, setOneTimeToken] = useState<string | null>(null);
   async function load() {
@@ -23,6 +27,12 @@ export function AccountControlsCard() {
     ]);
     if (grantResponse.ok) setGrants((await grantResponse.json()).data);
     if (analyticsResponse.ok) setAnalytics((await analyticsResponse.json()).data);
+    else
+      setAnalyticsError(
+        analyticsResponse.status === 401
+          ? "Sign in to see your activity totals."
+          : "Your activity totals are temporarily unavailable.",
+      );
   }
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
@@ -41,9 +51,7 @@ export function AccountControlsCard() {
     if (response.ok) {
       const created = (await response.json()).data as Grant & { token: string };
       setOneTimeToken(created.token);
-      setMessage(
-        "Extension grant created. Copy the one-time token into the reviewed browser companion setup.",
-      );
+      setMessage("Extension grant created. Copy the one-time token into your browser extension.");
       await load();
     } else setMessage("Could not create an extension grant.");
   }
@@ -78,22 +86,18 @@ export function AccountControlsCard() {
     );
   }
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       <section>
-        <h3 className="m-0 text-sm font-bold">Browser companion</h3>
+        <h3 className="m-0 text-sm font-bold">Browser extension</h3>
         <p className="text-sm text-[var(--muted)]">
-          The MV3 companion scans only the active page after your explicit action. Grants can be
-          revoked here.
+          The extension only scans the page you&apos;re on, and only after you ask it to. Grants can
+          be revoked here at any time.
         </p>
-        <button
-          className="rounded-lg bg-[var(--panel)] px-3 py-2 text-sm font-bold text-white"
-          onClick={() => void grant()}
-          type="button"
-        >
+        <Button className="mt-3" onClick={() => void grant()} size="sm">
           Create extension grant
-        </button>
+        </Button>
         {oneTimeToken ? (
-          <div className="mt-3 rounded-lg border border-[var(--accent)] bg-white p-3 text-sm">
+          <div className="surface mt-3 border-[var(--accent)] p-3 text-sm">
             <div className="font-bold">Copy this token now</div>
             <code className="mt-1 block break-all text-xs">{oneTimeToken}</code>
             <button
@@ -108,14 +112,14 @@ export function AccountControlsCard() {
         <div className="mt-3 space-y-2">
           {grants.map((item) => (
             <div
-              className="flex items-center justify-between gap-3 rounded-lg border border-[var(--line)] p-3 text-sm"
+              className="flex items-center justify-between gap-3 rounded-[var(--radius-sm)] border border-[var(--line)] p-3 text-sm"
               key={item.id}
             >
               <span>
                 {item.name} · {item.status}
               </span>
               <button
-                className="font-bold text-red-700"
+                className="font-bold text-[var(--danger)]"
                 onClick={() => void revoke(item.id)}
                 type="button"
               >
@@ -146,30 +150,24 @@ export function AccountControlsCard() {
               <dd className="m-0 font-bold">{analytics.interviewProgressions}</dd>
             </div>
           </dl>
+        ) : analyticsError ? (
+          <p className="mt-3 text-sm text-[var(--muted)]">{analyticsError}</p>
         ) : (
-          <p className="text-sm text-[var(--muted)]">Loading your persisted activity totals…</p>
+          <Spinner label="Loading your activity totals…" />
         )}
         <div className="mt-6 border-t border-[var(--line)] pt-4">
           <h3 className="m-0 text-sm font-bold">Privacy and account</h3>
           <p className="text-sm text-[var(--muted)]">
-            Exports contain your private records. Account deletion revokes local private access and
-            cancels private work.
+            Exports contain your private records. Deleting your account removes your access and
+            cancels any work in progress — this can&apos;t be undone.
           </p>
           <div className="flex flex-wrap gap-2">
-            <button
-              className="rounded-lg border border-[var(--line)] px-3 py-2 text-sm font-bold"
-              onClick={() => void exportData()}
-              type="button"
-            >
+            <Button onClick={() => void exportData()} size="sm" variant="secondary">
               Export my data
-            </button>
-            <button
-              className="rounded-lg px-3 py-2 text-sm font-bold text-red-700"
-              onClick={() => void deleteAccount()}
-              type="button"
-            >
+            </Button>
+            <Button onClick={() => void deleteAccount()} size="sm" variant="destructive">
               Delete account
-            </button>
+            </Button>
           </div>
         </div>
       </section>

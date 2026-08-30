@@ -20,7 +20,7 @@ export default async function CompaniesPage() {
     return (
       <>
         <PageHeader
-          description="Canonical, provenance-linked recruiting entities."
+          description="Companies we track, with every job and signal linked back to its source."
           eyebrow="Entity directory"
           title="Companies"
         />
@@ -32,19 +32,19 @@ export default async function CompaniesPage() {
   return (
     <>
       <PageHeader
-        description="Canonical companies connect aliases, source configurations, current jobs, and historical recruiting events."
+        description="Each company page brings together its name variations, current jobs, and recruiting history in one place."
         eyebrow="Entity directory"
         title="Companies"
       />
       {companies.items.length ? (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           {companies.items.map((company) => (
             <CompanyCard company={company} key={company.id} />
           ))}
         </div>
       ) : (
         <EmptyState
-          copy="Run the development seed or add a company source."
+          copy="Companies appear here automatically as recruiting sources are connected."
           title="No companies found"
         />
       )}
