@@ -43,7 +43,42 @@ export interface ReadinessReport {
   leakageRisks: string[];
   labelConfidence: "HIGH" | "MEDIUM" | "LOW";
   reasons: string[];
+  authoritativeMode: "DETERMINISTIC";
+  baselineReference: string;
+  datasetFingerprint: string | null;
+  shadowHistoryDays: number;
+  promotionGates: Record<M21PromotionGate, boolean>;
 }
+export const M21_PROMOTION_GATES = [
+  "REAL_CONSENTED_LABELS",
+  "REPRODUCIBLE_DATASET",
+  "POINT_IN_TIME_FEATURES",
+  "CHRONOLOGICAL_HOLDOUT",
+  "ENTITY_LEAKAGE_CONTROL",
+  "DETERMINISTIC_BASELINE_WIN",
+  "CALIBRATION",
+  "PRIVACY_REVIEW",
+  "PROTECTED_FEATURE_EXCLUSION",
+  "SHADOW_HISTORY",
+  "MODEL_CARD",
+  "ROLLBACK",
+  "MONITORING",
+  "ZERO_COST",
+] as const;
+export type M21PromotionGate = (typeof M21_PROMOTION_GATES)[number];
+export interface PromotionEvidence {
+  gates: Partial<Record<M21PromotionGate, boolean>>;
+  baselineReference: string;
+  datasetFingerprint: string | null;
+  shadowHistoryDays: number;
+}
+export const M21_CANDIDATES: Record<DatasetType, { baselineReference: string }> = {
+  PERSONALIZED_RANKING: { baselineReference: "M9 versioned weighted deterministic score" },
+  OPENING_FORECAST: { baselineReference: "Historical median window and seasonal frequency" },
+  SOURCE_ANOMALY: { baselineReference: "M7 rolling median/MAD source-health rules" },
+  RESUME_OUTCOME: { baselineReference: "M11 hard constraints and evidence-weighted coverage" },
+  INTERVIEW_TOPIC: { baselineReference: "M19 recency-weighted independent-observation frequency" },
+};
 export interface TemporalSplit {
   trainEnd: string;
   validationEnd: string;
@@ -68,18 +103,49 @@ export function assertPointInTime(asOf: Date, observed: Date) {
 /** Chronological split; entities with the same group key must stay in a single partition. */
 export function temporalSplit<T extends { asOfTime: string }>(
   rows: T[],
-): { train: T[]; validation: T[]; test: T[] } {
+  groupKey: (row: T) => string = (row) => row.asOfTime,
+): { train: T[]; validation: T[]; test: T[]; excluded: T[] } {
   const sorted = [...rows].sort((a, b) => a.asOfTime.localeCompare(b.asOfTime));
   const trainEnd = Math.floor(sorted.length * 0.6),
     validationEnd = Math.floor(sorted.length * 0.8);
+  const trainCutoff = sorted[trainEnd - 1]?.asOfTime;
+  const validationCutoff = sorted[validationEnd - 1]?.asOfTime;
+  const partition = (row: T) =>
+    !trainCutoff || row.asOfTime <= trainCutoff
+      ? "train"
+      : !validationCutoff || row.asOfTime <= validationCutoff
+        ? "validation"
+        : "test";
+  const groups = new Map<string, T[]>();
+  for (const row of sorted) groups.set(groupKey(row), [...(groups.get(groupKey(row)) ?? []), row]);
+  const result: { train: T[]; validation: T[]; test: T[]; excluded: T[] } = {
+    train: [],
+    validation: [],
+    test: [],
+    excluded: [],
+  };
+  for (const group of groups.values()) {
+    const partitions = new Set(group.map(partition));
+    if (partitions.size !== 1) result.excluded.push(...group);
+    else result[[...partitions][0]!].push(...group);
+  }
   return {
-    train: sorted.slice(0, trainEnd),
-    validation: sorted.slice(trainEnd, validationEnd),
-    test: sorted.slice(validationEnd),
+    ...result,
   };
 }
 export function readiness(
-  input: Omit<ReadinessReport, "status" | "classImbalance" | "reasons">,
+  input: Omit<
+    ReadinessReport,
+    | "status"
+    | "classImbalance"
+    | "reasons"
+    | "authoritativeMode"
+    | "baselineReference"
+    | "datasetFingerprint"
+    | "shadowHistoryDays"
+    | "promotionGates"
+  > &
+    Partial<PromotionEvidence>,
 ): ReadinessReport {
   const reasons: string[] = [];
   if (input.eligibleSampleCount < 100) reasons.push("INSUFFICIENT_SAMPLES");
@@ -89,6 +155,13 @@ export function readiness(
   if (input.missingFeatureRate > 0.25) reasons.push("FEATURE_MISSINGNESS_HIGH");
   if (input.duplicateCount > 0) reasons.push("CORRELATED_EXAMPLES_REVIEW_REQUIRED");
   if (input.leakageRisks.length) reasons.push("LEAKAGE_RISK_REVIEW_REQUIRED");
+  const evidence = assessPromotionEvidence({
+    gates: input.gates ?? {},
+    baselineReference: input.baselineReference ?? M21_CANDIDATES[input.taskType].baselineReference,
+    datasetFingerprint: input.datasetFingerprint ?? null,
+    shadowHistoryDays: input.shadowHistoryDays ?? 0,
+  });
+  for (const reason of evidence.reasons) if (!reasons.includes(reason)) reasons.push(reason);
   return {
     ...input,
     status: reasons.length ? "NOT_READY" : "READY",
@@ -96,7 +169,28 @@ export function readiness(
       ? input.negativeLabelCount / input.positiveLabelCount
       : null,
     reasons,
+    authoritativeMode: "DETERMINISTIC",
+    baselineReference: evidence.baselineReference,
+    datasetFingerprint: evidence.datasetFingerprint,
+    shadowHistoryDays: evidence.shadowHistoryDays,
+    promotionGates: evidence.gates,
   };
+}
+export function assessPromotionEvidence(input: PromotionEvidence): {
+  gates: Record<M21PromotionGate, boolean>;
+  reasons: string[];
+  baselineReference: string;
+  datasetFingerprint: string | null;
+  shadowHistoryDays: number;
+} {
+  const gates = Object.fromEntries(
+    M21_PROMOTION_GATES.map((gate) => [gate, input.gates[gate] === true]),
+  ) as Record<M21PromotionGate, boolean>;
+  if (!input.datasetFingerprint) gates.REPRODUCIBLE_DATASET = false;
+  const reasons = M21_PROMOTION_GATES.filter((gate) => !gates[gate]).map(
+    (gate) => `PROMOTION_GATE_${gate}_FAILED`,
+  );
+  return { ...input, gates, reasons };
 }
 export function binaryMetrics(rows: Array<{ label: number; prediction: number }>) {
   const n = rows.length || 1;
@@ -129,45 +223,43 @@ export async function getPersonalAnalytics(userId: string) {
 }
 export async function getDataReadiness(taskType: DatasetType): Promise<ReadinessReport> {
   const sql = getDatabase();
-  if (taskType === "PERSONALIZED_RANKING") {
-    const [r] =
-      await sql`select count(*)::int eligible, count(distinct user_id)::int users, count(*) filter (where score is not null)::int scored, min(shown_at) first_at, max(shown_at) last_at from public.recommendation_impressions`;
-    const span =
-      r?.first_at && r?.last_at
-        ? Math.floor(
-            (new Date(r.last_at as string).getTime() - new Date(r.first_at as string).getTime()) /
-              86400000,
-          )
-        : 0;
-    return readiness({
-      taskType,
-      eligibleSampleCount: Number(r?.eligible ?? 0),
-      positiveLabelCount: 0,
-      negativeLabelCount: 0,
-      userCount: Number(r?.users ?? 0),
-      companyCount: 0,
-      timeSpanDays: span,
-      missingFeatureRate: Number(r?.eligible ?? 0)
-        ? 1 - Number(r?.scored ?? 0) / Number(r?.eligible ?? 1)
-        : 1,
-      outcomeDelayDays: null,
-      duplicateCount: 0,
-      leakageRisks: ["Position and selection bias require explicit impression/action joins"],
-      labelConfidence: "LOW",
-    });
-  }
+  // A dataset is evidence only when its builder explicitly records consent and a real origin.
+  // Recommendation impressions alone are denominators, not labels, and seed/test rows cannot
+  // satisfy this query.
+  const [r] = await sql`
+    select count(member.row_fingerprint)::int as eligible,
+      count(member.row_fingerprint) filter (where member.label_value = 1)::int as positive,
+      count(member.row_fingerprint) filter (where member.label_value = 0)::int as negative,
+      count(distinct member.user_id)::int as users,
+      min(member.as_of_time) as first_at, max(member.as_of_time) as last_at,
+      min(dataset.fingerprint) as fingerprint
+    from public.training_dataset_versions dataset
+    left join public.dataset_members member on member.dataset_id = dataset.id
+    where dataset.dataset_type=${taskType}
+      and dataset.status='READY'
+      and dataset.filtering_rules->>'data_origin'='REAL_CONSENTED'
+      and dataset.filtering_rules->>'consent_recorded'='true'
+      and coalesce(dataset.exclusion_counts->>'fixture_rows', '0')='0'`;
+  const span =
+    r?.first_at && r?.last_at
+      ? Math.floor(
+          (new Date(r.last_at as string).getTime() - new Date(r.first_at as string).getTime()) /
+            86400000,
+        )
+      : 0;
   return readiness({
     taskType,
-    eligibleSampleCount: 0,
-    positiveLabelCount: 0,
-    negativeLabelCount: 0,
-    userCount: 0,
+    eligibleSampleCount: Number(r?.eligible ?? 0),
+    positiveLabelCount: Number(r?.positive ?? 0),
+    negativeLabelCount: Number(r?.negative ?? 0),
+    userCount: Number(r?.users ?? 0),
     companyCount: 0,
-    timeSpanDays: 0,
+    timeSpanDays: span,
     missingFeatureRate: 1,
     outcomeDelayDays: null,
     duplicateCount: 0,
     leakageRisks: ["No M14 materialized labeled dataset"],
     labelConfidence: "LOW",
+    datasetFingerprint: (r?.fingerprint as string | undefined) ?? null,
   });
 }

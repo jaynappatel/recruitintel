@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertPointInTime,
   assertSafeFeatures,
+  assessPromotionEvidence,
   binaryMetrics,
   datasetFingerprint,
   datasetPseudonym,
@@ -27,6 +28,18 @@ describe("M14 analytics safeguards", () => {
       })),
     );
     expect(split.train[0]?.asOfTime).toBe("2024-01-01");
+    const grouped = temporalSplit(
+      [
+        { asOfTime: "2024-01-01", user: "a" },
+        { asOfTime: "2024-04-01", user: "a" },
+        { asOfTime: "2024-02-01", user: "b" },
+        { asOfTime: "2024-03-01", user: "c" },
+        { asOfTime: "2024-05-01", user: "d" },
+      ],
+      (row) => row.user,
+    );
+    expect(grouped.excluded.map((row) => row.user)).toEqual(["a", "a"]);
+    expect(new Set(grouped.train.map((row) => row.user))).not.toContain("a");
     const report = readiness({
       taskType: "PERSONALIZED_RANKING",
       eligibleSampleCount: 3,
@@ -76,5 +89,39 @@ describe("M14 analytics safeguards", () => {
         { label: 0, prediction: 0.1 },
       ]).brier,
     ).toBeCloseTo(0.01);
+  });
+  it("requires every M21 promotion gate and keeps synthetic proof separate from live readiness", () => {
+    const incomplete = assessPromotionEvidence({
+      gates: { REAL_CONSENTED_LABELS: true },
+      baselineReference: "deterministic baseline",
+      datasetFingerprint: null,
+      shadowHistoryDays: 0,
+    });
+    expect(incomplete.reasons).toContain("PROMOTION_GATE_SHADOW_HISTORY_FAILED");
+    expect(incomplete.gates.REPRODUCIBLE_DATASET).toBe(false);
+
+    const syntheticSystemProof = assessPromotionEvidence({
+      gates: {
+        REAL_CONSENTED_LABELS: true,
+        REPRODUCIBLE_DATASET: true,
+        POINT_IN_TIME_FEATURES: true,
+        CHRONOLOGICAL_HOLDOUT: true,
+        ENTITY_LEAKAGE_CONTROL: true,
+        DETERMINISTIC_BASELINE_WIN: true,
+        CALIBRATION: true,
+        PRIVACY_REVIEW: true,
+        PROTECTED_FEATURE_EXCLUSION: true,
+        SHADOW_HISTORY: true,
+        MODEL_CARD: true,
+        ROLLBACK: true,
+        MONITORING: true,
+        ZERO_COST: true,
+      },
+      baselineReference: "synthetic deterministic baseline",
+      datasetFingerprint: "a".repeat(64),
+      shadowHistoryDays: 30,
+    });
+    expect(syntheticSystemProof.reasons).toEqual([]);
+    // This proves gate evaluation only; it is never loaded by getDataReadiness as beta evidence.
   });
 });

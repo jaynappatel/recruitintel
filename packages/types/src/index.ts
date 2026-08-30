@@ -22,6 +22,22 @@ export const dataReadinessTaskSchema = z.enum([
   "RESUME_OUTCOME",
   "INTERVIEW_TOPIC",
 ]);
+export const m21PromotionGateSchema = z.enum([
+  "REAL_CONSENTED_LABELS",
+  "REPRODUCIBLE_DATASET",
+  "POINT_IN_TIME_FEATURES",
+  "CHRONOLOGICAL_HOLDOUT",
+  "ENTITY_LEAKAGE_CONTROL",
+  "DETERMINISTIC_BASELINE_WIN",
+  "CALIBRATION",
+  "PRIVACY_REVIEW",
+  "PROTECTED_FEATURE_EXCLUSION",
+  "SHADOW_HISTORY",
+  "MODEL_CARD",
+  "ROLLBACK",
+  "MONITORING",
+  "ZERO_COST",
+]);
 export const dataReadinessSchema = z.object({
   taskType: dataReadinessTaskSchema,
   status: z.enum(["READY", "NOT_READY"]),
@@ -38,6 +54,14 @@ export const dataReadinessSchema = z.object({
   leakageRisks: z.array(z.string()),
   labelConfidence: z.enum(["HIGH", "MEDIUM", "LOW"]),
   reasons: z.array(z.string()),
+  authoritativeMode: z.literal("DETERMINISTIC"),
+  baselineReference: z.string().min(1),
+  datasetFingerprint: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .nullable(),
+  shadowHistoryDays: z.number().int().nonnegative(),
+  promotionGates: z.record(m21PromotionGateSchema, z.boolean()),
 });
 export const clientProductEventSchema = z
   .object({
