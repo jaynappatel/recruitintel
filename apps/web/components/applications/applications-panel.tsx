@@ -2,6 +2,7 @@
 
 import { LoaderCircle, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { humanizeEnum } from "@recruitintel/shared";
 
@@ -25,6 +26,7 @@ type Event = {
 };
 
 export function ApplicationsPanel() {
+  const router = useRouter();
   const [items, setItems] = useState<Application[]>([]);
   const [selected, setSelected] = useState<Application | null>(null);
   const [events, setEvents] = useState<Event[]>([]);
@@ -106,7 +108,9 @@ export function ApplicationsPanel() {
       }),
     });
     if (!response.ok) return setError("The interview could not be created.");
+    const interview = (await response.json()).data as { id: string };
     await transition("IN_PROCESS", "TECHNICAL_INTERVIEW");
+    router.push(`/interviews/${interview.id}/prepare`);
   }
 
   if (loading)

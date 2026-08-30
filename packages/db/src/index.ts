@@ -18,6 +18,7 @@ export * from "./model-gateway";
 export * from "./analytics";
 export * from "./operations";
 export * from "./outreach";
+export * from "./interview-prep";
 
 export interface CompanyRecord {
   id: string;

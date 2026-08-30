@@ -387,6 +387,10 @@ export async function exportUserAccount(userId: string) {
     await sql`select id,contact_id,application_id,subject,body,grounding,status,version,approved_version,approved_at,sent_at,follow_up_due_at,cancelled_at,created_at,updated_at from public.outreach_drafts where user_id=${userId}::uuid order by created_at,id`;
   const outreachAttempts =
     await sql`select id,draft_id,draft_version,recipient_email,idempotency_key,channel,status,recorded_at,created_at from public.outreach_attempts where user_id=${userId}::uuid order by created_at,id`;
+  const interviewPrepPlans =
+    await sql`select id,application_id,interview_id,created_at,updated_at from public.interview_prep_plans where user_id=${userId}::uuid order by created_at,id`;
+  const interviewPrepItems =
+    await sql`select id,prep_plan_id,item_key,title,rationale,item_kind,completed_at,version,created_at,updated_at from public.interview_prep_items where user_id=${userId}::uuid order by created_at,id`;
   return {
     user: {
       id: String(user.id),
@@ -417,6 +421,8 @@ export async function exportUserAccount(userId: string) {
     outreachContacts,
     outreachDrafts,
     outreachAttempts,
+    interviewPrepPlans,
+    interviewPrepItems,
   };
 }
 
