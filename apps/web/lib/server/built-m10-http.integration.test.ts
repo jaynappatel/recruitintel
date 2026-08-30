@@ -40,7 +40,12 @@ integration("built production M10 HTTP runtime", () => {
     Object.assign(process.env, { NODE_ENV: "production" });
     pool = new Pool({ connectionString: databaseUrl, max: 2 });
     await pool.query("delete from public.beta_access_grants where email = any($1::text[])", [
-      ["built-http-a@example.test", "built-http-b@example.test", "built-http-c@example.test"],
+      [
+        "built-http-a@example.test",
+        "built-http-b@example.test",
+        "built-http-c@example.test",
+        "built-http-invited@example.test",
+      ],
     ]);
     await pool.query("delete from public.users where id = any($1::uuid[])", [
       [userA, userB, userC],
@@ -148,7 +153,12 @@ integration("built production M10 HTTP runtime", () => {
   afterAll(async () => {
     server?.kill("SIGTERM");
     await pool?.query("delete from public.beta_access_grants where email = any($1::text[])", [
-      ["built-http-a@example.test", "built-http-b@example.test", "built-http-c@example.test"],
+      [
+        "built-http-a@example.test",
+        "built-http-b@example.test",
+        "built-http-c@example.test",
+        "built-http-invited@example.test",
+      ],
     ]);
     await pool?.query("delete from public.users where id = any($1::uuid[])", [
       [userA, userB, userC],
