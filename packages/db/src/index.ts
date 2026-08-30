@@ -281,7 +281,9 @@ export async function listJobs(options: ListJobsOptions = {}): Promise<Page<JobR
     limit ${limit} offset ${offset}
   `;
   const [{ count = 0 } = {}] = await sql`
-    select count(*)::int as count from public.jobs j where ${filters}
+    select count(*)::int as count from public.jobs j
+    join public.companies c on c.id = j.company_id
+    where ${filters}
   `;
   return { items: rows.map(mapJob), total: numberValue(count) };
 }
