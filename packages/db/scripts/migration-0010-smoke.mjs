@@ -366,6 +366,7 @@ try {
     "0036_m18_consented_outreach.sql",
     "0037_m19_interview_preparation.sql",
     "0038_m19_prep_calendar_fk_fix.sql",
+    "0039_m20_private_beta_access.sql",
   ]);
   await apply(database, []);
   const [postCounts] = await database`
@@ -390,6 +391,8 @@ try {
         and application_id=${preM11Application.id}) as pre_m11_assessments
       ,(select count(*)::int from public.application_interviews where id=${preM11Interview.id}
         and application_id=${preM11Application.id}) as pre_m11_interviews
+      ,(select count(*)::int from public.beta_access_grants
+        where email='m8-migration@recruitintel.invalid' and status='ACTIVE') as beta_access
   `;
   if (
     postCounts.watches !== preCounts.watches ||
@@ -406,7 +409,8 @@ try {
     postCounts.pre_m11_applications !== 1 ||
     postCounts.pre_m11_events !== 1 ||
     postCounts.pre_m11_assessments !== 1 ||
-    postCounts.pre_m11_interviews !== 1
+    postCounts.pre_m11_interviews !== 1 ||
+    postCounts.beta_access !== 1
   ) {
     throw new Error("M9 to M10 migration did not preserve private/shared state or ciphertext");
   }
@@ -499,7 +503,7 @@ try {
   console.log(
     JSON.stringify({
       status: "ok",
-      migration: "0018 -> 0038 preservation (full 0001 bootstrap)",
+      migration: "0018 -> 0039 preservation (full 0001 bootstrap)",
       sourcePostingsPreserved: migrationState.jobs,
       singletonOpportunities: migrationState.opportunities,
       singletonMemberships: migrationState.memberships,
@@ -517,6 +521,7 @@ try {
       m9ToM10Preserved: true,
       m10ToM11Preserved: true,
       googleCiphertextByteIdentical: true,
+      betaAccessBackfillPreserved: true,
       boundedRecommendationAndFanoutIndexes: true,
     }),
   );

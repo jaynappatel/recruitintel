@@ -11,6 +11,7 @@ const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? describe : describe.skip;
 const userA = "cc000000-0000-4000-8000-000000000001";
 const userB = "cc000000-0000-4000-8000-000000000002";
+const userC = "cc000000-0000-4000-8000-000000000003";
 const workerPrincipal = "cc000000-0000-4000-8000-000000000010";
 const workerRole = "m11_built_http_worker";
 const requirementFingerprint = "9".repeat(64);
@@ -25,6 +26,7 @@ integration("built production M10 HTTP runtime", () => {
   let baseUrl: string;
   let cookieA: string;
   let cookieB: string;
+  let cookieC: string;
   let serverLog = "";
 
   beforeAll(async () => {
@@ -37,12 +39,23 @@ integration("built production M10 HTTP runtime", () => {
     // name/configuration exactly matches the built server.
     Object.assign(process.env, { NODE_ENV: "production" });
     pool = new Pool({ connectionString: databaseUrl, max: 2 });
-    await pool.query("delete from public.users where id = any($1::uuid[])", [[userA, userB]]);
+    await pool.query("delete from public.beta_access_grants where email = any($1::text[])", [
+      ["built-http-a@example.test", "built-http-b@example.test", "built-http-c@example.test"],
+    ]);
+    await pool.query("delete from public.users where id = any($1::uuid[])", [
+      [userA, userB, userC],
+    ]);
     await pool.query(
       `insert into public.users (id,name,email,email_verified,status) values
        ($1,'Built HTTP A','built-http-a@example.test',true,'ACTIVE'),
-       ($2,'Built HTTP B','built-http-b@example.test',true,'ACTIVE')`,
-      [userA, userB],
+       ($2,'Built HTTP B','built-http-b@example.test',true,'ACTIVE'),
+       ($3,'Built HTTP C','built-http-c@example.test',true,'ACTIVE')`,
+      [userA, userB, userC],
+    );
+    await pool.query(
+      `insert into public.beta_access_grants (email,status)
+       values ('built-http-a@example.test','ACTIVE'),('built-http-b@example.test','ACTIVE')
+       on conflict (email) do update set status='ACTIVE',revoked_at=null`,
     );
     await pool.query("delete from public.companies where id=$1", [m12CompanyId]);
     await pool.query("delete from public.source_policies where id=$1", [m12PolicyId]);
@@ -91,10 +104,12 @@ integration("built production M10 HTTP runtime", () => {
     const context = await auth.$context;
     const sessionA = await context.internalAdapter.createSession(userA);
     const sessionB = await context.internalAdapter.createSession(userB);
+    const sessionC = await context.internalAdapter.createSession(userC);
     const sign = (token: string) =>
       `${context.authCookies.sessionToken.name}=${token}.${createHmac("sha256", context.secret).update(token).digest("base64")}`;
     cookieA = sign(sessionA.token);
     cookieB = sign(sessionB.token);
+    cookieC = sign(sessionC.token);
     server = spawn("pnpm", ["start", "-p", "3210"], {
       cwd: fileURLToPath(new URL("../../", import.meta.url)),
       env: {
@@ -104,6 +119,7 @@ integration("built production M10 HTTP runtime", () => {
         BETTER_AUTH_URL: "http://127.0.0.1:3210",
         NODE_ENV: "production",
         ZERO_COST_MODE: "true",
+        PRIVATE_BETA_MODE: "true",
         RESUME_STORAGE_KEY: resumeStorageKey,
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -131,7 +147,12 @@ integration("built production M10 HTTP runtime", () => {
 
   afterAll(async () => {
     server?.kill("SIGTERM");
-    await pool?.query("delete from public.users where id = any($1::uuid[])", [[userA, userB]]);
+    await pool?.query("delete from public.beta_access_grants where email = any($1::text[])", [
+      ["built-http-a@example.test", "built-http-b@example.test", "built-http-c@example.test"],
+    ]);
+    await pool?.query("delete from public.users where id = any($1::uuid[])", [
+      [userA, userB, userC],
+    ]);
     await pool?.query("delete from public.companies where id=$1", [m12CompanyId]);
     await pool?.query("delete from public.source_policies where id=$1", [m12PolicyId]);
     await pool?.query(
@@ -168,6 +189,15 @@ integration("built production M10 HTTP runtime", () => {
         applicationUrlUsed: "https://apply.example/built-http",
       }),
     });
+    expect((await request("/api/applications", {}, cookieC)).status).toBe(403);
+    await pool.query(
+      "insert into public.beta_access_grants (email,status) values ('built-http-c@example.test','ACTIVE')",
+    );
+    expect((await request("/api/applications", {}, cookieC)).status).toBe(200);
+    await pool.query(
+      "update public.beta_access_grants set status='REVOKED', revoked_at=now() where email='built-http-c@example.test'",
+    );
+    expect((await request("/api/applications", {}, cookieC)).status).toBe(403);
     expect(create.status).toBe(201);
     const application = (await create.json()).data as { id: string };
     expect((await request(`/api/applications/${application.id}`)).status).toBe(200);
@@ -249,6 +279,60 @@ integration("built production M10 HTTP runtime", () => {
       ).status,
     ).toBe(200);
     expect((await request(`/api/applications/${application.id}`, {}, cookieB)).status).toBe(404);
+  });
+
+  it("keeps beta access administration server-authorized and free of private content", async () => {
+    const request = (path: string, init: RequestInit = {}, cookie?: string) =>
+      fetch(`${baseUrl}${path}`, {
+        ...init,
+        headers: { ...(init.headers ?? {}), ...(cookie ? { cookie } : {}) },
+      });
+    expect((await request("/api/admin/beta-access")).status).toBe(401);
+    expect((await request("/api/admin/beta-access", {}, cookieA)).status).toBe(403);
+    await pool.query("update public.users set is_admin=true where id=$1", [userC]);
+    const granted = await request(
+      "/api/admin/beta-access",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: "built-http-invited@example.test" }),
+      },
+      cookieC,
+    );
+    const grantedBody = await granted.json();
+    expect(granted.status, JSON.stringify(grantedBody)).toBe(201);
+    const grant = grantedBody.data as { id: string; email: string; status: string };
+    expect(grant).toMatchObject({ email: "built-http-invited@example.test", status: "ACTIVE" });
+    const list = await request("/api/admin/beta-access", {}, cookieC);
+    expect(list.status).toBe(200);
+    const listed = (await list.json()).data as Array<Record<string, unknown>>;
+    expect(listed.some((item) => item.email === grant.email && item.id === grant.id)).toBe(true);
+    expect(Object.keys(listed[0] ?? {})).toEqual(
+      expect.arrayContaining(["id", "email", "status", "createdAt", "revokedAt"]),
+    );
+    expect(
+      (await request(`/api/admin/beta-access/${grant.id}/revoke`, { method: "POST" }, cookieC))
+        .status,
+    ).toBe(200);
+    await pool.query("update public.users set is_admin=false where id=$1", [userC]);
+  });
+
+  it("reports production readiness and security headers without private diagnostics", async () => {
+    const health = await fetch(`${baseUrl}/api/health`);
+    expect(health.status).toBe(200);
+    const ready = await fetch(`${baseUrl}/api/ready`);
+    expect(ready.status).toBe(200);
+    expect((await ready.json()).migrationCount).toBe(39);
+    for (const [header, expected] of [
+      ["content-security-policy", "default-src 'self'"],
+      ["x-frame-options", "DENY"],
+      ["x-content-type-options", "nosniff"],
+      ["referrer-policy", "strict-origin-when-cross-origin"],
+    ] as const) {
+      expect(ready.headers.get(header)).toContain(expected);
+    }
+    expect(ready.headers.get("permissions-policy")).toContain("camera=()");
+    expect((await fetch(`${baseUrl}/api/admin/operations`)).status).toBe(401);
   });
 
   it("runs the authenticated M19 preparation lifecycle over next start", async () => {

@@ -7,6 +7,7 @@ import {
   type ExtensionGrantRecord,
   type ExtensionGrantScope,
   getUserActor,
+  hasActiveBetaAccess,
   type ServicePrincipalRecord,
   type ServiceScope,
   type UserActorRecord,
@@ -93,6 +94,11 @@ export async function requireAuthenticatedUser(
   }
   if (!user || user.status !== "ACTIVE") {
     throw new AuthorizationError(401, "UNAUTHENTICATED", "Authentication is required");
+  }
+  if (process.env.PRIVATE_BETA_MODE === "true" && !user.isAdmin) {
+    if (!(await hasActiveBetaAccess(user.email))) {
+      throw new AuthorizationError(403, "FORBIDDEN", "Private beta access is required");
+    }
   }
   return {
     kind: user.isAdmin ? "ADMIN" : "USER",

@@ -19,6 +19,7 @@ export * from "./analytics";
 export * from "./operations";
 export * from "./outreach";
 export * from "./interview-prep";
+export * from "./beta-access";
 
 export interface CompanyRecord {
   id: string;
