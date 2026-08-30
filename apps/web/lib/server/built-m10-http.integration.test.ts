@@ -28,6 +28,9 @@ integration("built production M10 HTTP runtime", () => {
   let cookieB: string;
   let cookieC: string;
   let serverLog = "";
+  let priorWorkerBinding:
+    | { servicePrincipalId: string; allowedWorkClasses: string[]; canSchedule: boolean }
+    | undefined;
 
   beforeAll(async () => {
     process.env.DATABASE_URL = databaseUrl;
@@ -87,6 +90,21 @@ integration("built production M10 HTTP runtime", () => {
       end if;
     end $$`);
     await pool.query("grant recruitintel_worker_resume to m11_built_http_worker");
+    const existingWorkerBinding = await pool.query<{
+      service_principal_id: string;
+      allowed_work_classes: string[];
+      can_schedule: boolean;
+    }>(
+      "select service_principal_id,allowed_work_classes::text[] as allowed_work_classes,can_schedule from public.worker_role_bindings where database_role=$1",
+      [workerRole],
+    );
+    priorWorkerBinding = existingWorkerBinding.rows[0]
+      ? {
+          servicePrincipalId: existingWorkerBinding.rows[0].service_principal_id,
+          allowedWorkClasses: existingWorkerBinding.rows[0].allowed_work_classes,
+          canSchedule: existingWorkerBinding.rows[0].can_schedule,
+        }
+      : undefined;
     await pool.query("delete from public.worker_role_bindings where database_role=$1", [
       workerRole,
     ]);
@@ -179,6 +197,19 @@ integration("built production M10 HTTP runtime", () => {
       workerRole,
     ]);
     await pool?.query("delete from public.service_principals where id=$1", [workerPrincipal]);
+    if (priorWorkerBinding) {
+      await pool?.query(
+        `insert into public.worker_role_bindings
+         (database_role,service_principal_id,allowed_work_classes,can_schedule)
+         values ($1,$2,$3::public.work_class[],$4)`,
+        [
+          workerRole,
+          priorWorkerBinding.servicePrincipalId,
+          priorWorkerBinding.allowedWorkClasses,
+          priorWorkerBinding.canSchedule,
+        ],
+      );
+    }
     await pool?.end();
     await getDatabase().end();
   });
