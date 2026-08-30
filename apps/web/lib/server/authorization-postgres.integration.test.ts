@@ -7,6 +7,8 @@ const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? describe : describe.skip;
 const userOneId = "fc000000-0000-4000-8000-000000000001";
 const userTwoId = "fc000000-0000-4000-8000-000000000002";
+const userOneEmail = "user-one@example.com";
+const userTwoEmail = "user-two@example.com";
 const companyId = "fc100000-0000-4000-8000-000000000001";
 const planTwoId = "fc200000-0000-4000-8000-000000000002";
 
@@ -19,6 +21,9 @@ integration("authenticated route ownership", () => {
     process.env.BETTER_AUTH_SECRET = "authorization-test-secret-with-more-than-32-characters";
     process.env.BETTER_AUTH_URL = "http://localhost:3000";
     pool = new Pool({ connectionString: databaseUrl, max: 1 });
+    await pool.query("delete from public.beta_access_grants where email = any($1::text[])", [
+      [userOneEmail, userTwoEmail],
+    ]);
     await pool.query("delete from public.users where id = any($1::uuid[])", [
       [userOneId, userTwoId],
     ]);
@@ -28,6 +33,11 @@ integration("authenticated route ownership", () => {
        values ($1, 'User One', 'user-one@example.com', true, 'ACTIVE', true),
               ($2, 'User Two', 'user-two@example.com', true, 'ACTIVE', false)`,
       [userOneId, userTwoId],
+    );
+    await pool.query(
+      `insert into public.beta_access_grants (email, status, granted_by_user_id)
+       values ($1, 'ACTIVE', $2), ($3, 'ACTIVE', $2)`,
+      [userOneEmail, userOneId, userTwoEmail],
     );
     await pool.query(
       `insert into public.companies (id, canonical_name, slug, website, careers_url)
@@ -45,6 +55,9 @@ integration("authenticated route ownership", () => {
 
   afterAll(async () => {
     if (!databaseUrl) return;
+    await pool.query("delete from public.beta_access_grants where email = any($1::text[])", [
+      [userOneEmail, userTwoEmail],
+    ]);
     await pool.query("delete from public.users where id = any($1::uuid[])", [
       [userOneId, userTwoId],
     ]);
@@ -169,7 +182,7 @@ integration("authenticated route ownership", () => {
       session: {} as never,
       user: {
         id,
-        email: `${id}@example.test`,
+        email: id === userOneId ? userOneEmail : userTwoEmail,
         emailVerified: true,
         name: id,
         image: null,
@@ -308,7 +321,7 @@ integration("authenticated route ownership", () => {
       session: {} as never,
       user: {
         id,
-        email: `${id}@example.test`,
+        email: id === userOneId ? userOneEmail : userTwoEmail,
         emailVerified: true,
         name: id,
         image: null,

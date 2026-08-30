@@ -179,6 +179,7 @@ All supported values and local defaults are in `.env.example`:
 - `RECRUITINTEL_APP_URL`: base URL used for bounded calendar description links;
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`: Google web-server OAuth;
 - `CALENDAR_TOKEN_ENCRYPTION_KEY`: 32-byte AES-GCM key shared by web and finite worker;
+- `RESUME_STORAGE_KEY`: independent 32-byte AES-GCM key for private resume objects;
 - `PUBLIC_WEB_STATIC_RESULTS_FILE`: optional JSON fixture/provider input keyed by exact generated query;
 - `PUBLIC_WEB_MAX_RESPONSE_BYTES`: independent public HTML response limit;
 - `PUBLIC_WEB_REQUESTS_PER_SECOND`: per-host public-web request rate;

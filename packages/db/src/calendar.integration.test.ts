@@ -236,4 +236,41 @@ integration("PostgreSQL recruiting calendar and application planning", () => {
     expect(await consumeGoogleOauthState(hash)).toBeNull();
     expect(await consumeGoogleOauthState("d".repeat(64))).toBeNull();
   });
+
+  it("removes a derived Calendar item when its recruiting date is deleted", async () => {
+    const sql = postgres(databaseUrl!, { max: 1 });
+    try {
+      const [date] = await sql`
+        insert into public.recruiting_dates (
+          company_id, source_id, type, title, starts_at, starts_on, all_day,
+          timezone, date_certainty, date_precision, confidence, source_kind,
+          source_url, source_fingerprint
+        ) values (
+          ${companyId}::uuid, ${sourceId}::uuid, 'CAREER_FAIR', 'Delete fixture',
+          '2026-11-02T00:00:00.000Z', '2026-11-02', true, 'UTC', 'CONFIRMED',
+          'EXACT', 0.9, 'CAMPUS_EVENT', 'https://m5.example/delete-fixture', ${"f".repeat(64)}
+        ) returning id
+      `;
+      if (!date) throw new Error("Expected a recruiting date fixture");
+      const dateId = String(date.id);
+      await sql`
+        insert into public.calendar_items (
+          user_id, company_id, recruiting_date_id, type, title, starts_at, starts_on,
+          all_day, timezone, status, source
+        ) values (
+          ${userId}::uuid, ${companyId}::uuid, ${dateId}::uuid, 'CAREER_EVENT', 'Delete fixture',
+          '2026-11-02T00:00:00.000Z', '2026-11-02', true, 'UTC', 'TODO',
+          'RECRUITING_INTELLIGENCE'
+        )
+      `;
+      await sql`delete from public.recruiting_dates where id=${dateId}::uuid`;
+      const [remaining] = await sql`
+        select count(*)::int as count from public.calendar_items
+        where recruiting_date_id=${dateId}::uuid
+      `;
+      expect(remaining?.count).toBe(0);
+    } finally {
+      await sql.end();
+    }
+  });
 });

@@ -367,6 +367,7 @@ try {
     "0037_m19_interview_preparation.sql",
     "0038_m19_prep_calendar_fk_fix.sql",
     "0039_m20_private_beta_access.sql",
+    "0040_recruiting_date_calendar_delete_fix.sql",
   ]);
   await apply(database, []);
   const [postCounts] = await database`
@@ -503,7 +504,7 @@ try {
   console.log(
     JSON.stringify({
       status: "ok",
-      migration: "0018 -> 0039 preservation (full 0001 bootstrap)",
+      migration: "0018 -> 0040 preservation (full 0001 bootstrap)",
       sourcePostingsPreserved: migrationState.jobs,
       singletonOpportunities: migrationState.opportunities,
       singletonMemberships: migrationState.memberships,

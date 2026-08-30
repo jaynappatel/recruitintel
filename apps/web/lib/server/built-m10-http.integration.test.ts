@@ -363,7 +363,7 @@ integration("built production M10 HTTP runtime", () => {
     expect(health.status).toBe(200);
     const ready = await fetch(`${baseUrl}/api/ready`);
     expect(ready.status).toBe(200);
-    expect((await ready.json()).migrationCount).toBe(39);
+    expect((await ready.json()).migrationCount).toBe(40);
     for (const [header, expected] of [
       ["content-security-policy", "default-src 'self'"],
       ["x-frame-options", "DENY"],
