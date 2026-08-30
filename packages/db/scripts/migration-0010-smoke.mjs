@@ -360,6 +360,12 @@ try {
     "0030_m11_claimed_evidence_write_fix.sql",
     "0031_m11_runtime_acceptance.sql",
     "0032_m12_browser_companion.sql",
+    "0033_m13_bounded_ai.sql",
+    "0034_m14_recruiting_analytics.sql",
+    "0035_m15_operations.sql",
+    "0036_m18_consented_outreach.sql",
+    "0037_m19_interview_preparation.sql",
+    "0038_m19_prep_calendar_fk_fix.sql",
   ]);
   await apply(database, []);
   const [postCounts] = await database`
@@ -493,7 +499,7 @@ try {
   console.log(
     JSON.stringify({
       status: "ok",
-      migration: "0018 -> 0032 preservation (full 0001 bootstrap)",
+      migration: "0018 -> 0038 preservation (full 0001 bootstrap)",
       sourcePostingsPreserved: migrationState.jobs,
       singletonOpportunities: migrationState.opportunities,
       singletonMemberships: migrationState.memberships,

@@ -43,6 +43,32 @@ describe("M14 analytics safeguards", () => {
     });
     expect(report.status).toBe("NOT_READY");
   });
+  it("keeps every deferred M14 task NOT_READY without real evidence gates", () => {
+    for (const taskType of [
+      "PERSONALIZED_RANKING",
+      "OPENING_FORECAST",
+      "SOURCE_ANOMALY",
+      "RESUME_OUTCOME",
+      "INTERVIEW_TOPIC",
+    ] as const) {
+      expect(
+        readiness({
+          taskType,
+          eligibleSampleCount: 0,
+          positiveLabelCount: 0,
+          negativeLabelCount: 0,
+          userCount: 0,
+          companyCount: 0,
+          timeSpanDays: 0,
+          missingFeatureRate: 1,
+          outcomeDelayDays: null,
+          duplicateCount: 0,
+          leakageRisks: ["No M14 materialized labeled dataset"],
+          labelConfidence: "LOW",
+        }).status,
+      ).toBe("NOT_READY");
+    }
+  });
   it("calculates bounded binary metrics for offline comparisons", () => {
     expect(
       binaryMetrics([

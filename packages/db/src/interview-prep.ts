@@ -207,6 +207,13 @@ export async function createInterviewPrepPlan(
         };
       }),
     ];
+    await tx`update public.calendar_items set metadata=jsonb_set(
+      metadata,
+      '{relativeDaysBeforeInterview}',
+      to_jsonb(greatest(1, round(extract(epoch from (${text(base.starts_at)}::timestamptz - starts_at)) / 86400)::integer)),
+      true
+    ) where user_id=${userId}::uuid and type='INTERVIEW_PREP' and deleted_at is null
+      and metadata->>'interviewId'=${interviewId} and not (metadata ? 'relativeDaysBeforeInterview')`;
     for (const [index, item] of definitions.entries()) {
       const [prepItem] =
         await tx`insert into public.interview_prep_items (user_id,prep_plan_id,item_key,title,rationale,item_kind)
@@ -219,7 +226,7 @@ export async function createInterviewPrepPlan(
       );
       const [calendarItem] = await tx`insert into public.calendar_items
         (user_id,company_id,opportunity_id,application_id,type,title,description,starts_at,all_day,timezone,status,source,sync_enabled,metadata)
-        values (${userId}::uuid,${text(base.company_id)}::uuid,${text(base.opportunity_id)}::uuid,${text(base.application_id)}::uuid,'INTERVIEW_PREP',${item.title},${item.rationale},${taskAt.toISOString()}::timestamptz,false,${text(base.timezone)},'TODO','USER',false,${tx.json({ interviewId, interviewPrepPlanId: text(plan?.id), interviewPrepItemKey: item.key })}) returning id`;
+        values (${userId}::uuid,${text(base.company_id)}::uuid,${text(base.opportunity_id)}::uuid,${text(base.application_id)}::uuid,'INTERVIEW_PREP',${item.title},${item.rationale},${taskAt.toISOString()}::timestamptz,false,${text(base.timezone)},'TODO','USER',false,${tx.json({ interviewId, interviewPrepPlanId: text(plan?.id), interviewPrepItemKey: item.key, relativeDaysBeforeInterview: definitions.length - index })}) returning id`;
       await tx`update public.interview_prep_items set calendar_item_id=${text(calendarItem?.id)}::uuid where id=${text(prepItem?.id)}::uuid and user_id=${userId}::uuid`;
     }
   });

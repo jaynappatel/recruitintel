@@ -251,6 +251,95 @@ integration("built production M10 HTTP runtime", () => {
     expect((await request(`/api/applications/${application.id}`, {}, cookieB)).status).toBe(404);
   });
 
+  it("runs the authenticated M19 preparation lifecycle over next start", async () => {
+    const opportunity = await pool.query(
+      "select id from public.job_opportunities where status='ACTIVE' order by id limit 1",
+    );
+    const opportunityId = String(opportunity.rows[0].id);
+    const request = (path: string, init: RequestInit = {}, cookie = cookieA) =>
+      fetch(`${baseUrl}${path}`, { ...init, headers: { ...(init.headers ?? {}), cookie } });
+    const applicationResponse = await request("/api/applications", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ opportunityId, cycleKey: "built-http-m19" }),
+    });
+    expect(applicationResponse.status).toBe(201);
+    const application = (await applicationResponse.json()).data as { id: string };
+    const interviewResponse = await request(`/api/applications/${application.id}/interviews`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        interviewType: "TECHNICAL",
+        startsAt: "2027-12-15T12:00:00.000Z",
+        timezone: "UTC",
+      }),
+    });
+    expect(interviewResponse.status).toBe(201);
+    const interview = (await interviewResponse.json()).data as { id: string };
+    expect((await request(`/api/interviews/${interview.id}/prep`)).status).toBe(404);
+    expect((await request(`/api/interviews/${interview.id}/prep`, {}, cookieB)).status).toBe(404);
+    expect((await fetch(`${baseUrl}/api/interviews/${interview.id}/prep`)).status).toBe(401);
+    const created = await request(`/api/interviews/${interview.id}/prep`, { method: "POST" });
+    expect(created.status).toBe(201);
+    const prep = (await created.json()).data as {
+      items: Array<{ id: string; version: number; completed: boolean }>;
+      progress: { completed: number; total: number };
+      questionIntelligence: { items: unknown[] };
+    };
+    expect(prep.questionIntelligence.items).toEqual([]);
+    expect(prep.items.length).toBeGreaterThanOrEqual(3);
+    const item = prep.items[0]!;
+    const countBefore = await pool.query(
+      "select count(*)::int as count from public.interview_prep_items where user_id=$1",
+      [userA],
+    );
+    expect(
+      (
+        await request(
+          `/api/interviews/${interview.id}/prep/items/${item.id}`,
+          {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ completed: true, expectedVersion: item.version }),
+          },
+          cookieB,
+        )
+      ).status,
+    ).toBe(404);
+    const countAfter = await pool.query(
+      "select count(*)::int as count from public.interview_prep_items where user_id=$1",
+      [userA],
+    );
+    expect(countAfter.rows[0].count).toBe(countBefore.rows[0].count);
+    const completed = await request(`/api/interviews/${interview.id}/prep/items/${item.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ completed: true, expectedVersion: item.version }),
+    });
+    expect(completed.status).toBe(200);
+    expect(
+      ((await completed.json()).data as { progress: { completed: number } }).progress.completed,
+    ).toBe(1);
+    expect((await request(`/interviews/${interview.id}/prepare`)).status).toBe(200);
+    const calendar = await pool.query(
+      "select count(*)::int as count from public.calendar_items where user_id=$1 and metadata->>'interviewId'=$2 and type='INTERVIEW_PREP'",
+      [userA, interview.id],
+    );
+    expect(Number(calendar.rows[0].count)).toBe(prep.items.length);
+    const exported = await request("/api/privacy/export");
+    expect(exported.status).toBe(200);
+    const payload = (await exported.json()).data as {
+      interviewPrepPlans: Array<{ interview_id: string }>;
+      interviewPrepItems: Array<{ id: string }>;
+    };
+    expect(payload.interviewPrepPlans.some((plan) => plan.interview_id === interview.id)).toBe(
+      true,
+    );
+    expect(payload.interviewPrepItems.some((exportedItem) => exportedItem.id === item.id)).toBe(
+      true,
+    );
+  }, 30_000);
+
   it("runs the full recommendation-to-outcome M11 lifecycle over next start", async () => {
     const target = await pool.query(
       `select opportunity.id,opportunity.canonical_source_posting_id

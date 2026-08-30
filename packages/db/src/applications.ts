@@ -516,6 +516,14 @@ export async function updateInterview(
       startsAt: input.startsAt,
       ...(input.endsAt === undefined ? { endsAt: null } : { endsAt: input.endsAt }),
     });
+  if (input.startsAt)
+    await getDatabase()`update public.calendar_items set
+      starts_at=${input.startsAt}::timestamptz - ((metadata->>'relativeDaysBeforeInterview')::integer * interval '1 day'),
+      updated_at=now()
+      where user_id=${userId}::uuid and application_id=${applicationId}::uuid
+        and type='INTERVIEW_PREP' and deleted_at is null
+        and metadata->>'interviewId'=${interviewId}
+        and metadata ? 'relativeDaysBeforeInterview'`;
   const eventType =
     input.status === "COMPLETED"
       ? "INTERVIEW_COMPLETED"
