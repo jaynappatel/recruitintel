@@ -17,6 +17,7 @@ export * from "./browser-companion";
 export * from "./model-gateway";
 export * from "./analytics";
 export * from "./operations";
+export * from "./outreach";
 
 export interface CompanyRecord {
   id: string;

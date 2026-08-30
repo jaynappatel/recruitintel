@@ -381,6 +381,12 @@ export async function exportUserAccount(userId: string) {
   const shadowPredictions =
     await sql`select model_version_id,subject_id,as_of_time,prediction,reason_codes,created_at
     from public.model_predictions where user_id=${userId}::uuid and shadow order by created_at,id`;
+  const outreachContacts =
+    await sql`select id,recruiter_profile_id,application_id,display_name,company_name,title,email,contact_truth,provenance_class,source_url,source_label,consent_at,last_seen_at,version,created_at,updated_at from public.outreach_contacts where user_id=${userId}::uuid order by created_at,id`;
+  const outreachDrafts =
+    await sql`select id,contact_id,application_id,subject,body,grounding,status,version,approved_version,approved_at,sent_at,follow_up_due_at,cancelled_at,created_at,updated_at from public.outreach_drafts where user_id=${userId}::uuid order by created_at,id`;
+  const outreachAttempts =
+    await sql`select id,draft_id,draft_version,recipient_email,idempotency_key,channel,status,recorded_at,created_at from public.outreach_attempts where user_id=${userId}::uuid order by created_at,id`;
   return {
     user: {
       id: String(user.id),
@@ -408,6 +414,9 @@ export async function exportUserAccount(userId: string) {
     analytics,
     experimentParticipation,
     shadowPredictions,
+    outreachContacts,
+    outreachDrafts,
+    outreachAttempts,
   };
 }
 

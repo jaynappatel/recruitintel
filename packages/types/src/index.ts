@@ -47,6 +47,65 @@ export const clientProductEventSchema = z
   .strict();
 export type ClientProductEvent = z.infer<typeof clientProductEventSchema>;
 
+const outreachUrlSchema = z
+  .url()
+  .max(2048)
+  .refine((value) => value.startsWith("https://"));
+export const outreachContactRequestSchema = z
+  .object({
+    recruiterProfileId: z.uuid().nullable().optional(),
+    applicationId: z.uuid().nullable().optional(),
+    displayName: z.string().trim().min(1).max(200),
+    companyName: z.string().trim().max(200).nullable().optional(),
+    title: z.string().trim().max(200).nullable().optional(),
+    email: z.email().max(320),
+    contactTruth: z.enum(["VERIFIED_PUBLIC", "USER_PROVIDED", "UNVERIFIED"]),
+    provenanceClass: z.enum([
+      "OFFICIAL_COMPANY",
+      "OFFICIAL_RECRUITING",
+      "PUBLIC_EVENT",
+      "PUBLIC_AUTHOR",
+      "USER_ENTERED",
+      "PREVIOUSLY_VERIFIED",
+    ]),
+    sourceUrl: outreachUrlSchema.nullable().optional(),
+    sourceLabel: z.string().trim().min(1).max(160),
+    consentAt: z.iso.datetime(),
+    lastSeenAt: z.iso.datetime().nullable().optional(),
+  })
+  .strict();
+export const outreachContactUpdateSchema = outreachContactRequestSchema
+  .pick({
+    displayName: true,
+    companyName: true,
+    title: true,
+    email: true,
+    sourceUrl: true,
+    sourceLabel: true,
+    lastSeenAt: true,
+  })
+  .partial()
+  .strict();
+export const outreachDraftRequestSchema = z
+  .object({
+    contactId: z.uuid(),
+    applicationId: z.uuid().nullable().optional(),
+    subject: z.string().trim().min(1).max(200).optional(),
+    body: z.string().trim().min(1).max(5000).optional(),
+  })
+  .strict();
+export const outreachDraftUpdateSchema = z
+  .object({
+    subject: z.string().trim().min(1).max(200),
+    body: z.string().trim().min(1).max(5000),
+    version: z.number().int().positive(),
+  })
+  .strict();
+export const outreachApprovalSchema = z.object({ version: z.number().int().positive() }).strict();
+export const outreachManualSendSchema = z
+  .object({ idempotencyKey: z.string().trim().min(1).max(200) })
+  .strict();
+
 export const roleFamilies = [
   "SOFTWARE_ENGINEERING",
   "AI_ML",
