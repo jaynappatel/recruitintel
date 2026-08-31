@@ -1,0 +1,462 @@
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+
+import { redactValue } from "@recruitintel/shared";
+
+import { getDatabase } from "./index";
+
+export type ActorKind = "USER" | "ADMIN" | "SERVICE" | "SYSTEM";
+export type ServiceScope =
+  | "ADMIN_MUTATE"
+  | "WORKER_INGEST"
+  | "WORKER_CALENDAR_SYNC"
+  | "ORCHESTRATION_READ"
+  | "ORCHESTRATION_MUTATE"
+  | "WORKER_SCHEDULER"
+  | "WORKER_GLOBAL"
+  | "WORKER_PRIVACY";
+
+export type ExtensionGrantScope = "PAGE_SCAN" | "JOB_IMPORT";
+
+export interface ExtensionGrantRecord {
+  id: string;
+  userId: string;
+  name: string;
+  scopes: ExtensionGrantScope[];
+  expiresAt: string;
+  revokedAt: string | null;
+  lastUsedAt: string | null;
+  createdAt: string;
+}
+
+export interface UserActorRecord {
+  id: string;
+  email: string;
+  name: string;
+  status: "PENDING_IDENTITY" | "ACTIVE" | "DISABLED" | "DELETION_PENDING";
+  isAdmin: boolean;
+}
+
+export interface ServicePrincipalRecord {
+  id: string;
+  name: string;
+  kind: "ADMIN_API" | "WORKER";
+  scopes: ServiceScope[];
+}
+
+function text(value: unknown): string {
+  if (typeof value !== "string") throw new TypeError("Expected database text");
+  return value;
+}
+
+const FORBIDDEN_METADATA_KEYS = new Set([
+  "authorization",
+  "cookie",
+  "access_token",
+  "refresh_token",
+  "id_token",
+  "oauth_code",
+  "email",
+  "resume_text",
+  "dom_html",
+  "raw_payload",
+]);
+
+function safeMetadata(value: Record<string, unknown>): Record<string, unknown> {
+  const redacted = redactValue(value) as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.entries(redacted).filter(([key]) => !FORBIDDEN_METADATA_KEYS.has(key.toLowerCase())),
+  );
+}
+
+export function hashOpaqueToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+export function serviceTokenPrefix(token: string): string | null {
+  const separator = token.indexOf(".");
+  if (separator < 0) return null;
+  const prefix = token.slice(0, separator);
+  return /^ri_(?:admin|worker)_[A-Za-z0-9_-]{8,32}$/.test(prefix) ? prefix : null;
+}
+
+export function extensionTokenPrefix(token: string): string | null {
+  const separator = token.indexOf(".");
+  if (separator < 0) return null;
+  const prefix = token.slice(0, separator);
+  return /^ri_ext_[A-Za-z0-9_-]{8,32}$/.test(prefix) ? prefix : null;
+}
+
+function extensionToken(): string {
+  return `ri_ext_${randomBytes(12).toString("base64url")}.${randomBytes(32).toString("base64url")}`;
+}
+
+function mapExtensionGrant(row: Record<string, unknown>): ExtensionGrantRecord {
+  return {
+    id: text(row.id),
+    userId: text(row.user_id),
+    name: text(row.name),
+    scopes: ((row.scopes as string[]) ?? []) as ExtensionGrantScope[],
+    expiresAt: new Date(row.expires_at as string).toISOString(),
+    revokedAt: row.revoked_at ? new Date(row.revoked_at as string).toISOString() : null,
+    lastUsedAt: row.last_used_at ? new Date(row.last_used_at as string).toISOString() : null,
+    createdAt: new Date(row.created_at as string).toISOString(),
+  };
+}
+
+export async function listExtensionGrants(userId: string): Promise<ExtensionGrantRecord[]> {
+  const sql = getDatabase();
+  const rows = await sql`
+    select id, user_id, name, scopes, expires_at, revoked_at, last_used_at, created_at
+    from public.extension_grants where user_id=${userId}::uuid
+    order by created_at desc, id desc
+  `;
+  return rows.map(mapExtensionGrant);
+}
+
+export async function createExtensionGrant(
+  userId: string,
+  input: { name: string; scopes: ExtensionGrantScope[]; expiresInSeconds: number },
+): Promise<ExtensionGrantRecord & { token: string }> {
+  const scopes = [...new Set(input.scopes)].sort();
+  if (!scopes.length || scopes.some((scope) => scope !== "PAGE_SCAN" && scope !== "JOB_IMPORT")) {
+    throw new Error("Extension grant scopes are invalid");
+  }
+  if (input.expiresInSeconds < 300 || input.expiresInSeconds > 2_592_000) {
+    throw new Error("Extension grant expiry is invalid");
+  }
+  const token = extensionToken();
+  const prefix = extensionTokenPrefix(token);
+  if (!prefix) throw new Error("Extension token generation failed");
+  const sql = getDatabase();
+  const [row] = await sql`
+    insert into public.extension_grants (user_id,name,token_prefix,token_hash,scopes,expires_at)
+    values (${userId}::uuid,${input.name.trim()},${prefix},${hashOpaqueToken(token)},${scopes},
+      now() + (${input.expiresInSeconds}::text || ' seconds')::interval)
+    returning id,user_id,name,scopes,expires_at,revoked_at,last_used_at,created_at
+  `;
+  if (!row) throw new Error("Extension grant creation failed");
+  return { ...mapExtensionGrant(row), token };
+}
+
+export async function refreshExtensionGrant(
+  userId: string,
+  grantId: string,
+  expiresInSeconds: number,
+): Promise<ExtensionGrantRecord & { token: string }> {
+  if (expiresInSeconds < 300 || expiresInSeconds > 2_592_000)
+    throw new Error("Extension grant expiry is invalid");
+  const token = extensionToken();
+  const prefix = extensionTokenPrefix(token);
+  if (!prefix) throw new Error("Extension token generation failed");
+  const sql = getDatabase();
+  const [row] = await sql`
+    update public.extension_grants set token_prefix=${prefix}, token_hash=${hashOpaqueToken(token)},
+      expires_at=now() + (${expiresInSeconds}::text || ' seconds')::interval
+    where id=${grantId}::uuid and user_id=${userId}::uuid and revoked_at is null
+    returning id,user_id,name,scopes,expires_at,revoked_at,last_used_at,created_at
+  `;
+  if (!row) throw new Error("Extension grant was not found");
+  return { ...mapExtensionGrant(row), token };
+}
+
+export async function revokeExtensionGrant(userId: string, grantId: string): Promise<boolean> {
+  const sql = getDatabase();
+  const [row] = await sql`
+    update public.extension_grants set revoked_at=coalesce(revoked_at,now())
+    where id=${grantId}::uuid and user_id=${userId}::uuid returning id
+  `;
+  return Boolean(row);
+}
+
+export async function authenticateExtensionGrant(
+  token: string,
+  requiredScope: ExtensionGrantScope,
+  lastUsedIpHash: string | null = null,
+): Promise<ExtensionGrantRecord | null> {
+  const prefix = extensionTokenPrefix(token);
+  if (!prefix) return null;
+  const supplied = Buffer.from(hashOpaqueToken(token), "hex");
+  const sql = getDatabase();
+  const [row] = await sql`
+    select id,user_id,name,token_hash,scopes,expires_at,revoked_at,last_used_at,created_at
+    from public.extension_grants where token_prefix=${prefix}
+      and revoked_at is null and expires_at > now()
+  `;
+  if (!row || !Array.isArray(row.scopes) || !row.scopes.includes(requiredScope)) return null;
+  const expected = Buffer.from(text(row.token_hash), "hex");
+  if (expected.length !== supplied.length || !timingSafeEqual(expected, supplied)) return null;
+  await sql`
+    update public.extension_grants set last_used_at=now(),last_used_ip_hash=${lastUsedIpHash}
+    where id=${text(row.id)}::uuid
+  `;
+  return mapExtensionGrant(row);
+}
+
+export async function getUserActor(userId: string): Promise<UserActorRecord | null> {
+  const sql = getDatabase();
+  const [row] = await sql`
+    select id, email, name, status, is_admin from public.users where id = ${userId}::uuid
+  `;
+  if (!row) return null;
+  return {
+    id: text(row.id),
+    email: text(row.email),
+    name: text(row.name),
+    status: text(row.status) as UserActorRecord["status"],
+    isAdmin: Boolean(row.is_admin),
+  };
+}
+
+export async function activatePendingUser(userId: string, verifiedEmail: string): Promise<void> {
+  if (verifiedEmail.endsWith("@recruitintel.invalid")) return;
+  const sql = getDatabase();
+  await sql`
+    update public.users set status = 'ACTIVE'
+    where id = ${userId}::uuid and status = 'PENDING_IDENTITY'
+      and email_verified and lower(email) = lower(${verifiedEmail})
+  `;
+}
+
+export async function authenticateServicePrincipal(
+  token: string,
+  requiredScope: ServiceScope,
+  lastUsedIpHash: string | null = null,
+): Promise<ServicePrincipalRecord | null> {
+  const prefix = serviceTokenPrefix(token);
+  if (!prefix) return null;
+  const suppliedHash = hashOpaqueToken(token);
+  const sql = getDatabase();
+  const [row] = await sql`
+    select id, name, kind, token_hash, scopes from public.service_principals
+    where token_prefix = ${prefix} and status = 'ACTIVE'
+      and (expires_at is null or expires_at > now())
+  `;
+  if (!row) return null;
+  const expected = Buffer.from(text(row.token_hash), "hex");
+  const supplied = Buffer.from(suppliedHash, "hex");
+  if (expected.length !== supplied.length || !timingSafeEqual(expected, supplied)) return null;
+  const scopes = (row.scopes as ServiceScope[]) ?? [];
+  if (!scopes.includes(requiredScope)) return null;
+  await sql`
+    update public.service_principals set last_used_at = now(),
+      last_used_ip_hash = ${lastUsedIpHash}
+    where id = ${text(row.id)}::uuid
+  `;
+  return {
+    id: text(row.id),
+    name: text(row.name),
+    kind: text(row.kind) as ServicePrincipalRecord["kind"],
+    scopes,
+  };
+}
+
+export interface AuditEventInput {
+  actorKind: ActorKind;
+  actorUserId?: string | null;
+  actorServicePrincipalId?: string | null;
+  action: string;
+  resourceType: string;
+  resourceId?: string | null;
+  outcome: "SUCCEEDED" | "DENIED" | "FAILED";
+  requestId?: string | null;
+  ipHash?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export async function recordAuditEvent(input: AuditEventInput): Promise<string> {
+  const sql = getDatabase();
+  const metadata = safeMetadata(input.metadata ?? {});
+  const [row] = await sql`
+    insert into public.audit_events (
+      actor_kind, actor_user_id, actor_service_principal_id, action,
+      resource_type, resource_id, outcome, request_id, ip_hash, metadata
+    ) values (
+      ${input.actorKind}, ${input.actorUserId ?? null}::uuid,
+      ${input.actorServicePrincipalId ?? null}::uuid, ${input.action},
+      ${input.resourceType}, ${input.resourceId ?? null}::uuid, ${input.outcome},
+      ${input.requestId ?? null}::uuid, ${input.ipHash ?? null},
+      ${sql.json(metadata as never)}
+    ) returning id
+  `;
+  return text(row?.id);
+}
+
+export async function createPrivacyRequest(
+  userId: string,
+  requestType: "EXPORT" | "DELETE",
+): Promise<string> {
+  const sql = getDatabase();
+  const fingerprint = hashOpaqueToken(`privacy-user:${userId}`);
+  const [row] = await sql`
+    insert into public.privacy_requests (user_id, user_fingerprint, request_type)
+    values (${userId}::uuid, ${fingerprint}, ${requestType}) returning id
+  `;
+  return text(row?.id);
+}
+
+/** Policy-shaped private export. Secrets and encrypted object bytes are intentionally omitted. */
+export async function exportUserAccount(userId: string) {
+  const sql = getDatabase();
+  const [user] = await sql`select id, name, created_at from public.users where id=${userId}::uuid`;
+  if (!user) throw new Error("User not found");
+  const resumes =
+    await sql`select id, original_filename, media_type, byte_size, content_hash, status, created_at
+    from public.resume_documents where user_id=${userId}::uuid order by created_at,id`;
+  const versions =
+    await sql`select id, document_id, version_number, text_hash, parser_version, created_at, superseded_at
+    from public.resume_versions where user_id=${userId}::uuid order by created_at,id`;
+  const parseRuns = await sql`select id, resume_version_id, status, parser_version, input_hash,
+    diagnostics, error_code, idempotency_key, started_at, completed_at, created_at
+    from public.resume_parse_runs where user_id=${userId}::uuid order by created_at,id`;
+  const evidence =
+    await sql`select id, resume_version_id, evidence_type, normalized_value, source, review_status,
+    page_number, section, source_span, parser_version, revision, parent_evidence_id, created_at, superseded_at
+    from public.candidate_evidence where user_id=${userId}::uuid order by created_at,id`;
+  const evidenceConfirmations =
+    await sql`select id, evidence_id, disposition, replacement_evidence_id, reason_code, created_at
+    from public.evidence_confirmations where user_id=${userId}::uuid order by created_at,id`;
+  const matches = await sql`select match.id, match.resume_version_id, match.opportunity_id,
+    match.requirement_set_id, requirement.version as requirement_set_version,
+    requirement.algorithm_version as requirement_algorithm_version,
+    requirement.input_fingerprint as requirement_input_fingerprint,
+    match.eligibility, match.score, match.reason_codes, match.algorithm_version,
+    match.evidence_fingerprint, match.generated_at, match.ranking_decision_id,
+    match.recommendation_impression_id
+    from public.resume_job_matches match
+    join public.job_requirement_sets requirement on requirement.id=match.requirement_set_id
+    where match.user_id=${userId}::uuid order by match.generated_at,match.id`;
+  const matchEvidence =
+    await sql`select id, match_id, requirement_key, relation, evidence_id, reason_code, citation
+    from public.match_evidence where user_id=${userId}::uuid order by match_id,requirement_key,id`;
+  const applications =
+    await sql`select id, opportunity_id, resume_version_id, match_id, current_status, current_stage,
+    origin_recommendation_impression_id, cycle_key, created_at, updated_at
+    from public.applications where user_id=${userId}::uuid order by created_at,id`;
+  const applicationEvents =
+    await sql`select id, application_id, event_type, from_status, to_status, from_stage,
+    to_stage, occurred_at, recorded_at, source, reason_code, schema_version, idempotency_key
+    from public.application_events where user_id=${userId}::uuid order by recorded_at,id`;
+  const applicationAssessments =
+    await sql`select id, application_id, type as assessment_type, status, received_at, due_at,
+    completed_at, provider_name, created_at, updated_at
+    from public.application_assessments where user_id=${userId}::uuid order by created_at,id`;
+  const applicationInterviews =
+    await sql`select id, application_id, interview_type, status, starts_at, ends_at,
+    timezone, duration_minutes, result_code, created_at, updated_at
+    from public.application_interviews where user_id=${userId}::uuid order by created_at,id`;
+  const extensionGrants = await sql`
+    select id,name,scopes,expires_at,revoked_at,last_used_at,created_at
+    from public.extension_grants where user_id=${userId}::uuid order by created_at,id`;
+  const browserScans = await sql`
+    select id,page_url,page_host,page_title,snapshot_fingerprint,protocol_version,status,
+      candidate_count,selected_count,created_at,completed_at
+    from public.browser_scan_sessions where user_id=${userId}::uuid order by created_at,id`;
+  const browserSnapshots = await sql`
+    select id,scan_session_id,page_url,content_fingerprint,extraction_version,json_ld_count,
+      link_count,summary,created_at from public.page_snapshots
+    where user_id=${userId}::uuid order by created_at,id`;
+  const browserCandidates = await sql`
+    select id,scan_session_id,snapshot_id,ordinal,candidate_kind,candidate_fingerprint,job_url,
+      title,company_name,location_text,description_excerpt,rank_score,rank_reasons,revision,created_at
+    from public.page_job_candidates where user_id=${userId}::uuid order by scan_session_id,ordinal,id`;
+  const browserIngestDecisions = await sql`
+    select id,candidate_id,candidate_revision,status,source_policy_id,source_posting_id,opportunity_id,
+      application_id,application_plan_id,match_id,result_code,result_metadata,created_at,resolved_at
+    from public.browser_ingest_decisions where user_id=${userId}::uuid order by created_at,id`;
+  const modelCalls = await sql`
+    select id,task_type,provider,model,prompt_version,schema_version,redaction_version,input_hash,
+      cache_key,policy_decision,status,input_tokens,output_tokens,estimated_cost_micros,duration_ms,
+      safe_error_code,created_at,completed_at from public.model_calls
+    where user_id=${userId}::uuid order by created_at,id`;
+  const modelOutputs = await sql`
+    select output.id,output.model_call_id,output.task_type,output.output,output.evidence_references,
+      output.validation_status,output.disposition,output.source_fingerprint,output.created_at,output.reviewed_at
+    from public.model_outputs output where output.user_id=${userId}::uuid order by output.created_at,output.id`;
+  const analytics =
+    await sql`select fact_type,occurred_at,entity_type,metric_value,transformation_version
+    from public.analytics_facts where user_id=${userId}::uuid order by occurred_at,id`;
+  const experimentParticipation =
+    await sql`select assignment,assigned_at from public.experiment_assignments
+    where user_id=${userId}::uuid order by assigned_at,id`;
+  const shadowPredictions =
+    await sql`select model_version_id,subject_id,as_of_time,prediction,reason_codes,created_at
+    from public.model_predictions where user_id=${userId}::uuid and shadow order by created_at,id`;
+  const outreachContacts =
+    await sql`select id,recruiter_profile_id,application_id,display_name,company_name,title,email,contact_truth,provenance_class,source_url,source_label,consent_at,last_seen_at,version,created_at,updated_at from public.outreach_contacts where user_id=${userId}::uuid order by created_at,id`;
+  const outreachDrafts =
+    await sql`select id,contact_id,application_id,subject,body,grounding,status,version,approved_version,approved_at,sent_at,follow_up_due_at,cancelled_at,created_at,updated_at from public.outreach_drafts where user_id=${userId}::uuid order by created_at,id`;
+  const outreachAttempts =
+    await sql`select id,draft_id,draft_version,recipient_email,idempotency_key,channel,status,recorded_at,created_at from public.outreach_attempts where user_id=${userId}::uuid order by created_at,id`;
+  const interviewPrepPlans =
+    await sql`select id,application_id,interview_id,created_at,updated_at from public.interview_prep_plans where user_id=${userId}::uuid order by created_at,id`;
+  const interviewPrepItems =
+    await sql`select id,prep_plan_id,item_key,title,rationale,item_kind,completed_at,version,created_at,updated_at from public.interview_prep_items where user_id=${userId}::uuid order by created_at,id`;
+  return {
+    user: {
+      id: String(user.id),
+      name: String(user.name),
+      createdAt: new Date(user.created_at as string).toISOString(),
+    },
+    resumes,
+    versions,
+    parseRuns,
+    evidence,
+    evidenceConfirmations,
+    matches,
+    matchEvidence,
+    applications,
+    applicationEvents,
+    applicationAssessments,
+    applicationInterviews,
+    extensionGrants,
+    browserScans,
+    browserSnapshots,
+    browserCandidates,
+    browserIngestDecisions,
+    modelCalls,
+    modelOutputs,
+    analytics,
+    experimentParticipation,
+    shadowPredictions,
+    outreachContacts,
+    outreachDrafts,
+    outreachAttempts,
+    interviewPrepPlans,
+    interviewPrepItems,
+  };
+}
+
+export async function deleteUserAccount(userId: string, privacyRequestId: string): Promise<void> {
+  const sql = getDatabase();
+  await sql.begin(async (transaction) => {
+    const rows = await transaction`
+      update public.users set status = 'DELETION_PENDING'
+      where id = ${userId}::uuid and status in ('ACTIVE', 'PENDING_IDENTITY') returning id
+    `;
+    if (!rows[0]) throw new Error("User is not eligible for deletion");
+    await transaction`
+      update public.privacy_requests set status = 'IN_PROGRESS', started_at = now()
+      where id = ${privacyRequestId}::uuid and user_id = ${userId}::uuid
+        and request_type = 'DELETE' and status = 'PENDING'
+    `;
+    await transaction`
+      insert into public.audit_events (
+        actor_kind, actor_user_id, action, resource_type, resource_id, outcome, metadata
+      ) values (
+        'USER', ${userId}::uuid, 'ACCOUNT_DELETED', 'USER', ${userId}::uuid,
+        'SUCCEEDED', '{"credentialCleanup":"best_effort_provider_revoke_then_local_delete"}'
+      )
+    `;
+    await transaction`
+      update public.work_items set status='CANCELLED', completed_at=now(),
+        cancel_requested_at=coalesce(cancel_requested_at, now())
+      where user_id=${userId}::uuid and status in ('READY','RETRY_WAIT','LEASED','RUNNING')
+    `;
+    await transaction`delete from public.users where id = ${userId}::uuid`;
+    await transaction`
+      update public.privacy_requests set status = 'COMPLETED', completed_at = now(),
+        result_metadata = '{"privateRowsDeleted":true,"credentialsDeleted":true}'
+      where id = ${privacyRequestId}::uuid
+    `;
+  });
+}

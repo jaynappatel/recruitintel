@@ -10,6 +10,7 @@ import {
   deleteCalendarItem,
   getCalendarItem,
   getDatabase,
+  getGoogleCalendarStatus,
   listCalendarItems,
   materializeRecruitingDates,
   saveGoogleCalendarConnection,
@@ -18,7 +19,8 @@ import {
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? describe : describe.skip;
-const ownerId = "f0000000-0000-0000-0000-000000000001";
+const userId = "f0000000-0000-0000-0000-000000000001";
+const otherUserId = "f0000000-0000-0000-0000-000000000099";
 const companyId = "f1000000-0000-0000-0000-000000000001";
 const sourceId = "f2000000-0000-0000-0000-000000000001";
 const campusEventId = "f3000000-0000-0000-0000-000000000001";
@@ -28,13 +30,17 @@ async function reset() {
   if (!databaseUrl) return;
   const sql = postgres(databaseUrl, { max: 1 });
   try {
-    await sql`delete from public.calendar_oauth_states where owner_id = ${ownerId}::uuid`;
-    await sql`delete from public.calendar_connections where owner_id = ${ownerId}::uuid`;
-    await sql`delete from public.calendar_items where owner_id = ${ownerId}::uuid`;
-    await sql`delete from public.application_plans where owner_id = ${ownerId}::uuid`;
+    await sql`delete from public.work_items where user_id in (${userId}::uuid, ${otherUserId}::uuid) or requesting_user_id in (${userId}::uuid, ${otherUserId}::uuid)`;
+    await sql`delete from public.work_items where work_type in ('ALERT_EVALUATE', 'ALERT_FANOUT')`;
+    await sql`delete from public.calendar_sync_requests where user_id in (${userId}::uuid, ${otherUserId}::uuid)`;
+    await sql`delete from public.calendar_oauth_states where user_id = ${userId}::uuid`;
+    await sql`delete from public.calendar_connections where user_id = ${userId}::uuid`;
+    await sql`delete from public.calendar_items where user_id = ${userId}::uuid`;
+    await sql`delete from public.application_plans where user_id = ${userId}::uuid`;
     await sql`delete from public.recruiting_dates where company_id = ${companyId}::uuid`;
     await sql`delete from public.companies where id = ${companyId}::uuid`;
     await sql`delete from public.interview_questions where id = ${questionId}::uuid`;
+    await sql`delete from public.users where id in (${userId}::uuid, ${otherUserId}::uuid)`;
   } finally {
     await sql.end();
   }
@@ -47,6 +53,12 @@ integration("PostgreSQL recruiting calendar and application planning", () => {
     await reset();
     const sql = postgres(databaseUrl, { max: 1 });
     try {
+      await sql`
+        insert into public.users (id, name, email, email_verified, status)
+        values
+          (${userId}::uuid, 'Calendar User', 'calendar-user@example.com', true, 'ACTIVE'),
+          (${otherUserId}::uuid, 'Other User', 'other-user@example.com', true, 'ACTIVE')
+      `;
       await sql`
         insert into public.companies (id, canonical_name, slug, website, careers_url)
         values (
@@ -101,12 +113,12 @@ integration("PostgreSQL recruiting calendar and application planning", () => {
   });
 
   it("deduplicates source dates, generates topic-aware tasks, and activates once", async () => {
-    const firstMaterialization = await materializeRecruitingDates(ownerId);
-    const secondMaterialization = await materializeRecruitingDates(ownerId);
+    const firstMaterialization = await materializeRecruitingDates(userId);
+    const secondMaterialization = await materializeRecruitingDates(userId);
     expect(firstMaterialization.dates).toBeGreaterThanOrEqual(1);
     expect(secondMaterialization.items).toBe(firstMaterialization.items);
 
-    const calendar = await listCalendarItems(ownerId, { company: "m5-contract-company" });
+    const calendar = await listCalendarItems(userId, { company: "m5-contract-company" });
     const recruitingItem = calendar.find((item) => item.recruitingDate?.campusRecruitingEventId);
     expect(recruitingItem).toMatchObject({
       type: "CAREER_EVENT",
@@ -125,8 +137,8 @@ integration("PostgreSQL recruiting calendar and application planning", () => {
       targetDate: "2026-11-01",
       timezone: "America/Chicago",
     };
-    const plan = await createApplicationPlan(ownerId, planInput);
-    const duplicate = await createApplicationPlan(ownerId, planInput);
+    const plan = await createApplicationPlan(userId, planInput);
+    const duplicate = await createApplicationPlan(userId, planInput);
     expect(duplicate.id).toBe(plan.id);
     expect(plan.tasks).toHaveLength(6);
     expect(plan.tasks.map((task) => task.relativeDayOffset)).toEqual([-7, -5, -3, -2, 0, 2]);
@@ -136,15 +148,19 @@ integration("PostgreSQL recruiting calendar and application planning", () => {
     });
 
     await saveGoogleCalendarConnection({
-      ownerId,
+      userId,
       providerAccountId: "m5-google-account",
       providerEmail: "m5@example.com",
       encryptedRefreshToken: "v1.test.test.test",
       scopes: ["https://www.googleapis.com/auth/calendar.events.owned"],
       tokenMetadata: { test: true },
     });
-    const active = await activateApplicationPlan(ownerId, plan.id, true);
-    const activeAgain = await activateApplicationPlan(ownerId, plan.id, true);
+    expect(await getGoogleCalendarStatus(otherUserId)).toMatchObject({
+      status: "DISCONNECTED",
+      accountEmail: null,
+    });
+    const active = await activateApplicationPlan(userId, plan.id, true);
+    const activeAgain = await activateApplicationPlan(userId, plan.id, true);
     expect(active.status).toBe("ACTIVE");
     expect(activeAgain.tasks.map((task) => task.id)).toEqual(active.tasks.map((task) => task.id));
     expect(active.tasks.every((task) => task.calendarItem.syncEnabled)).toBe(true);
@@ -154,16 +170,26 @@ integration("PostgreSQL recruiting calendar and application planning", () => {
       const [countRow] = await sql`
         select count(*)::int as count from public.calendar_sync_requests r
         join public.calendar_connections c on c.id = r.calendar_connection_id
-        where c.owner_id = ${ownerId}::uuid and r.status in ('PENDING', 'RUNNING')
+        where c.user_id = ${userId}::uuid and r.status in ('PENDING', 'RUNNING')
       `;
       expect(countRow?.count).toBe(1);
+      const productEvents = await sql`
+        select event_type, count(*)::int as count from public.product_events
+        where user_id = ${userId}::uuid
+          and event_type in ('CALENDAR_PLAN_CREATED', 'CALENDAR_PLAN_ACTIVATED')
+        group by event_type order by event_type
+      `;
+      expect(productEvents).toEqual([
+        { event_type: "CALENDAR_PLAN_CREATED", count: 1 },
+        { event_type: "CALENDAR_PLAN_ACTIVATED", count: 1 },
+      ]);
     } finally {
       await sql.end();
     }
   });
 
   it("creates, completes, updates, and soft-deletes an owner-scoped calendar item", async () => {
-    const created = await createCalendarItem(ownerId, {
+    const created = await createCalendarItem(userId, {
       type: "CUSTOM",
       title: "M5 timed prep",
       startsAt: "2026-11-01T15:00:00.000-05:00",
@@ -174,29 +200,77 @@ integration("PostgreSQL recruiting calendar and application planning", () => {
       syncEnabled: false,
       metadata: {},
     });
-    expect(await getCalendarItem("f0000000-0000-0000-0000-000000000099", created.id)).toBeNull();
-    const completed = await updateCalendarItem(ownerId, created.id, { status: "DONE" });
+    expect(await getCalendarItem(otherUserId, created.id)).toBeNull();
+    const completed = await updateCalendarItem(userId, created.id, { status: "DONE" });
     expect(completed.completedAt).not.toBeNull();
-    const reopened = await updateCalendarItem(ownerId, created.id, {
+    const eventSql = postgres(databaseUrl!, { max: 1 });
+    try {
+      const [eventCount] = await eventSql`
+        select count(*)::int as count from public.product_events
+        where user_id = ${userId}::uuid and entity_id = ${created.id}::uuid
+          and event_type = 'CALENDAR_ITEM_COMPLETED'
+      `;
+      expect(eventCount?.count).toBe(1);
+    } finally {
+      await eventSql.end();
+    }
+    const reopened = await updateCalendarItem(userId, created.id, {
       status: "TODO",
       title: "M5 updated timed prep",
     });
     expect(reopened.completedAt).toBeNull();
-    await deleteCalendarItem(ownerId, created.id);
-    expect((await listCalendarItems(ownerId)).some((item) => item.id === created.id)).toBe(false);
+    await deleteCalendarItem(userId, created.id);
+    expect((await listCalendarItems(userId)).some((item) => item.id === created.id)).toBe(false);
   });
 
   it("consumes OAuth state exactly once and rejects replay", async () => {
     const hash = "c".repeat(64);
     await createGoogleOauthState({
-      ownerId,
+      userId,
       stateHash: hash,
       encryptedCodeVerifier: "v1.test.test.test",
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
       returnTo: "/settings",
     });
-    expect(await consumeGoogleOauthState(hash)).toMatchObject({ ownerId, returnTo: "/settings" });
+    expect(await consumeGoogleOauthState(hash)).toMatchObject({ userId, returnTo: "/settings" });
     expect(await consumeGoogleOauthState(hash)).toBeNull();
     expect(await consumeGoogleOauthState("d".repeat(64))).toBeNull();
+  });
+
+  it("removes a derived Calendar item when its recruiting date is deleted", async () => {
+    const sql = postgres(databaseUrl!, { max: 1 });
+    try {
+      const [date] = await sql`
+        insert into public.recruiting_dates (
+          company_id, source_id, type, title, starts_at, starts_on, all_day,
+          timezone, date_certainty, date_precision, confidence, source_kind,
+          source_url, source_fingerprint
+        ) values (
+          ${companyId}::uuid, ${sourceId}::uuid, 'CAREER_FAIR', 'Delete fixture',
+          '2026-11-02T00:00:00.000Z', '2026-11-02', true, 'UTC', 'CONFIRMED',
+          'EXACT', 0.9, 'CAMPUS_EVENT', 'https://m5.example/delete-fixture', ${"f".repeat(64)}
+        ) returning id
+      `;
+      if (!date) throw new Error("Expected a recruiting date fixture");
+      const dateId = String(date.id);
+      await sql`
+        insert into public.calendar_items (
+          user_id, company_id, recruiting_date_id, type, title, starts_at, starts_on,
+          all_day, timezone, status, source
+        ) values (
+          ${userId}::uuid, ${companyId}::uuid, ${dateId}::uuid, 'CAREER_EVENT', 'Delete fixture',
+          '2026-11-02T00:00:00.000Z', '2026-11-02', true, 'UTC', 'TODO',
+          'RECRUITING_INTELLIGENCE'
+        )
+      `;
+      await sql`delete from public.recruiting_dates where id=${dateId}::uuid`;
+      const [remaining] = await sql`
+        select count(*)::int as count from public.calendar_items
+        where recruiting_date_id=${dateId}::uuid
+      `;
+      expect(remaining?.count).toBe(0);
+    } finally {
+      await sql.end();
+    }
   });
 });

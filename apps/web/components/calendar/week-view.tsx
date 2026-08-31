@@ -2,7 +2,7 @@
 
 import clsx from "clsx";
 
-import type { CalendarItem } from "@/lib/types/calendar";
+import type { CalendarItemView } from "@/lib/types/calendar";
 
 import { CalendarStatusBadge } from "./status-badge";
 import { buildWeekRow, formatDayLabel } from "./date-grid";
@@ -16,7 +16,7 @@ export function WeekView({
   onSelectItem,
 }: {
   anchorDate: string;
-  items: CalendarItem[];
+  items: CalendarItemView[];
   today: string;
   selectedDate: string | null;
   onSelectDate: (iso: string) => void;

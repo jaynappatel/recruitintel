@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
 
+import { recordAuditEvent } from "@recruitintel/db";
+
 import {
   completeGoogleCalendarAuthorization,
   consumeGoogleCalendarAuthorizationFailure,
   GoogleOAuthError,
 } from "@/lib/server/google-calendar-oauth";
+import { authenticatedUserOrResponse } from "@/lib/server/authorization";
 
 function redirectTarget(returnTo: string, status: "connected" | "error", code?: string) {
   const configured = process.env.GOOGLE_REDIRECT_URI ?? "http://localhost:3000/";
@@ -15,6 +18,8 @@ function redirectTarget(returnTo: string, status: "connected" | "error", code?: 
 }
 
 export async function GET(request: Request) {
+  const actor = await authenticatedUserOrResponse(request);
+  if (actor instanceof Response) return actor;
   const query = new URL(request.url).searchParams;
   const state = query.get("state");
   if (!state) {
@@ -23,7 +28,7 @@ export async function GET(request: Request) {
   try {
     const providerError = query.get("error");
     if (providerError) {
-      const returnTo = await consumeGoogleCalendarAuthorizationFailure(state);
+      const returnTo = await consumeGoogleCalendarAuthorizationFailure(state, actor.user.id);
       return NextResponse.redirect(
         redirectTarget(
           returnTo,
@@ -35,7 +40,20 @@ export async function GET(request: Request) {
     const code = query.get("code");
     if (!code)
       throw new GoogleOAuthError("MISSING_AUTHORIZATION_CODE", "Authorization code is missing");
-    const result = await completeGoogleCalendarAuthorization({ code, state });
+    const result = await completeGoogleCalendarAuthorization({
+      code,
+      state,
+      userId: actor.user.id,
+    });
+    await recordAuditEvent({
+      actorKind: actor.kind,
+      actorUserId: actor.user.id,
+      action: "GOOGLE_CALENDAR_CONNECTED",
+      resourceType: "CALENDAR_CONNECTION",
+      outcome: "SUCCEEDED",
+      requestId: actor.requestId,
+      ipHash: actor.ipHash,
+    });
     return NextResponse.redirect(redirectTarget(result.returnTo, "connected"));
   } catch (error) {
     const code = error instanceof GoogleOAuthError ? error.code : "GOOGLE_CALLBACK_FAILED";

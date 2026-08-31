@@ -81,6 +81,29 @@ class WebWorkType(StrEnum):
     PROCESS = "WEB_PROCESS"
 
 
+class SearchResultKind(StrEnum):
+    WEB = "WEB"
+    NEWS = "NEWS"
+
+
+class SearchProviderCostCategory(StrEnum):
+    FREE = "FREE"
+    FREE_TIER = "FREE_TIER"
+    PAID = "PAID"
+
+
+class SourceDiscoveryMethod(StrEnum):
+    CONFIGURED = "CONFIGURED"
+    PAGE_LINK = "PAGE_LINK"
+    ATS_FINGERPRINT = "ATS_FINGERPRINT"
+    COMMON_PATH = "COMMON_PATH"
+    SEARCH = "SEARCH"
+    GITHUB = "GITHUB"
+    UNIVERSITY = "UNIVERSITY"
+    USER_BROWSER = "USER_BROWSER"
+    MANUAL = "MANUAL"
+
+
 class WebWorkStatus(StrEnum):
     PENDING = "PENDING"
     RUNNING = "RUNNING"

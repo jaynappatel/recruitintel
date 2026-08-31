@@ -5,10 +5,13 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from math import ceil
 from typing import Any, Protocol, cast
 from urllib.parse import quote
 
 import httpx
+
+from recruitintel_collectors.infrastructure.rate_limit import DistributedRateLimiter
 
 from .models import (
     GitHubChangedFile,
@@ -29,10 +32,18 @@ class GitHubAPIResult[T]:
 
 
 class GitHubAPIError(RuntimeError):
-    def __init__(self, message: str, *, retryable: bool, status_code: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool,
+        status_code: int | None = None,
+        retry_after_seconds: int | None = None,
+    ) -> None:
         super().__init__(message)
         self.retryable = retryable
         self.status_code = status_code
+        self.retry_after_seconds = retry_after_seconds
 
 
 class GitHubRateLimitError(GitHubAPIError):
@@ -82,6 +93,7 @@ class OfficialGitHubClient:
         max_response_bytes: int = 10_000_000,
         transport: httpx.AsyncBaseTransport | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        distributed_limiter: DistributedRateLimiter | None = None,
     ) -> None:
         if not user_agent.strip():
             raise ValueError("an identifying GitHub API user agent is required")
@@ -106,6 +118,7 @@ class OfficialGitHubClient:
         self._max_attempts = max_attempts
         self._max_response_bytes = max_response_bytes
         self._sleep = sleep
+        self._distributed_limiter = distributed_limiter
         self._last_request = 0.0
         self._pace_lock = asyncio.Lock()
         self._latest_rate_limit = GitHubRateLimit()
@@ -120,6 +133,8 @@ class OfficialGitHubClient:
         await self._client.aclose()
 
     async def _pace(self) -> None:
+        if self._distributed_limiter is not None:
+            await self._distributed_limiter.wait("PROVIDER", "github", self._interval)
         async with self._pace_lock:
             delay = self._interval - (time.monotonic() - self._last_request)
             if delay > 0:
@@ -173,9 +188,16 @@ class OfficialGitHubClient:
                     response.status_code in self.RETRYABLE_STATUSES or secondary_limit
                 ) and attempt < self._max_attempts:
                     try:
-                        retry_after = min(float(response.headers.get("Retry-After", 0)), 60)
+                        retry_after = max(float(response.headers.get("Retry-After", 0)), 0)
                     except ValueError:
                         retry_after = 0
+                    if retry_after > 5:
+                        raise GitHubAPIError(
+                            "GitHub requested durable rate-limit backoff",
+                            retryable=True,
+                            status_code=response.status_code,
+                            retry_after_seconds=ceil(retry_after),
+                        )
                     await self._sleep(retry_after or float(2 ** (attempt - 1)))
                     continue
                 if response.status_code >= 400:

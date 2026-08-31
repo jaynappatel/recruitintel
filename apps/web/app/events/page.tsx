@@ -20,7 +20,7 @@ export default async function EventsPage() {
     return (
       <>
         <PageHeader
-          description="Immutable recruiting transitions with provenance."
+          description="Every job opening, change, and closure we've tracked, each linked to its source."
           eyebrow="Recruiting timeline"
           title="Event stream"
         />
@@ -32,7 +32,7 @@ export default async function EventsPage() {
   return (
     <>
       <PageHeader
-        description="Append-only job openings, meaningful changes, and source-confirmed closures with confidence and provenance."
+        description="Job openings, changes, and closures as we detect them, each linked to its source."
         eyebrow="Recruiting timeline"
         title="Event stream"
       />
@@ -42,7 +42,7 @@ export default async function EventsPage() {
         </section>
       ) : (
         <EmptyState
-          copy="Events are emitted only when normalized state changes."
+          copy="Nothing to show yet — this fills in as tracked companies post, change, or close roles."
           title="No events recorded"
         />
       )}

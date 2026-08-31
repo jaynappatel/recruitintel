@@ -17,7 +17,10 @@ from recruitintel_collectors.calendar.models import (
 )
 from recruitintel_collectors.calendar.provider import (
     CalendarProviderError,
+    EventAlreadyExistsError,
     GoogleCalendarProvider,
+    ProviderForbiddenError,
+    ProviderRateLimitedError,
     RefreshCredentialInvalidError,
 )
 from recruitintel_collectors.calendar.runner import (
@@ -82,6 +85,13 @@ class FakeProvider:
         return None
 
 
+class IdempotentFakeProvider(FakeProvider):
+    async def create_event(self, calendar_id: str, event: ProviderEvent) -> str:
+        if event.external_id in self.events:
+            raise EventAlreadyExistsError
+        return await super().create_event(calendar_id, event)
+
+
 class FakeRepository:
     def __init__(self, connection: CalendarConnection, items: list[CalendarSyncItem]) -> None:
         self.connection = connection
@@ -128,10 +138,34 @@ class FakeRepository:
         self.failed = values
 
 
+class FailFirstMappingRepository(FakeRepository):
+    async def save_mapping(
+        self,
+        *,
+        item_id: UUID,
+        connection_id: UUID,
+        calendar_id: str,
+        external_event_id: str,
+        content_hash: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        if not self.saved:
+            self.saved[item_id] = ("FAILED_ONCE", "")
+            raise RuntimeError("simulated crash after provider side effect")
+        await super().save_mapping(
+            item_id=item_id,
+            connection_id=connection_id,
+            calendar_id=calendar_id,
+            external_event_id=external_event_id,
+            content_hash=content_hash,
+            metadata=metadata,
+        )
+
+
 def connection(cipher: AesGcmCredentialCipher) -> CalendarConnection:
     return CalendarConnection(
         id=uuid4(),
-        owner_id=uuid4(),
+        user_id=uuid4(),
         provider=CalendarProviderName.GOOGLE,
         selected_calendar_id="primary",
         encrypted_refresh_token=cipher.encrypt("refresh-token"),
@@ -215,6 +249,26 @@ async def test_first_create_and_unchanged_retry_do_not_duplicate() -> None:
     assert retry.unchanged == 1
     assert provider.created == 1
     assert provider.updated == 0
+
+
+@pytest.mark.asyncio
+async def test_crash_after_provider_create_retries_without_duplicate_event() -> None:
+    cipher = AesGcmCredentialCipher("12" * 32)
+    connected = connection(cipher)
+    sync_item = item()
+    provider = IdempotentFakeProvider()
+    repository = FailFirstMappingRepository(connected, [sync_item])
+
+    with pytest.raises(CalendarSyncPartialFailureError):
+        await worker(repository, cipher, provider).run(uuid4())
+    recovered = await worker(repository, cipher, provider).run(uuid4())
+
+    assert provider.created == 1
+    assert len(provider.events) == 1
+    assert recovered.created == 1
+    assert repository.saved[sync_item.id][0] == deterministic_external_event_id(
+        connected.id, sync_item.id
+    )
 
 
 @pytest.mark.asyncio
@@ -337,3 +391,30 @@ async def test_google_provider_preserves_all_day_date_and_timed_timezone() -> No
     assert bodies[0]["end"] == {"date": "2026-11-02"}
     assert bodies[1]["start"]["dateTime"] == "2026-03-08T01:30:00-06:00"
     assert bodies[1]["start"]["timeZone"] == "America/Chicago"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [
+        ("userRateLimitExceeded", ProviderRateLimitedError),
+        ("forbidden", ProviderForbiddenError),
+    ],
+)
+async def test_google_403_distinguishes_quota_from_authorization(
+    reason: str, expected: type[Exception]
+) -> None:
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                403,
+                json={"error": {"errors": [{"reason": reason}]}},
+                request=request,
+            )
+        )
+    )
+    provider = GoogleCalendarProvider("access-token", client=client)
+    with pytest.raises(expected):
+        await provider.get_event("primary", "event-id")
+    await provider.aclose()
+    await client.aclose()

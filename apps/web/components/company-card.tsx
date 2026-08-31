@@ -7,14 +7,14 @@ import { formatCompactDate } from "@recruitintel/shared";
 export function CompanyCard({ company }: { company: CompanyRecord }) {
   return (
     <Link
-      className="surface group block p-5 transition hover:-translate-y-0.5 hover:border-[var(--forest-bright)] hover:shadow-lg"
+      className="surface group block p-5 transition hover:-translate-y-0.5 hover:border-[var(--accent)] hover:shadow-md"
       href={`/companies/${company.slug}`}
     >
       <div className="flex items-start justify-between gap-3">
-        <div className="grid size-11 place-items-center rounded-xl bg-[var(--surface-soft)] font-serif text-lg font-bold text-[var(--forest)]">
+        <div className="grid size-11 place-items-center rounded-xl bg-[var(--surface-soft)] font-serif text-lg font-bold text-[var(--ink)]">
           {company.canonicalName.charAt(0)}
         </div>
-        <ArrowRight className="size-4 text-[var(--muted)] transition group-hover:translate-x-1 group-hover:text-[var(--forest)]" />
+        <ArrowRight className="size-4 text-[var(--muted)] transition group-hover:translate-x-1 group-hover:text-[var(--ink)]" />
       </div>
       <h2 className="mt-5 mb-1 font-serif text-2xl font-semibold tracking-[-0.02em]">
         {company.canonicalName}
@@ -24,7 +24,7 @@ export function CompanyCard({ company }: { company: CompanyRecord }) {
       </p>
       <div className="mt-5 flex items-end justify-between border-t border-[var(--line)] pt-4">
         <div>
-          <div className="flex items-center gap-1.5 text-xs font-bold text-[var(--forest)]">
+          <div className="flex items-center gap-1.5 text-xs font-bold text-[var(--ink)]">
             <BriefcaseBusiness className="size-3.5" />
             {company.openJobCount} open
           </div>

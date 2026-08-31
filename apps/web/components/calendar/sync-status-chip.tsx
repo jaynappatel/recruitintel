@@ -1,16 +1,17 @@
 import Link from "next/link";
 
-import type { CalendarProviderStatus } from "@/lib/types/calendar";
+import type { CalendarProviderDisplayStatus } from "@/lib/types/calendar";
 
-const copy: Record<CalendarProviderStatus, { label: string; dot: string }> = {
-  NOT_CONNECTED: { label: "Google Calendar not connected", dot: "bg-[var(--muted)]" },
+const copy: Record<CalendarProviderDisplayStatus, { label: string; dot: string }> = {
+  DISCONNECTED: { label: "Google Calendar not connected", dot: "bg-[var(--muted)]" },
   CONNECTING: { label: "Connecting Google Calendar…", dot: "bg-[var(--accent)] animate-pulse" },
-  CONNECTED: { label: "Google Calendar connected", dot: "bg-emerald-600" },
+  CONNECTED: { label: "Google Calendar connected", dot: "bg-[var(--success)]" },
   SYNCING: { label: "Syncing Google Calendar…", dot: "bg-[var(--accent)] animate-pulse" },
-  SYNC_ERROR: { label: "Google Calendar sync error", dot: "bg-red-600" },
+  REAUTH_REQUIRED: { label: "Reconnect Google Calendar", dot: "bg-amber-600" },
+  ERROR: { label: "Google Calendar sync error", dot: "bg-[var(--danger)]" },
 };
 
-export function SyncStatusChip({ status }: { status: CalendarProviderStatus }) {
+export function SyncStatusChip({ status }: { status: CalendarProviderDisplayStatus }) {
   const { label, dot } = copy[status];
   return (
     <Link

@@ -1,11 +1,20 @@
 # GitHub and interview-question intelligence
 
+## Canonical opportunity linkage
+
+GitHub-derived jobs remain community source postings with their repository/commit/row provenance.
+After persistence, the Milestone 8 resolver can merge a GitHub entry only when it carries an exact,
+validated official application URL (or a future explicit exact official cross-reference). Title,
+location, season, or description similarity cannot auto-merge it. GitHub deletion or staleness is
+weak evidence and cannot close an opportunity while an official source remains fresh. See
+`docs/canonical-job-graph.md`.
+
 Milestone 2 adds commit-aware GitHub ingestion without coupling GitHub HTTP, parsing, RecruitIntel normalization, or PostgreSQL persistence. Repository content is untrusted text: RecruitIntel uses the official API, never clones or executes code, and never sends collected text to an LLM.
 
 ## Architecture
 
 ```text
-Next.js mutation API                     finite Python worker
+Next.js mutation API                  PostgreSQL WorkItem + typed worker
 POST sync -> github_sync_requests        GitHubSyncRunner
                                                   |
                                      OfficialGitHubClient
@@ -27,7 +36,11 @@ POST sync -> github_sync_requests        GitHubSyncRunner
                          typed APIs and analytics
 ```
 
-PostgreSQL is the scheduler boundary. `POST /api/github/sync/:repositoryId` creates or returns one durable active request; it does not spawn Python inside a web request. A local process, cron job, GitHub Action, Supabase scheduler, or future queue worker invokes the finite `github-sync` command. This keeps scheduling replaceable and avoids hidden always-on infrastructure.
+PostgreSQL is the scheduler and orchestration boundary. `POST /api/github/sync/:repositoryId`
+creates or returns one durable domain request; its trigger enqueues an orchestration WorkItem without
+moving repository/SHA state out of GitHub tables. The supervised worker claims the GitHub lane with
+a fenced lease and typed handler. Scheduled repository syncs use the same path. The web request
+never starts provider work.
 
 ## Data model and identity boundaries
 
@@ -51,13 +64,15 @@ GITHUB_TOKEN=github_pat_redacted
 
 It is worker-only, passed as an authorization header, never persisted, and never logged. Use the smallest GitHub permission set needed to read configured repositories.
 
-Mutation routes use a separate token:
+Mutation routes accept an authenticated admin session or a hashed service-principal token with the
+single `ADMIN_MUTATE` scope. Create the latter once:
 
-```dotenv
-RECRUITINTEL_ADMIN_TOKEN=replace-with-a-long-random-value
+```bash
+DATABASE_URL=postgresql://... pnpm --filter @recruitintel/db service-principal:create
 ```
 
-Send `Authorization: Bearer <value>`. Never use the GitHub token as the admin token.
+The command prints the opaque token once and stores only its SHA-256 hash. Send that value as
+`Authorization: Bearer <value>`. Never use the GitHub provider token as the admin credential.
 
 ## Repository configuration
 
@@ -65,7 +80,7 @@ Attach a repository to a company:
 
 ```bash
 curl -X POST http://localhost:3000/api/companies/stripe/github-repositories \
-  -H "Authorization: Bearer $RECRUITINTEL_ADMIN_TOKEN" \
+  -H "Authorization: Bearer $RECRUITINTEL_ADMIN_BEARER" \
   -H "Content-Type: application/json" \
   -d '{
     "repositoryUrl": "https://github.com/example/interview-questions",
@@ -87,21 +102,21 @@ Queue a request:
 
 ```bash
 curl -X POST http://localhost:3000/api/github/sync/REPOSITORY_UUID \
-  -H "Authorization: Bearer $RECRUITINTEL_ADMIN_TOKEN"
+  -H "Authorization: Bearer $RECRUITINTEL_ADMIN_BEARER"
 ```
 
-Execute it with the finite worker:
+The continuous worker executes it:
 
 ```bash
-uv run recruitintel-collectors github-sync \
-  --repository-id REPOSITORY_UUID \
-  --request-id REQUEST_UUID
+uv run recruitintel-collectors scheduler
+uv run recruitintel-collectors worker --classes GITHUB
 ```
 
-For direct local use without an API request:
+For a deterministic local smoke, use `--once`; direct production execution that bypasses a durable
+request is intentionally unavailable:
 
 ```bash
-uv run recruitintel-collectors github-sync --repository-id REPOSITORY_UUID
+uv run recruitintel-collectors worker --classes GITHUB --once
 ```
 
 Each run creates `collector_runs` and `github_sync_runs` records with previous/current SHA, files inspected, parsed/new/updated/unchanged/unresolved counts, duration, errors, and last known rate limit.
@@ -335,10 +350,14 @@ interface InterviewQuestionDetail {
 
 ## Troubleshooting
 
-- **401 mutation:** configure `RECRUITINTEL_ADMIN_TOKEN` and send the matching bearer value.
-- **503 `ADMIN_NOT_CONFIGURED`:** admin token is absent; read APIs remain available.
-- **Request stays `PENDING`:** run the finite worker with the returned request/repository IDs or configure a scheduler.
-- **Rate-limit failure:** inspect repository/sync rate reset values and `collector_errors`; resume after reset or configure a permitted `GITHUB_TOKEN`.
+- **401 mutation:** sign in as an active admin or send an active, unexpired hashed service token.
+- **403 mutation:** the authenticated user is not an admin or the service principal lacks
+  `ADMIN_MUTATE`.
+- **Request stays `PENDING`:** verify the GitHub worker lane and scheduler are running, the repository
+  policy is reviewed/executable, and the worker database role is bound to `GITHUB`.
+- **Rate-limit failure:** inspect safe attempt/source-health reset metadata and `collector_errors`;
+  the durable retry eligibility respects GitHub's reset timestamp rather than sleeping a worker.
+  Configure a permitted `GITHUB_TOKEN` when appropriate.
 - **No files inspected:** verify watched paths and supported extensions.
 - **Too many files:** narrow paths or deliberately set `metadata.max_files_per_sync`, up to 200.
 - **Unresolved company:** add a reviewed global alias or link-local alias; never add fuzzy guesses.

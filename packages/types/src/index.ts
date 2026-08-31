@@ -1,5 +1,135 @@
 import { z } from "zod";
 
+export const clientProductEventTypes = [
+  "JOB_VIEWED",
+  "RECRUITER_VIEWED",
+  "INTERVIEW_INTEL_VIEWED",
+  "SOURCE_POSTING_SELECTED",
+] as const;
+
+// M14 responses are aggregate-only. They intentionally contain no private rows or features.
+export const personalAnalyticsSchema = z.object({
+  impressions: z.number().int().nonnegative(),
+  applications: z.number().int().nonnegative(),
+  oaProgressions: z.number().int().nonnegative(),
+  interviewProgressions: z.number().int().nonnegative(),
+  offers: z.number().int().nonnegative(),
+});
+export const dataReadinessTaskSchema = z.enum([
+  "PERSONALIZED_RANKING",
+  "OPENING_FORECAST",
+  "SOURCE_ANOMALY",
+  "RESUME_OUTCOME",
+  "INTERVIEW_TOPIC",
+]);
+export const m21PromotionGateSchema = z.enum([
+  "REAL_CONSENTED_LABELS",
+  "REPRODUCIBLE_DATASET",
+  "POINT_IN_TIME_FEATURES",
+  "CHRONOLOGICAL_HOLDOUT",
+  "ENTITY_LEAKAGE_CONTROL",
+  "DETERMINISTIC_BASELINE_WIN",
+  "CALIBRATION",
+  "PRIVACY_REVIEW",
+  "PROTECTED_FEATURE_EXCLUSION",
+  "SHADOW_HISTORY",
+  "MODEL_CARD",
+  "ROLLBACK",
+  "MONITORING",
+  "ZERO_COST",
+]);
+export const dataReadinessSchema = z.object({
+  taskType: dataReadinessTaskSchema,
+  status: z.enum(["READY", "NOT_READY"]),
+  eligibleSampleCount: z.number().int().nonnegative(),
+  positiveLabelCount: z.number().int().nonnegative(),
+  negativeLabelCount: z.number().int().nonnegative(),
+  userCount: z.number().int().nonnegative(),
+  companyCount: z.number().int().nonnegative(),
+  timeSpanDays: z.number().int().nonnegative(),
+  missingFeatureRate: z.number().min(0).max(1),
+  classImbalance: z.number().nullable(),
+  outcomeDelayDays: z.number().nullable(),
+  duplicateCount: z.number().int().nonnegative(),
+  leakageRisks: z.array(z.string()),
+  labelConfidence: z.enum(["HIGH", "MEDIUM", "LOW"]),
+  reasons: z.array(z.string()),
+  authoritativeMode: z.literal("DETERMINISTIC"),
+  baselineReference: z.string().min(1),
+  datasetFingerprint: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .nullable(),
+  shadowHistoryDays: z.number().int().nonnegative(),
+  promotionGates: z.record(m21PromotionGateSchema, z.boolean()),
+});
+export const clientProductEventSchema = z
+  .object({
+    eventType: z.enum(clientProductEventTypes),
+    entityId: z.uuid(),
+  })
+  .strict();
+export type ClientProductEvent = z.infer<typeof clientProductEventSchema>;
+
+const outreachUrlSchema = z
+  .url()
+  .max(2048)
+  .refine((value) => value.startsWith("https://"));
+export const outreachContactRequestSchema = z
+  .object({
+    recruiterProfileId: z.uuid().nullable().optional(),
+    applicationId: z.uuid().nullable().optional(),
+    displayName: z.string().trim().min(1).max(200),
+    companyName: z.string().trim().max(200).nullable().optional(),
+    title: z.string().trim().max(200).nullable().optional(),
+    email: z.email().max(320),
+    contactTruth: z.enum(["VERIFIED_PUBLIC", "USER_PROVIDED", "UNVERIFIED"]),
+    provenanceClass: z.enum([
+      "OFFICIAL_COMPANY",
+      "OFFICIAL_RECRUITING",
+      "PUBLIC_EVENT",
+      "PUBLIC_AUTHOR",
+      "USER_ENTERED",
+      "PREVIOUSLY_VERIFIED",
+    ]),
+    sourceUrl: outreachUrlSchema.nullable().optional(),
+    sourceLabel: z.string().trim().min(1).max(160),
+    consentAt: z.iso.datetime(),
+    lastSeenAt: z.iso.datetime().nullable().optional(),
+  })
+  .strict();
+export const outreachContactUpdateSchema = outreachContactRequestSchema
+  .pick({
+    displayName: true,
+    companyName: true,
+    title: true,
+    email: true,
+    sourceUrl: true,
+    sourceLabel: true,
+    lastSeenAt: true,
+  })
+  .partial()
+  .strict();
+export const outreachDraftRequestSchema = z
+  .object({
+    contactId: z.uuid(),
+    applicationId: z.uuid().nullable().optional(),
+    subject: z.string().trim().min(1).max(200).optional(),
+    body: z.string().trim().min(1).max(5000).optional(),
+  })
+  .strict();
+export const outreachDraftUpdateSchema = z
+  .object({
+    subject: z.string().trim().min(1).max(200),
+    body: z.string().trim().min(1).max(5000),
+    version: z.number().int().positive(),
+  })
+  .strict();
+export const outreachApprovalSchema = z.object({ version: z.number().int().positive() }).strict();
+export const outreachManualSendSchema = z
+  .object({ idempotencyKey: z.string().trim().min(1).max(200) })
+  .strict();
+
 export const roleFamilies = [
   "SOFTWARE_ENGINEERING",
   "AI_ML",
@@ -13,6 +143,169 @@ export const roleFamilies = [
   "HARDWARE",
   "OTHER",
 ] as const;
+
+export const applicationStatuses = [
+  "SAVED",
+  "PLANNING",
+  "APPLIED",
+  "IN_PROCESS",
+  "OFFER",
+  "REJECTED",
+  "WITHDRAWN",
+  "CLOSED",
+] as const;
+export const applicationStages = [
+  "NONE",
+  "OA",
+  "RECRUITER_SCREEN",
+  "TECHNICAL_INTERVIEW",
+  "ONSITE",
+  "FINAL_ROUND",
+] as const;
+export const applicationStatusSchema = z.enum(applicationStatuses);
+export const applicationStageSchema = z.enum(applicationStages);
+export const createApplicationRequestSchema = z
+  .object({
+    opportunityId: z.uuid(),
+    sourcePostingId: z.uuid().nullable().optional(),
+    cycleKey: z.string().trim().min(1).max(80),
+    applicationPlanId: z.uuid().nullable().optional(),
+    originRecommendationImpressionId: z.uuid().nullable().optional(),
+    applicationUrlUsed: z
+      .string()
+      .url()
+      .refine((v) => v.startsWith("https://"))
+      .nullable()
+      .optional(),
+    appliedAt: z.iso.datetime().nullable().optional(),
+  })
+  .strict();
+export const applicationStatusRequestSchema = z
+  .object({
+    status: applicationStatusSchema,
+    stage: applicationStageSchema.optional(),
+    occurredAt: z.iso.datetime().optional(),
+    reasonCode: z.string().trim().max(100).optional(),
+    idempotencyKey: z.string().trim().min(1).max(200),
+  })
+  .strict();
+export const applicationAssessmentRequestSchema = z
+  .object({
+    type: z.string().trim().min(1).max(40),
+    dueAt: z.iso.datetime().nullable().optional(),
+    providerName: z.string().trim().max(200).nullable().optional(),
+    idempotencyKey: z.string().trim().min(1).max(200),
+  })
+  .strict();
+
+export const resumeUploadRequestSchema = z
+  .object({
+    originalFilename: z.string().trim().min(1).max(255),
+    mediaType: z.enum(["application/pdf", "text/plain"]),
+    content: z.string().min(1).max(14_000_000),
+  })
+  .strict();
+export const resumeVersionRequestSchema = z
+  .object({
+    extractedText: z.string().min(1).max(200_000),
+  })
+  .strict();
+export const evidenceReviewRequestSchema = z
+  .object({
+    disposition: z.enum(["CONFIRMED", "REJECTED", "CORRECTED"]),
+    normalizedValue: z.record(z.string(), z.unknown()).optional(),
+    reasonCode: z.string().trim().max(100).optional(),
+  })
+  .strict();
+export const resumeMatchRequestSchema = z
+  .object({
+    opportunityId: z.uuid(),
+    resumeVersionId: z.uuid(),
+    rankingDecisionId: z.uuid().nullable().optional(),
+    recommendationImpressionId: z.uuid().nullable().optional(),
+  })
+  .strict();
+
+// M13 requests are deliberately small: source text never crosses this contract.
+export const modelExplanationRequestSchema = z
+  .object({
+    matchId: z.uuid(),
+    idempotencyKey: z.string().trim().min(1).max(200),
+  })
+  .strict();
+export const modelOutputDispositionSchema = z
+  .object({ disposition: z.enum(["CONFIRMED", "REJECTED"]) })
+  .strict();
+
+// M12 browser-companion inputs are deliberately structured: the server never
+// accepts raw HTML, browser storage, form values, or an asserted owner ID.
+const browserHttpUrlSchema = z
+  .url()
+  .max(2_048)
+  .refine((value) => {
+    try {
+      const url = new URL(value);
+      return (
+        (url.protocol === "https:" || url.protocol === "http:") && !url.username && !url.password
+      );
+    } catch {
+      return false;
+    }
+  }, "URL must be an http(s) URL without credentials");
+
+export const extensionGrantScopeSchema = z.enum(["PAGE_SCAN", "JOB_IMPORT"]);
+export const createExtensionGrantRequestSchema = z
+  .object({
+    name: z.string().trim().min(1).max(100),
+    scopes: z.array(extensionGrantScopeSchema).min(1).max(2),
+    expiresInSeconds: z.number().int().min(300).max(2_592_000).default(86_400),
+  })
+  .strict();
+
+const browserCandidateSchema = z
+  .object({
+    kind: z.enum(["GRID", "SINGLE", "JSON_LD"]),
+    url: browserHttpUrlSchema,
+    title: z.string().trim().min(1).max(300),
+    companyName: z.string().trim().min(1).max(300).nullable().optional(),
+    location: z.string().trim().max(300).default(""),
+    descriptionExcerpt: z.string().trim().max(8_000).default(""),
+    extractionMetadata: z.record(z.string(), z.unknown()).default({}),
+  })
+  .strict();
+
+export const browserScanUploadRequestSchema = z
+  .object({
+    protocolVersion: z.number().int().positive().max(10).default(1),
+    pageUrl: browserHttpUrlSchema,
+    pageTitle: z.string().trim().max(300).default(""),
+    jsonLdCount: z.number().int().min(0).max(25).default(0),
+    linkCount: z.number().int().min(0).max(250).default(0),
+    candidates: z.array(browserCandidateSchema).min(1).max(100),
+  })
+  .strict();
+
+export const browserCandidateSelectionRequestSchema = z
+  .object({
+    candidateRevision: z.number().int().positive(),
+    idempotencyKey: z.string().trim().min(1).max(200),
+  })
+  .strict();
+
+export const browserDecisionApplicationRequestSchema = z
+  .object({
+    cycleKey: z.string().trim().min(1).max(100),
+    applicationUrlUsed: browserHttpUrlSchema.optional(),
+  })
+  .strict();
+export const browserDecisionPlanRequestSchema = z
+  .object({
+    title: z.string().trim().min(1).max(300),
+    targetDate: z.iso.date(),
+    timezone: z.string().trim().min(1).max(100),
+  })
+  .strict();
+export const browserDecisionMatchRequestSchema = z.object({ resumeVersionId: z.uuid() }).strict();
 
 export const eventTypes = [
   "JOB_OPENED",
@@ -141,6 +434,67 @@ export const databaseUuidSchema = z
   .string()
   .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
 
+export const orchestrationWorkTypes = [
+  "ATS_COLLECT",
+  "GITHUB_SYNC",
+  "PUBLIC_WEB_SEARCH",
+  "PUBLIC_WEB_FETCH",
+  "PUBLIC_WEB_PROCESS",
+  "RECRUITER_CAMPUS_PROJECT",
+  "CALENDAR_SYNC",
+  "PRIVACY_RETENTION_CLEANUP",
+  "SOURCE_HEALTH_ROLLUP",
+  "ALERT_FANOUT",
+  "ALERT_EVALUATE",
+] as const;
+export const orchestrationWorkStatuses = [
+  "READY",
+  "LEASED",
+  "RUNNING",
+  "RETRY_WAIT",
+  "SUCCEEDED",
+  "CANCELLED",
+  "DEAD_LETTERED",
+  "AUTH_REQUIRED",
+  "POLICY_BLOCKED",
+] as const;
+export const sourcePolicyStatuses = [
+  "ALLOWED",
+  "ALLOWED_WITH_LIMITS",
+  "MANUAL_ONLY",
+  "BLOCKED",
+  "REVIEW_REQUIRED",
+] as const;
+export const orchestrationWorkTypeSchema = z.enum(orchestrationWorkTypes);
+export const orchestrationWorkStatusSchema = z.enum(orchestrationWorkStatuses);
+export const sourcePolicyStatusSchema = z.enum(sourcePolicyStatuses);
+export const orchestrationListQuerySchema = z.object({
+  status: orchestrationWorkStatusSchema.optional(),
+  workType: orchestrationWorkTypeSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  offset: z.coerce.number().int().min(0).max(10_000).default(0),
+});
+export const scheduleUpdateSchema = z.object({ enabled: z.boolean() }).strict();
+export const sourcePolicyUpdateSchema = z
+  .object({
+    status: sourcePolicyStatusSchema,
+    reviewedBy: z.string().trim().min(1).max(200).optional(),
+    notes: z.string().trim().max(2000).optional(),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      !["ALLOWED", "ALLOWED_WITH_LIMITS"].includes(value.status) || Boolean(value.reviewedBy),
+    { message: "Approved source policy requires a named reviewer", path: ["reviewedBy"] },
+  );
+export const sourceIncidentStatusSchema = z.enum(["OPEN", "ACKNOWLEDGED", "RESOLVED"]);
+export const sourceIncidentListQuerySchema = z.object({
+  status: sourceIncidentStatusSchema.optional(),
+});
+export const sourceIncidentUpdateSchema = z
+  .object({ status: z.enum(["ACKNOWLEDGED", "RESOLVED"]) })
+  .strict();
+
 export const companySchema = z.object({
   id: databaseUuidSchema,
   canonicalName: z.string().min(1),
@@ -179,6 +533,390 @@ export const jobSchema = z.object({
   isDemo: z.boolean(),
 });
 
+export const opportunityLifecycleStatuses = ["OPEN", "CLOSED", "UNKNOWN"] as const;
+export const opportunityStatuses = ["ACTIVE", "SUPERSEDED"] as const;
+export const opportunityLifecycleStatusSchema = z.enum(opportunityLifecycleStatuses);
+export const opportunityStatusSchema = z.enum(opportunityStatuses);
+
+const opportunityCompanySchema = z.object({
+  id: databaseUuidSchema,
+  name: z.string().min(1),
+  slug: z.string().min(1),
+});
+
+export const opportunitySchema = z.object({
+  id: databaseUuidSchema,
+  company: opportunityCompanySchema,
+  title: z.string().min(1),
+  normalizedTitle: z.string().min(1),
+  roleFamily: roleFamilySchema,
+  experienceLevel: z.string().min(1),
+  employmentType: z.string().min(1),
+  isInternship: z.boolean(),
+  isNewGrad: z.boolean(),
+  season: z.string().nullable(),
+  graduationYears: z.array(z.number().int()),
+  location: z.string(),
+  workplaceMode: z.enum(["REMOTE", "HYBRID", "ONSITE", "MIXED", "UNKNOWN"]),
+  applicationUrl: z.url().nullable(),
+  firstSeenAt: z.iso.datetime(),
+  lastSeenAt: z.iso.datetime(),
+  publishedAt: z.iso.datetime().nullable(),
+  deadlineAt: z.iso.datetime().nullable(),
+  lifecycleStatus: opportunityLifecycleStatusSchema,
+  status: opportunityStatusSchema,
+  supersededById: databaseUuidSchema.nullable(),
+  sourceCount: z.number().int().nonnegative(),
+  mergeConfidence: z.number().min(0).max(1),
+  canonicalizationVersion: z.number().int().positive(),
+  lifecycleReason: z.record(z.string(), z.unknown()),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+
+export const opportunitySourcePostingSchema = z.object({
+  id: databaseUuidSchema,
+  source: z.object({
+    id: databaseUuidSchema,
+    name: z.string().min(1),
+    type: z.string().min(1),
+    provider: z.string().min(1),
+  }),
+  externalId: z.string().min(1),
+  title: z.string().min(1),
+  description: z.string(),
+  location: z.string(),
+  employmentType: z.string().min(1),
+  roleFamily: roleFamilySchema,
+  experienceLevel: z.string().min(1),
+  isInternship: z.boolean(),
+  isNewGrad: z.boolean(),
+  season: z.string().nullable(),
+  graduationYears: z.array(z.number().int()),
+  applicationUrl: z.url(),
+  sourceUrl: z.url(),
+  firstSeenAt: z.iso.datetime(),
+  lastSeenAt: z.iso.datetime(),
+  publishedAt: z.iso.datetime().nullable(),
+  closedAt: z.iso.datetime().nullable(),
+  sourceContentHash: z.string().regex(/^[0-9a-f]{64}$/),
+  sourceContentVersion: z.number().int().positive(),
+  derivationHash: z.string().regex(/^[0-9a-f]{64}$/),
+  derivationVersion: z.number().int().positive(),
+  membership: z.object({
+    method: z.string().min(1),
+    pinned: z.boolean(),
+    validFrom: z.iso.datetime(),
+  }),
+  authority: z.object({
+    level: z.string().min(1),
+    reviewed: z.boolean(),
+    capabilityVersion: z.number().int().positive(),
+  }),
+  skills: z.array(
+    z.object({
+      canonicalName: z.string().nullable(),
+      rawMention: z.string().min(1),
+      requirement: z.string().min(1),
+    }),
+  ),
+  constraints: z.array(
+    z.object({
+      type: z.string().min(1),
+      value: z.record(z.string(), z.unknown()),
+      evidence: z.string().min(1),
+    }),
+  ),
+});
+
+export const opportunityDetailSchema = opportunitySchema.extend({
+  sources: z.array(opportunitySourcePostingSchema),
+  resolutionHistory: z.array(
+    z.object({
+      id: databaseUuidSchema,
+      action: z.string().min(1),
+      outcome: z.enum(["MATCH", "NO_MATCH", "REVIEW_REQUIRED"]),
+      decisionSource: z.enum(["MIGRATION", "SYSTEM", "MANUAL"]),
+      reasonCodes: z.array(z.string().min(1)),
+      algorithmVersion: z.number().int().positive(),
+      fromOpportunityId: databaseUuidSchema.nullable(),
+      toOpportunityId: databaseUuidSchema.nullable(),
+      createdAt: z.iso.datetime(),
+    }),
+  ),
+});
+
+export const opportunitiesQuerySchema = z.object({
+  companyId: databaseUuidSchema.optional(),
+  roleFamily: roleFamilySchema.optional(),
+  earlyCareerOnly: z
+    .enum(["true", "false"])
+    .transform((value) => value === "true")
+    .optional(),
+  lifecycleStatus: opportunityLifecycleStatusSchema.optional(),
+  includeSuperseded: z
+    .enum(["true", "false"])
+    .transform((value) => value === "true")
+    .optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  cursor: z.string().min(1).max(500).optional(),
+});
+
+export const opportunityCorrectionSchema = z.object({
+  reason: z.string().trim().min(3).max(2_000),
+  idempotencyKey: z.string().trim().min(8).max(200),
+});
+export const mergeOpportunityRequestSchema = opportunityCorrectionSchema.extend({
+  winnerId: databaseUuidSchema,
+  loserId: databaseUuidSchema,
+  reviewId: databaseUuidSchema.optional(),
+});
+export const splitOpportunityRequestSchema = opportunityCorrectionSchema.extend({
+  opportunityId: databaseUuidSchema,
+  sourcePostingId: databaseUuidSchema,
+});
+export const opportunityReviewStatusSchema = z.enum(["PENDING", "RESOLVED", "DISMISSED"]);
+export const opportunityReviewsQuerySchema = z.object({
+  status: opportunityReviewStatusSchema.default("PENDING"),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+export const dismissOpportunityReviewRequestSchema = opportunityCorrectionSchema;
+
+export const watchEntityTypes = ["COMPANY", "OPPORTUNITY", "RECRUITER", "SCHOOL"] as const;
+export const watchReasons = [
+  "SAVED_FOR_LATER",
+  "TARGET_COMPANY",
+  "RECRUITING_CONTACT",
+  "TARGET_SCHOOL",
+  "OTHER",
+] as const;
+export const watchNotificationOverrides = ["INHERIT", "ENABLED", "DISABLED"] as const;
+export const watchSuccessorPolicies = ["MANUAL", "AUTO_FOLLOW_DIRECT"] as const;
+export const watchEntityTypeSchema = z.enum(watchEntityTypes);
+export const watchlistCreateSchema = z
+  .object({
+    entityType: watchEntityTypeSchema,
+    entityId: databaseUuidSchema,
+    reason: z.enum(watchReasons).default("OTHER"),
+    notificationOverride: z.enum(watchNotificationOverrides).default("INHERIT"),
+    successorPolicy: z.enum(watchSuccessorPolicies).default("MANUAL"),
+  })
+  .strict();
+export const watchlistPatchSchema = z
+  .object({
+    notificationOverride: z.enum(watchNotificationOverrides).optional(),
+    successorPolicy: z.enum(watchSuccessorPolicies).optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, "At least one setting is required");
+export const watchlistQuerySchema = z.object({
+  state: z.enum(["ACTIVE", "REMOVED", "SUPERSEDED"]).optional(),
+  entityType: watchEntityTypeSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: z.string().min(1).max(500).optional(),
+});
+export const watchlistItemSchema = z.object({
+  id: databaseUuidSchema,
+  entityType: watchEntityTypeSchema,
+  entityId: databaseUuidSchema,
+  entityLabel: z.string().min(1),
+  entityHref: z.string().min(1),
+  state: z.enum(["ACTIVE", "REMOVED", "SUPERSEDED"]),
+  origin: z.enum(["USER", "MIGRATED_SOURCE_POSTING", "SUCCESSOR_FOLLOW"]),
+  reason: z.enum(watchReasons),
+  notificationOverride: z.enum(watchNotificationOverrides),
+  successorPolicy: z.enum(watchSuccessorPolicies),
+  resolvedSuccessor: z
+    .object({ id: databaseUuidSchema, label: z.string().min(1), href: z.string().min(1) })
+    .nullable(),
+  createdAt: z.iso.datetime(),
+  removedAt: z.iso.datetime().nullable(),
+  supersededAt: z.iso.datetime().nullable(),
+});
+
+export const experienceLevels = [
+  "INTERNSHIP",
+  "ENTRY_LEVEL",
+  "MID_LEVEL",
+  "SENIOR",
+  "LEADERSHIP",
+] as const;
+export const workplaceModes = ["REMOTE", "HYBRID", "ONSITE"] as const;
+export const earlyCareerTracks = ["INTERNSHIP", "NEW_GRAD"] as const;
+export const preferredLocationSchema = z
+  .object({
+    kind: z.enum(["CITY_REGION_COUNTRY", "REGION_COUNTRY", "COUNTRY", "REMOTE_REGION"]),
+    city: z.string().trim().min(1).max(100).nullable().optional(),
+    region: z.string().trim().min(1).max(100).nullable().optional(),
+    countryCode: z.string().trim().length(2).toUpperCase().nullable().optional(),
+    remoteRegion: z.string().trim().min(1).max(100).nullable().optional(),
+    displayLabel: z.string().trim().min(1).max(200),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const valid =
+      (value.kind === "CITY_REGION_COUNTRY" && value.city && value.region && value.countryCode) ||
+      (value.kind === "REGION_COUNTRY" && !value.city && value.region && value.countryCode) ||
+      (value.kind === "COUNTRY" && !value.city && !value.region && value.countryCode) ||
+      (value.kind === "REMOTE_REGION" &&
+        !value.city &&
+        !value.region &&
+        !value.countryCode &&
+        value.remoteRegion);
+    if (!valid) context.addIssue({ code: "custom", message: "Location fields do not match kind" });
+  });
+export const recruitingPreferencesPatchSchema = z
+  .object({
+    graduationYear: z.number().int().min(2020).max(2050).nullable().optional(),
+    usWorkAuthorized: z.boolean().nullable().optional(),
+    requiresEmployerSponsorship: z.boolean().nullable().optional(),
+    roleFamilies: z
+      .array(roleFamilySchema.exclude(["OTHER"]))
+      .max(10)
+      .optional(),
+    earlyCareerTracks: z.array(z.enum(earlyCareerTracks)).max(2).optional(),
+    experienceLevels: z.array(z.enum(experienceLevels)).max(5).optional(),
+    workplaceModes: z.array(z.enum(workplaceModes)).max(3).optional(),
+    locations: z.array(preferredLocationSchema).max(20).optional(),
+    targetSchoolIds: z.array(databaseUuidSchema).max(20).optional(),
+  })
+  .strict();
+export const recruitingPreferencesSchema = recruitingPreferencesPatchSchema.extend({
+  graduationYear: z.number().int().nullable(),
+  usWorkAuthorized: z.boolean().nullable(),
+  requiresEmployerSponsorship: z.boolean().nullable(),
+  roleFamilies: z.array(roleFamilySchema.exclude(["OTHER"])),
+  earlyCareerTracks: z.array(z.enum(earlyCareerTracks)),
+  experienceLevels: z.array(z.enum(experienceLevels)),
+  workplaceModes: z.array(z.enum(workplaceModes)),
+  locations: z.array(preferredLocationSchema.extend({ id: databaseUuidSchema })),
+  targetSchools: z.array(
+    z.object({ id: databaseUuidSchema, name: z.string().min(1), slug: z.string().min(1) }),
+  ),
+  version: z.number().int().positive(),
+  updatedAt: z.iso.datetime(),
+});
+
+export const recommendationQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  cursor: z.string().min(1).max(500).optional(),
+  includeLowPriority: z
+    .enum(["true", "false"])
+    .transform((value) => value === "true")
+    .default(true),
+  includeIneligible: z
+    .enum(["true", "false"])
+    .transform((value) => value === "true")
+    .default(false),
+  company: z.union([databaseUuidSchema, z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)]).optional(),
+  roleFamily: roleFamilySchema.optional(),
+});
+export const recommendationFactorSchema = z.object({
+  code: z.enum([
+    "COMPANY_PREFERENCE",
+    "ROLE_MATCH",
+    "EARLY_CAREER_TRACK",
+    "EXPERIENCE_LEVEL",
+    "LOCATION_MATCH",
+    "WORKPLACE_MODE",
+    "FRESHNESS",
+    "DEADLINE_URGENCY",
+    "SOURCE_CONFIDENCE",
+  ]),
+  state: z.enum(["MATCH", "PARTIAL", "MISMATCH", "UNKNOWN", "NOT_APPLICABLE"]),
+  earnedWeight: z.number().int().min(0).max(100),
+  availableWeight: z.number().int().min(0).max(100),
+  reasonCode: z.string().regex(/^[A-Z][A-Z0-9_]*$/),
+});
+export const opportunityRecommendationSchema = z.object({
+  impressionId: databaseUuidSchema,
+  opportunity: opportunitySchema,
+  recommendationScore: z.number().int().min(0).max(100).nullable(),
+  category: z.enum(["HIGH_PRIORITY", "MEDIUM_PRIORITY", "LOW_PRIORITY", "NOT_ELIGIBLE"]),
+  eligibility: z.enum(["ELIGIBLE", "NOT_ELIGIBLE", "UNKNOWN"]),
+  evidenceCoverage: z.enum(["HIGH", "MEDIUM", "LOW"]),
+  availableWeight: z.number().int().min(0).max(100),
+  reasons: z.array(z.string()).max(16),
+  potentialMismatches: z.array(z.string()).max(16),
+  hardConstraints: z.array(z.string()).max(8),
+  generatedAt: z.iso.datetime(),
+  algorithmVersion: z.string().min(1),
+});
+
+export const opportunityDismissalSchema = z
+  .object({
+    reasonCode: z
+      .enum(["NOT_INTERESTED", "ALREADY_APPLIED", "WRONG_ROLE", "WRONG_LOCATION", "OTHER"])
+      .optional(),
+  })
+  .strict();
+export const recommendationOpenSchema = z.object({ impressionId: databaseUuidSchema }).strict();
+
+export const alertTypes = [
+  "WATCHED_COMPANY_OPPORTUNITY_OPENED",
+  "RECOMMENDED_OPPORTUNITY_OPENED",
+  "APPLICATION_DEADLINE_APPROACHING",
+  "OPENING_WINDOW_STARTED",
+  "WATCHED_RECRUITER_DISCOVERED",
+  "WATCHED_RECRUITER_ACTIVITY",
+  "CAMPUS_EVENT_DISCOVERED",
+  "INTERVIEW_INTELLIGENCE_UPDATED",
+  "CALENDAR_ACTION_DUE",
+] as const;
+export const alertTypeSchema = z.enum(alertTypes);
+export const alertListQuerySchema = z.object({
+  state: z.enum(["UNREAD", "READ", "DISMISSED", "EXPIRED"]).optional(),
+  type: alertTypeSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  cursor: z.string().min(1).max(500).optional(),
+});
+export const alertUpdateSchema = z.object({ read: z.boolean() }).strict();
+export const alertsShownSchema = z
+  .object({ alertIds: z.array(databaseUuidSchema).min(1).max(100) })
+  .strict();
+export const alertSchema = z.object({
+  id: databaseUuidSchema,
+  type: alertTypeSchema,
+  title: z.string().min(1),
+  body: z.string().min(1),
+  reasonCodes: z.array(z.string()).max(16),
+  state: z.enum(["UNREAD", "READ", "DISMISSED", "EXPIRED"]),
+  entity: z
+    .object({ type: z.string().min(1), id: databaseUuidSchema, href: z.string().min(1) })
+    .nullable(),
+  reminderWindow: z.enum(["NONE", "SEVEN_DAY", "THREE_DAY", "ONE_DAY", "DUE"]),
+  occurredAt: z.iso.datetime(),
+  createdAt: z.iso.datetime(),
+  readAt: z.iso.datetime().nullable(),
+  dismissedAt: z.iso.datetime().nullable(),
+  expiresAt: z.iso.datetime().nullable(),
+});
+export const notificationPreferencesPatchSchema = z
+  .object({
+    inAppEnabled: z.boolean().optional(),
+    alertTypes: z.record(alertTypeSchema, z.boolean()).optional(),
+  })
+  .strict();
+export const notificationPreferencesSchema = z.object({
+  channel: z.literal("IN_APP"),
+  inAppEnabled: z.boolean(),
+  alertTypes: z.record(alertTypeSchema, z.boolean()),
+  settingsVersion: z.number().int().positive(),
+  updatedAt: z.iso.datetime(),
+});
+export const dailyWorkflowItemSchema = z.object({
+  id: databaseUuidSchema,
+  source: z.enum(["ALERT", "CALENDAR", "APPLICATION"]),
+  kind: z.string().min(1),
+  title: z.string().min(1),
+  reason: z.string().min(1),
+  dueAt: z.iso.datetime().nullable(),
+  urgency: z.enum(["OVERDUE", "TODAY", "UPCOMING"]),
+  href: z.string().min(1),
+  alertId: databaseUuidSchema.nullable(),
+  completed: z.boolean(),
+});
+
 export const recruitingEventSchema = z.object({
   id: databaseUuidSchema,
   companyId: databaseUuidSchema,
@@ -202,6 +940,7 @@ export const listQuerySchema = z.object({
 });
 
 export const jobsQuerySchema = listQuerySchema.extend({
+  query: z.string().trim().max(120).optional(),
   companyId: databaseUuidSchema.optional(),
   roleFamily: roleFamilySchema.optional(),
   earlyCareerOnly: z
@@ -455,10 +1194,7 @@ export const publicWebWorkRequestSchema = z.object({
 
 export const webSearchRequestSchema = z
   .object({
-    provider: z
-      .string()
-      .regex(/^[a-z0-9_-]+$/)
-      .default("static"),
+    provider: z.enum(["static", "searxng"]).default("static"),
     roleFamily: roleFamilySchema.optional(),
     school: z.string().min(1).max(200).optional(),
     graduationYear: z.number().int().min(2020).max(2040).optional(),
@@ -755,6 +1491,7 @@ export const recruitingDateSchema = z.object({
   id: databaseUuidSchema,
   company: calendarCompanySchema.nullable(),
   jobId: databaseUuidSchema.nullable(),
+  opportunityId: databaseUuidSchema.nullable(),
   schoolId: databaseUuidSchema.nullable(),
   recruitingEventId: databaseUuidSchema.nullable(),
   campusRecruitingEventId: databaseUuidSchema.nullable(),
@@ -791,6 +1528,11 @@ export const calendarItemSchema = z.object({
   id: databaseUuidSchema,
   company: calendarCompanySchema.nullable(),
   jobId: databaseUuidSchema.nullable(),
+  opportunityId: databaseUuidSchema.nullable(),
+  resolvedOpportunity: z
+    .object({ id: databaseUuidSchema, title: z.string().min(1), status: opportunityStatusSchema })
+    .nullable(),
+  resolutionMismatch: z.boolean(),
   recruitingDateId: databaseUuidSchema.nullable(),
   applicationPlanId: databaseUuidSchema.nullable(),
   type: calendarItemTypeSchema,
@@ -845,6 +1587,7 @@ export const createCalendarItemRequestSchema = calendarTimingSchema.and(
   z.object({
     companyId: databaseUuidSchema.optional(),
     jobId: databaseUuidSchema.optional(),
+    opportunityId: databaseUuidSchema.optional(),
     type: calendarItemTypeSchema.exclude(["RECRUITING_DATE"]),
     title: z.string().trim().min(1).max(300),
     description: z.string().trim().max(5_000).optional(),
@@ -866,6 +1609,7 @@ export const updateCalendarItemRequestSchema = z
     timezone: timezoneSchema.optional(),
     status: calendarItemStatusSchema.optional(),
     syncEnabled: z.boolean().optional(),
+    opportunityId: databaseUuidSchema.nullable().optional(),
     metadata: z.record(z.string(), z.unknown()).optional(),
   })
   .refine((value) => Object.keys(value).length > 0, "At least one field is required");
@@ -889,6 +1633,7 @@ export const applicationPlanTemplateStepSchema = z.object({
 export const createApplicationPlanRequestSchema = z.object({
   companyId: databaseUuidSchema,
   jobId: databaseUuidSchema.optional(),
+  opportunityId: databaseUuidSchema.optional(),
   recruitingDateId: databaseUuidSchema.optional(),
   title: z.string().trim().min(1).max(300),
   targetDate: z.iso.date(),
@@ -902,6 +1647,7 @@ export const updateApplicationPlanRequestSchema = z
     targetDate: z.iso.date().optional(),
     timezone: timezoneSchema.optional(),
     status: applicationPlanStatusSchema.optional(),
+    opportunityId: databaseUuidSchema.nullable().optional(),
   })
   .refine((value) => Object.keys(value).length > 0, "At least one field is required");
 
@@ -924,6 +1670,11 @@ export const applicationPlanSchema = z.object({
   id: databaseUuidSchema,
   company: calendarCompanySchema,
   jobId: databaseUuidSchema.nullable(),
+  opportunityId: databaseUuidSchema.nullable(),
+  resolvedOpportunity: z
+    .object({ id: databaseUuidSchema, title: z.string().min(1), status: opportunityStatusSchema })
+    .nullable(),
+  resolutionMismatch: z.boolean(),
   recruitingDateId: databaseUuidSchema.nullable(),
   title: z.string().min(1),
   targetDate: z.iso.date(),
@@ -993,6 +1744,9 @@ export const calendarSyncRequestSchema = z.object({
 
 export type Company = z.infer<typeof companySchema>;
 export type Job = z.infer<typeof jobSchema>;
+export type Opportunity = z.infer<typeof opportunitySchema>;
+export type OpportunityDetail = z.infer<typeof opportunityDetailSchema>;
+export type OpportunitySourcePosting = z.infer<typeof opportunitySourcePostingSchema>;
 export type RecruitingEvent = z.infer<typeof recruitingEventSchema>;
 export type RoleFamily = z.infer<typeof roleFamilySchema>;
 export type AttachGithubRepositoryRequest = z.infer<typeof attachGithubRepositoryRequestSchema>;

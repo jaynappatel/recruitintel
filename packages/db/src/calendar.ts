@@ -3,11 +3,10 @@ import { createHash } from "node:crypto";
 import type { Sql, TransactionSql } from "postgres";
 
 import { getDatabase } from "./index";
+import { recordProductEventWith } from "./instrumentation";
 
 type Row = Record<string, unknown>;
 type QuerySql = Sql | TransactionSql;
-
-export const DEFAULT_MVP_OWNER_ID = "00000000-0000-0000-0000-000000000001";
 
 export const DEFAULT_APPLICATION_PLAN_TEMPLATE: PlanTemplateStep[] = [
   {
@@ -75,8 +74,14 @@ export interface CalendarItemRecord {
   id: string;
   company: { id: string; name: string; slug: string } | null;
   jobId: string | null;
+  opportunityId: string | null;
+  resolvedOpportunity: { id: string; title: string; status: string } | null;
+  resolutionMismatch: boolean;
   recruitingDateId: string | null;
   applicationPlanId: string | null;
+  applicationId: string | null;
+  applicationAssessmentId: string | null;
+  applicationInterviewId: string | null;
   type: CalendarItemType;
   title: string;
   description: string | null;
@@ -87,7 +92,7 @@ export interface CalendarItemRecord {
   allDay: boolean;
   timezone: string;
   status: CalendarItemStatus;
-  source: "RECRUITING_INTELLIGENCE" | "USER" | "APPLICATION_PLAN";
+  source: "RECRUITING_INTELLIGENCE" | "USER" | "APPLICATION_PLAN" | "APPLICATION";
   syncEnabled: boolean;
   completedAt: string | null;
   metadata: Record<string, unknown>;
@@ -100,6 +105,7 @@ export interface RecruitingDateRecord {
   id: string;
   company: { id: string; name: string; slug: string } | null;
   jobId: string | null;
+  opportunityId: string | null;
   schoolId: string | null;
   recruitingEventId: string | null;
   campusRecruitingEventId: string | null;
@@ -137,6 +143,7 @@ export interface CalendarListOptions {
 export interface CalendarItemInput {
   companyId?: string;
   jobId?: string;
+  opportunityId?: string;
   type: Exclude<CalendarItemType, "RECRUITING_DATE">;
   title: string;
   description?: string;
@@ -149,6 +156,9 @@ export interface CalendarItemInput {
   status: CalendarItemStatus;
   syncEnabled: boolean;
   metadata: Record<string, unknown>;
+  applicationId?: string;
+  applicationAssessmentId?: string;
+  applicationInterviewId?: string;
 }
 
 export interface CalendarItemPatch {
@@ -163,11 +173,13 @@ export interface CalendarItemPatch {
   status?: CalendarItemStatus;
   syncEnabled?: boolean;
   metadata?: Record<string, unknown>;
+  opportunityId?: string | null;
 }
 
 export interface CreateApplicationPlanInput {
   companyId: string;
   jobId?: string;
+  opportunityId?: string;
   recruitingDateId?: string;
   title: string;
   targetDate: string;
@@ -179,6 +191,9 @@ export interface ApplicationPlanRecord {
   id: string;
   company: { id: string; name: string; slug: string };
   jobId: string | null;
+  opportunityId: string | null;
+  resolvedOpportunity: { id: string; title: string; status: string } | null;
+  resolutionMismatch: boolean;
   recruitingDateId: string | null;
   title: string;
   targetDate: string;
@@ -293,6 +308,7 @@ function mapRecruitingDate(row: Row): RecruitingDateRecord | null {
     id: text(row.recruiting_date_id),
     company: company(row),
     jobId: nullableText(row.recruiting_date_job_id),
+    opportunityId: nullableText(row.recruiting_date_opportunity_id),
     schoolId: nullableText(row.school_id),
     recruitingEventId: nullableText(row.recruiting_event_id),
     campusRecruitingEventId: nullableText(row.campus_recruiting_event_id),
@@ -325,8 +341,20 @@ export function mapCalendarItem(row: Row): CalendarItemRecord {
     id: text(row.id),
     company: company(row),
     jobId: nullableText(row.job_id),
+    opportunityId: nullableText(row.opportunity_id),
+    resolvedOpportunity: row.resolved_opportunity_id
+      ? {
+          id: text(row.resolved_opportunity_id),
+          title: text(row.resolved_opportunity_title),
+          status: text(row.resolved_opportunity_status),
+        }
+      : null,
+    resolutionMismatch: bool(row.resolution_mismatch),
     recruitingDateId: nullableText(row.recruiting_date_id),
     applicationPlanId: nullableText(row.application_plan_id),
+    applicationId: nullableText(row.application_id),
+    applicationAssessmentId: nullableText(row.application_assessment_id),
+    applicationInterviewId: nullableText(row.application_interview_id),
     type: text(row.type) as CalendarItemType,
     title: text(row.title),
     description: nullableText(row.description),
@@ -350,11 +378,20 @@ export function mapCalendarItem(row: Row): CalendarItemRecord {
 const calendarItemSelect = `
   select
     ci.id, ci.company_id, c.canonical_name as company_name, c.slug as company_slug,
-    ci.job_id, ci.recruiting_date_id, ci.application_plan_id, ci.type, ci.title,
+    ci.job_id, ci.opportunity_id, ci.recruiting_date_id, ci.application_plan_id,
+    ci.application_id, ci.application_assessment_id, ci.application_interview_id,
+    ci.type, ci.title,
     ci.description, ci.starts_at, ci.ends_at, ci.starts_on, ci.ends_on, ci.all_day,
     ci.timezone, ci.status, ci.source, ci.sync_enabled, ci.completed_at, ci.metadata,
     ci.created_at, ci.updated_at,
-    rd.job_id as recruiting_date_job_id, rd.school_id, rd.recruiting_event_id,
+    coalesce(current_membership.opportunity_id, ci.opportunity_id) as resolved_opportunity_id,
+    resolved_canonical.title as resolved_opportunity_title,
+    resolved_opportunity.status::text as resolved_opportunity_status,
+    (ci.opportunity_id is not null and current_membership.opportunity_id is not null
+      and ci.opportunity_id <> current_membership.opportunity_id) as resolution_mismatch,
+    rd.job_id as recruiting_date_job_id,
+    rd.opportunity_id as recruiting_date_opportunity_id,
+    rd.school_id, rd.recruiting_event_id,
     rd.campus_recruiting_event_id, rd.public_recruiting_observation_id,
     rd.public_recruiting_claim_id, rd.type as recruiting_date_type,
     rd.title as recruiting_date_title, rd.starts_at as recruiting_date_starts_at,
@@ -367,6 +404,12 @@ const calendarItemSelect = `
     rd.created_at as recruiting_date_created_at, rd.updated_at as recruiting_date_updated_at
   from public.calendar_items ci
   left join public.companies c on c.id = ci.company_id
+  left join public.job_opportunity_postings current_membership
+    on current_membership.job_id = ci.job_id and current_membership.valid_to is null
+  left join public.job_opportunities resolved_opportunity
+    on resolved_opportunity.id = coalesce(current_membership.opportunity_id, ci.opportunity_id)
+  left join public.jobs resolved_canonical
+    on resolved_canonical.id = resolved_opportunity.canonical_source_posting_id
   left join public.recruiting_dates rd on rd.id = ci.recruiting_date_id
   left join public.sources rs on rs.id = rd.source_id
 `;
@@ -393,12 +436,13 @@ function presentationType(step: PlanTemplateStep): string {
   return step.taskType;
 }
 
-export function planFingerprint(ownerId: string, input: CreateApplicationPlanInput): string {
+export function planFingerprint(userId: string, input: CreateApplicationPlanInput): string {
   return hash({
     version: 1,
-    ownerId,
+    userId,
     companyId: input.companyId,
     jobId: input.jobId ?? null,
+    opportunityId: input.opportunityId ?? null,
     recruitingDateId: input.recruitingDateId ?? null,
     title: input.title,
     targetDate: input.targetDate,
@@ -407,7 +451,7 @@ export function planFingerprint(ownerId: string, input: CreateApplicationPlanInp
   });
 }
 
-export async function materializeRecruitingDates(ownerId: string): Promise<{
+export async function materializeRecruitingDates(userId: string): Promise<{
   dates: number;
   items: number;
 }> {
@@ -415,13 +459,15 @@ export async function materializeRecruitingDates(ownerId: string): Promise<{
   return sql.begin(async (transaction) => {
     const observationDates = await transaction`
       insert into public.recruiting_dates (
-        company_id, job_id, school_id, public_recruiting_observation_id, source_id,
+        company_id, job_id, opportunity_id, school_id,
+        public_recruiting_observation_id, source_id,
         type, title, starts_at, ends_at, starts_on, ends_on, all_day, timezone,
         date_certainty, date_precision, confidence, source_kind, source_url,
         source_fingerprint, provenance
       )
       select
-        o.company_id, o.job_id, o.school_id, o.id, o.source_id,
+        o.company_id, o.job_id, current_membership.opportunity_id,
+        o.school_id, o.id, o.source_id,
         case
           when o.observation_type::text = 'APPLICATION_DEADLINE' then 'APPLICATION_DEADLINE'
           when o.observation_type::text in ('CAREER_FAIR') then 'CAREER_FAIR'
@@ -449,6 +495,8 @@ export async function materializeRecruitingDates(ownerId: string): Promise<{
           'certaintyPreserved', true
         )
       from public.public_recruiting_observations o
+      left join public.job_opportunity_postings current_membership
+        on current_membership.job_id = o.job_id and current_membership.valid_to is null
       where o.date_start is not null
       on conflict (source_fingerprint) do update set
         company_id = excluded.company_id,
@@ -514,11 +562,12 @@ export async function materializeRecruitingDates(ownerId: string): Promise<{
     `;
     const items = await transaction`
       insert into public.calendar_items (
-        owner_id, company_id, job_id, recruiting_date_id, type, title, description,
+        user_id, company_id, job_id, opportunity_id, recruiting_date_id,
+        type, title, description,
         starts_at, ends_at, starts_on, ends_on, all_day, timezone, status, source, metadata
       )
       select
-        ${ownerId}::uuid, rd.company_id, rd.job_id, rd.id,
+        ${userId}::uuid, rd.company_id, rd.job_id, rd.opportunity_id, rd.id,
         case when rd.type in ('CAREER_FAIR', 'CAMPUS_EVENT', 'INFO_SESSION', 'INTERVIEW_EVENT')
              then 'CAREER_EVENT' else 'RECRUITING_DATE' end::public.calendar_item_type,
         rd.title, null, rd.starts_at, rd.ends_at, rd.starts_on, rd.ends_on,
@@ -529,8 +578,8 @@ export async function materializeRecruitingDates(ownerId: string): Promise<{
           'sourceKind', rd.source_kind
         )
       from public.recruiting_dates rd
-      where rd.owner_id is null or rd.owner_id = ${ownerId}::uuid
-      on conflict (owner_id, recruiting_date_id) where recruiting_date_id is not null
+      where rd.user_id is null or rd.user_id = ${userId}::uuid
+      on conflict (user_id, recruiting_date_id) where recruiting_date_id is not null
       do update set
         company_id = excluded.company_id,
         job_id = excluded.job_id,
@@ -550,10 +599,10 @@ export async function materializeRecruitingDates(ownerId: string): Promise<{
 }
 
 export async function listCalendarItems(
-  ownerId: string,
+  userId: string,
   options: CalendarListOptions = {},
 ): Promise<CalendarItemRecord[]> {
-  await materializeRecruitingDates(ownerId);
+  await materializeRecruitingDates(userId);
   const sql = getDatabase();
   const start = options.start
     ? options.start.length === 10
@@ -567,7 +616,7 @@ export async function listCalendarItems(
     : null;
   const rows = await sql.unsafe(
     `${calendarItemSelect}
-     where ci.owner_id = $1::uuid and ci.deleted_at is null
+     where ci.user_id = $1::uuid and ci.deleted_at is null
        and ($2::timestamptz is null or coalesce(ci.ends_at, ci.starts_at) >= $2::timestamptz)
        and ($3::timestamptz is null or ci.starts_at <= $3::timestamptz)
        and ($4::text is null or ci.type::text = $4::text)
@@ -576,23 +625,23 @@ export async function listCalendarItems(
          $6::text is null or c.slug = $6::text or c.id::text = $6::text
        )
      order by ci.starts_at, ci.id`,
-    [ownerId, start, end, options.type ?? null, options.status ?? null, options.company ?? null],
+    [userId, start, end, options.type ?? null, options.status ?? null, options.company ?? null],
   );
   return rows.map(mapCalendarItem);
 }
 
-async function getCalendarItemWith(sql: QuerySql, ownerId: string, id: string) {
+async function getCalendarItemWith(sql: QuerySql, userId: string, id: string) {
   const rows = await sql.unsafe(
     `${calendarItemSelect}
-     where ci.owner_id = $1::uuid and ci.id = $2::uuid and ci.deleted_at is null
+     where ci.user_id = $1::uuid and ci.id = $2::uuid and ci.deleted_at is null
      limit 1`,
-    [ownerId, id],
+    [userId, id],
   );
   return rows[0] ? mapCalendarItem(rows[0]) : null;
 }
 
-export async function getCalendarItem(ownerId: string, id: string) {
-  return getCalendarItemWith(getDatabase(), ownerId, id);
+export async function getCalendarItem(userId: string, id: string) {
+  return getCalendarItemWith(getDatabase(), userId, id);
 }
 
 async function validateCompanyJob(sql: QuerySql, companyId?: string, jobId?: string) {
@@ -603,6 +652,31 @@ async function validateCompanyJob(sql: QuerySql, companyId?: string, jobId?: str
   if (!job) throw new CalendarNotFoundError("Job not found");
   if (companyId && text(job.company_id) !== companyId) {
     throw new CalendarConflictError("Job does not belong to the selected company");
+  }
+}
+
+async function validateCompanyOpportunity(
+  sql: QuerySql,
+  companyId?: string,
+  opportunityId?: string,
+  jobId?: string,
+) {
+  if (!opportunityId) return;
+  const [opportunity] = await sql`
+    select company_id from public.job_opportunities where id = ${opportunityId}::uuid
+  `;
+  if (!opportunity) throw new CalendarNotFoundError("Opportunity not found");
+  if (companyId && text(opportunity.company_id) !== companyId) {
+    throw new CalendarConflictError("Opportunity does not belong to the selected company");
+  }
+  if (jobId) {
+    const [membership] = await sql`
+      select opportunity_id from public.job_opportunity_postings
+      where job_id = ${jobId}::uuid and valid_to is null
+    `;
+    if (!membership || text(membership.opportunity_id) !== opportunityId) {
+      throw new CalendarConflictError("Source posting resolves to a different opportunity");
+    }
   }
 }
 
@@ -638,78 +712,106 @@ function normalizedTiming(input: {
 }
 
 export async function createCalendarItem(
-  ownerId: string,
+  userId: string,
   input: CalendarItemInput,
 ): Promise<CalendarItemRecord> {
   const sql = getDatabase();
   await validateCompanyJob(sql, input.companyId, input.jobId);
+  await validateCompanyOpportunity(sql, input.companyId, input.opportunityId, input.jobId);
   const timing = normalizedTiming(input);
   const completedAt = input.status === "DONE" ? new Date().toISOString() : null;
   const [created] = await sql`
     insert into public.calendar_items (
-      owner_id, company_id, job_id, type, title, description, starts_at, ends_at,
-      starts_on, ends_on, all_day, timezone, status, source, sync_enabled,
+      user_id, company_id, job_id, opportunity_id, application_id,
+      application_assessment_id, application_interview_id, type, title, description,
+      starts_at, ends_at, starts_on, ends_on, all_day, timezone, status, source, sync_enabled,
       completed_at, metadata
     ) values (
-      ${ownerId}::uuid, ${input.companyId ?? null}::uuid, ${input.jobId ?? null}::uuid,
-      ${input.type}, ${input.title}, ${input.description ?? null}, ${timing.startsAt},
+      ${userId}::uuid, ${input.companyId ?? null}::uuid, ${input.jobId ?? null}::uuid,
+      ${input.opportunityId ?? null}::uuid, ${input.applicationId ?? null}::uuid,
+      ${input.applicationAssessmentId ?? null}::uuid, ${input.applicationInterviewId ?? null}::uuid,
+      ${input.type}, ${input.title},
+      ${input.description ?? null}, ${timing.startsAt},
       ${timing.endsAt}, ${timing.startsOn}, ${timing.endsOn}, ${input.allDay},
-      ${input.timezone}, ${input.status}, 'USER', ${input.syncEnabled},
+      ${input.timezone}, ${input.status}, ${input.applicationId ? "APPLICATION" : "USER"}, ${input.syncEnabled},
       ${completedAt}, ${sql.json(input.metadata as never)}
     ) returning id
   `;
-  const item = await getCalendarItem(ownerId, text(created?.id));
+  const item = await getCalendarItem(userId, text(created?.id));
   if (!item) throw new Error("Calendar item insert returned no row");
   return item;
 }
 
 export async function updateCalendarItem(
-  ownerId: string,
+  userId: string,
   id: string,
   patch: CalendarItemPatch,
 ): Promise<CalendarItemRecord> {
   const sql = getDatabase();
-  const current = await getCalendarItem(ownerId, id);
-  if (!current) throw new CalendarNotFoundError("Calendar item not found");
-  if (
-    current.source === "RECRUITING_INTELLIGENCE" &&
-    Object.keys(patch).some((key) => !["status", "syncEnabled"].includes(key))
-  ) {
-    throw new CalendarConflictError("Source-driven dates only allow status or sync changes");
-  }
-  const allDay = patch.allDay ?? current.allDay;
-  const timing = normalizedTiming({
-    allDay,
-    startsAt: patch.startsAt ?? current.startsAt,
-    endsAt: patch.endsAt === undefined ? current.endsAt : patch.endsAt,
-    startsOn: patch.startsOn === undefined ? current.startsOn : patch.startsOn,
-    endsOn: patch.endsOn === undefined ? current.endsOn : patch.endsOn,
+  return sql.begin(async (transaction) => {
+    const current = await getCalendarItemWith(transaction, userId, id);
+    if (!current) throw new CalendarNotFoundError("Calendar item not found");
+    if (
+      current.source === "RECRUITING_INTELLIGENCE" &&
+      Object.keys(patch).some((key) => !["status", "syncEnabled"].includes(key))
+    ) {
+      throw new CalendarConflictError("Source-driven dates only allow status or sync changes");
+    }
+    if (patch.opportunityId !== undefined) {
+      await validateCompanyOpportunity(
+        transaction,
+        current.company?.id,
+        patch.opportunityId ?? undefined,
+        current.jobId ?? undefined,
+      );
+    }
+    const allDay = patch.allDay ?? current.allDay;
+    const timing = normalizedTiming({
+      allDay,
+      startsAt: patch.startsAt ?? current.startsAt,
+      endsAt: patch.endsAt === undefined ? current.endsAt : patch.endsAt,
+      startsOn: patch.startsOn === undefined ? current.startsOn : patch.startsOn,
+      endsOn: patch.endsOn === undefined ? current.endsOn : patch.endsOn,
+    });
+    const status = patch.status ?? current.status;
+    const completedAt =
+      status === "DONE" ? (current.completedAt ?? new Date().toISOString()) : null;
+    await transaction`
+      update public.calendar_items set
+        title = ${patch.title ?? current.title},
+        description = ${patch.description === undefined ? current.description : patch.description},
+        starts_at = ${timing.startsAt}, ends_at = ${timing.endsAt},
+        starts_on = ${timing.startsOn}, ends_on = ${timing.endsOn}, all_day = ${allDay},
+        timezone = ${patch.timezone ?? current.timezone}, status = ${status},
+        sync_enabled = ${patch.syncEnabled ?? current.syncEnabled},
+        opportunity_id = ${patch.opportunityId === undefined ? current.opportunityId : patch.opportunityId}::uuid,
+        completed_at = ${completedAt},
+        metadata = ${transaction.json((patch.metadata ?? current.metadata) as never)}
+      where id = ${id}::uuid and user_id = ${userId}::uuid and deleted_at is null
+    `;
+    const updated = await getCalendarItemWith(transaction, userId, id);
+    if (!updated) throw new CalendarNotFoundError("Calendar item not found");
+    if (current.status !== "DONE" && updated.status === "DONE") {
+      await recordProductEventWith(transaction, {
+        userId,
+        eventType: "CALENDAR_ITEM_COMPLETED",
+        source: "SERVER",
+        entityType: "CALENDAR_ITEM",
+        entityId: id,
+        deduplicationKey: `calendar-item-completed:${id}:${updated.completedAt}`,
+        context: { itemType: updated.type, companyId: updated.company?.id ?? null },
+      });
+    }
+    return updated;
   });
-  const status = patch.status ?? current.status;
-  const completedAt = status === "DONE" ? (current.completedAt ?? new Date().toISOString()) : null;
-  await sql`
-    update public.calendar_items set
-      title = ${patch.title ?? current.title},
-      description = ${patch.description === undefined ? current.description : patch.description},
-      starts_at = ${timing.startsAt}, ends_at = ${timing.endsAt},
-      starts_on = ${timing.startsOn}, ends_on = ${timing.endsOn}, all_day = ${allDay},
-      timezone = ${patch.timezone ?? current.timezone}, status = ${status},
-      sync_enabled = ${patch.syncEnabled ?? current.syncEnabled},
-      completed_at = ${completedAt},
-      metadata = ${sql.json((patch.metadata ?? current.metadata) as never)}
-    where id = ${id}::uuid and owner_id = ${ownerId}::uuid and deleted_at is null
-  `;
-  const updated = await getCalendarItem(ownerId, id);
-  if (!updated) throw new CalendarNotFoundError("Calendar item not found");
-  return updated;
 }
 
-export async function deleteCalendarItem(ownerId: string, id: string): Promise<void> {
+export async function deleteCalendarItem(userId: string, id: string): Promise<void> {
   const sql = getDatabase();
   const rows = await sql`
     update public.calendar_items set status = 'CANCELLED', completed_at = null,
       deleted_at = now()
-    where id = ${id}::uuid and owner_id = ${ownerId}::uuid and deleted_at is null
+    where id = ${id}::uuid and user_id = ${userId}::uuid and deleted_at is null
     returning id
   `;
   if (!rows[0]) throw new CalendarNotFoundError("Calendar item not found");
@@ -736,6 +838,15 @@ function mapPlan(row: Row, tasks: ApplicationPlanTaskRecord[]): ApplicationPlanR
       slug: text(row.company_slug),
     },
     jobId: nullableText(row.job_id),
+    opportunityId: nullableText(row.opportunity_id),
+    resolvedOpportunity: row.resolved_opportunity_id
+      ? {
+          id: text(row.resolved_opportunity_id),
+          title: text(row.resolved_opportunity_title),
+          status: text(row.resolved_opportunity_status),
+        }
+      : null,
+    resolutionMismatch: bool(row.resolution_mismatch),
     recruitingDateId: nullableText(row.recruiting_date_id),
     title: text(row.title),
     targetDate: date(row.target_date),
@@ -759,12 +870,23 @@ const applicationTaskSelect = calendarItemSelect.replace(
     apt.metadata as task_metadata, apt.created_at as task_created_at,`,
 );
 
-async function getPlanWithTasks(sql: QuerySql, ownerId: string, id: string) {
+async function getPlanWithTasks(sql: QuerySql, userId: string, id: string) {
   const [plan] = await sql`
-    select p.*, c.canonical_name as company_name, c.slug as company_slug
+    select p.*, c.canonical_name as company_name, c.slug as company_slug,
+      coalesce(current_membership.opportunity_id, p.opportunity_id) as resolved_opportunity_id,
+      resolved_canonical.title as resolved_opportunity_title,
+      resolved_opportunity.status::text as resolved_opportunity_status,
+      (p.opportunity_id is not null and current_membership.opportunity_id is not null
+        and p.opportunity_id <> current_membership.opportunity_id) as resolution_mismatch
     from public.application_plans p
     join public.companies c on c.id = p.company_id
-    where p.id = ${id}::uuid and p.owner_id = ${ownerId}::uuid
+    left join public.job_opportunity_postings current_membership
+      on current_membership.job_id = p.job_id and current_membership.valid_to is null
+    left join public.job_opportunities resolved_opportunity
+      on resolved_opportunity.id = coalesce(current_membership.opportunity_id, p.opportunity_id)
+    left join public.jobs resolved_canonical
+      on resolved_canonical.id = resolved_opportunity.canonical_source_posting_id
+    where p.id = ${id}::uuid and p.user_id = ${userId}::uuid
   `;
   if (!plan) return null;
   const rows = await sql.unsafe(
@@ -789,17 +911,23 @@ async function getPlanWithTasks(sql: QuerySql, ownerId: string, id: string) {
   );
 }
 
-export async function getApplicationPlan(ownerId: string, id: string) {
-  return getPlanWithTasks(getDatabase(), ownerId, id);
+export async function getApplicationPlan(userId: string, id: string) {
+  return getPlanWithTasks(getDatabase(), userId, id);
 }
 
 export async function createApplicationPlan(
-  ownerId: string,
+  userId: string,
   input: CreateApplicationPlanInput,
 ): Promise<ApplicationPlanRecord> {
   const sql = getDatabase();
-  return sql.begin(async (transaction) => {
+  const plan = await sql.begin(async (transaction) => {
     await validateCompanyJob(transaction, input.companyId, input.jobId);
+    await validateCompanyOpportunity(
+      transaction,
+      input.companyId,
+      input.opportunityId,
+      input.jobId,
+    );
     const [companyRow] = await transaction`
       select canonical_name from public.companies where id = ${input.companyId}::uuid
     `;
@@ -813,13 +941,13 @@ export async function createApplicationPlan(
         throw new CalendarConflictError("Recruiting date belongs to another company");
       }
     }
-    const fingerprint = planFingerprint(ownerId, input);
+    const fingerprint = planFingerprint(userId, input);
     const [existing] = await transaction`
       select id from public.application_plans
-      where owner_id = ${ownerId}::uuid and plan_fingerprint = ${fingerprint}
+      where user_id = ${userId}::uuid and plan_fingerprint = ${fingerprint}
     `;
     if (existing) {
-      const plan = await getPlanWithTasks(transaction, ownerId, text(existing.id));
+      const plan = await getPlanWithTasks(transaction, userId, text(existing.id));
       if (!plan) throw new Error("Existing plan could not be read");
       return plan;
     }
@@ -827,11 +955,12 @@ export async function createApplicationPlan(
     const steps = input.template ?? DEFAULT_APPLICATION_PLAN_TEMPLATE;
     const [planRow] = await transaction`
       insert into public.application_plans (
-        owner_id, company_id, job_id, recruiting_date_id, title, target_date,
+        user_id, company_id, job_id, opportunity_id, recruiting_date_id, title, target_date,
         timezone, plan_fingerprint, metadata
       ) values (
-        ${ownerId}::uuid, ${input.companyId}::uuid, ${input.jobId ?? null}::uuid,
-        ${input.recruitingDateId ?? null}::uuid, ${input.title}, ${input.targetDate},
+        ${userId}::uuid, ${input.companyId}::uuid, ${input.jobId ?? null}::uuid,
+        ${input.opportunityId ?? null}::uuid, ${input.recruitingDateId ?? null}::uuid,
+        ${input.title}, ${input.targetDate},
         ${input.timezone}, ${fingerprint},
         ${transaction.json({
           generator: "deterministic-v1",
@@ -848,11 +977,13 @@ export async function createApplicationPlan(
       const taskTitle = `${step.title}${topicAware ? ` — ${topics[0]}` : ""} — ${text(companyRow.canonical_name)}`;
       const [item] = await transaction`
         insert into public.calendar_items (
-          owner_id, company_id, job_id, application_plan_id, type, title, description,
+          user_id, company_id, job_id, opportunity_id, application_plan_id,
+          type, title, description,
           starts_at, starts_on, all_day, timezone, status, source, sync_enabled, metadata
         ) values (
-          ${ownerId}::uuid, ${input.companyId}::uuid, ${input.jobId ?? null}::uuid,
-          ${planId}::uuid, ${step.taskType}, ${taskTitle}, ${step.generatedReason},
+          ${userId}::uuid, ${input.companyId}::uuid, ${input.jobId ?? null}::uuid,
+          ${input.opportunityId ?? null}::uuid, ${planId}::uuid,
+          ${step.taskType}, ${taskTitle}, ${step.generatedReason},
           ${midnightUtc(taskDate)}, ${taskDate}, true, ${input.timezone}, 'TODO',
           'APPLICATION_PLAN', false,
           ${transaction.json({
@@ -867,10 +998,11 @@ export async function createApplicationPlan(
       `;
       await transaction`
         insert into public.application_plan_tasks (
-          application_plan_id, calendar_item_id, sequence, relative_day_offset,
+          user_id, application_plan_id, calendar_item_id, sequence, relative_day_offset,
           task_type, generated_reason, metadata
         ) values (
-          ${planId}::uuid, ${text(item?.id)}::uuid, ${sequence}, ${step.relativeDayOffset},
+          ${userId}::uuid, ${planId}::uuid, ${text(item?.id)}::uuid,
+          ${sequence}, ${step.relativeDayOffset},
           ${step.taskType}, ${step.generatedReason},
           ${transaction.json({
             templateVersion: 1,
@@ -880,75 +1012,126 @@ export async function createApplicationPlan(
         )
       `;
     }
-    const created = await getPlanWithTasks(transaction, ownerId, planId);
+    const created = await getPlanWithTasks(transaction, userId, planId);
     if (!created) throw new Error("Application plan insert returned no row");
+    await recordProductEventWith(transaction, {
+      userId,
+      eventType: "CALENDAR_PLAN_CREATED",
+      source: "SERVER",
+      entityType: "APPLICATION_PLAN",
+      entityId: created.id,
+      deduplicationKey: `calendar-plan-created:${created.id}`,
+      context: {
+        companyId: created.company.id,
+        jobId: created.jobId,
+        opportunityId: created.opportunityId,
+        templateVersion: created.templateVersion,
+      },
+    });
     return created;
   });
+  return plan;
 }
 
 export async function listApplicationPlans(
-  ownerId: string,
+  userId: string,
   options: { company?: string; status?: string } = {},
 ): Promise<ApplicationPlanRecord[]> {
   const sql = getDatabase();
   const rows = await sql`
     select p.id from public.application_plans p
     join public.companies c on c.id = p.company_id
-    where p.owner_id = ${ownerId}::uuid
+    where p.user_id = ${userId}::uuid
       and (${options.company ?? null}::text is null
         or c.slug = ${options.company ?? null} or c.id::text = ${options.company ?? null})
       and (${options.status ?? null}::text is null
         or p.status::text = ${options.status ?? null})
     order by p.target_date, p.id
   `;
-  const plans = await Promise.all(rows.map((row) => getPlanWithTasks(sql, ownerId, text(row.id))));
+  const plans = await Promise.all(rows.map((row) => getPlanWithTasks(sql, userId, text(row.id))));
   return plans.filter((plan): plan is ApplicationPlanRecord => plan !== null);
 }
 
 export async function activateApplicationPlan(
-  ownerId: string,
+  userId: string,
   id: string,
   syncEnabled: boolean,
 ): Promise<ApplicationPlanRecord> {
   const sql = getDatabase();
-  return sql.begin(async (transaction) => {
+  const plan = await sql.begin(async (transaction) => {
     const rows = await transaction`
       update public.application_plans set status = 'ACTIVE', activated_at = coalesce(activated_at, now())
-      where id = ${id}::uuid and owner_id = ${ownerId}::uuid
+      where id = ${id}::uuid and user_id = ${userId}::uuid
         and status in ('DRAFT', 'ACTIVE') returning id
     `;
     if (!rows[0]) throw new CalendarConflictError("Only draft or active plans can be activated");
     if (syncEnabled) {
       await transaction`
         update public.calendar_items set sync_enabled = true
-        where application_plan_id = ${id}::uuid and owner_id = ${ownerId}::uuid
+        where application_plan_id = ${id}::uuid and user_id = ${userId}::uuid
           and deleted_at is null
       `;
-      await enqueueCalendarSyncWith(transaction, ownerId);
+      await enqueueCalendarSyncWith(transaction, userId);
     }
-    const plan = await getPlanWithTasks(transaction, ownerId, id);
+    const plan = await getPlanWithTasks(transaction, userId, id);
     if (!plan) throw new CalendarNotFoundError("Application plan not found");
+    await recordProductEventWith(transaction, {
+      userId,
+      eventType: "CALENDAR_PLAN_ACTIVATED",
+      source: "SERVER",
+      entityType: "APPLICATION_PLAN",
+      entityId: plan.id,
+      deduplicationKey: `calendar-plan-activated:${plan.id}`,
+      context: {
+        syncEnabled,
+        companyId: plan.company.id,
+        jobId: plan.jobId,
+        opportunityId: plan.opportunityId,
+      },
+    });
     return plan;
   });
+  return plan;
 }
 
 export async function updateApplicationPlan(
-  ownerId: string,
+  userId: string,
   id: string,
-  patch: { title?: string; targetDate?: string; timezone?: string; status?: string },
+  patch: {
+    title?: string;
+    targetDate?: string;
+    timezone?: string;
+    status?: string;
+    opportunityId?: string | null;
+  },
 ): Promise<ApplicationPlanRecord> {
   const sql = getDatabase();
   return sql.begin(async (transaction) => {
-    const current = await getPlanWithTasks(transaction, ownerId, id);
+    const current = await getPlanWithTasks(transaction, userId, id);
     if (!current) throw new CalendarNotFoundError("Application plan not found");
     const targetDate = patch.targetDate ?? current.targetDate;
     const timezone = patch.timezone ?? current.timezone;
+    if (patch.opportunityId !== undefined) {
+      await validateCompanyOpportunity(
+        transaction,
+        current.company.id,
+        patch.opportunityId ?? undefined,
+        current.jobId ?? undefined,
+      );
+    }
     await transaction`
       update public.application_plans set title = ${patch.title ?? current.title},
         target_date = ${targetDate}, timezone = ${timezone},
-        status = ${patch.status ?? current.status}::public.application_plan_status
-      where id = ${id}::uuid and owner_id = ${ownerId}::uuid
+        status = ${patch.status ?? current.status}::public.application_plan_status,
+        opportunity_id = ${patch.opportunityId === undefined ? current.opportunityId : patch.opportunityId}::uuid
+      where id = ${id}::uuid and user_id = ${userId}::uuid
     `;
+    if (patch.opportunityId !== undefined) {
+      await transaction`
+        update public.calendar_items set opportunity_id = ${patch.opportunityId}::uuid
+        where application_plan_id = ${id}::uuid and user_id = ${userId}::uuid
+      `;
+    }
     if (patch.targetDate || patch.timezone) {
       for (const task of current.tasks) {
         if (task.relativeDayOffset === null) continue;
@@ -956,26 +1139,26 @@ export async function updateApplicationPlan(
         await transaction`
           update public.calendar_items set starts_on = ${taskDate},
             starts_at = ${midnightUtc(taskDate)}, timezone = ${timezone}
-          where id = ${task.calendarItem.id}::uuid
+          where id = ${task.calendarItem.id}::uuid and user_id = ${userId}::uuid
         `;
       }
     }
-    const updated = await getPlanWithTasks(transaction, ownerId, id);
+    const updated = await getPlanWithTasks(transaction, userId, id);
     if (!updated) throw new Error("Updated plan could not be read");
     return updated;
   });
 }
 
-export async function deleteApplicationPlan(ownerId: string, id: string): Promise<void> {
+export async function deleteApplicationPlan(userId: string, id: string): Promise<void> {
   const sql = getDatabase();
   const rows = await sql`
     update public.application_plans set status = 'ARCHIVED'
-    where id = ${id}::uuid and owner_id = ${ownerId}::uuid returning id
+    where id = ${id}::uuid and user_id = ${userId}::uuid returning id
   `;
   if (!rows[0]) throw new CalendarNotFoundError("Application plan not found");
   await sql`
     update public.calendar_items set status = 'CANCELLED', completed_at = null, deleted_at = now()
-    where application_plan_id = ${id}::uuid and owner_id = ${ownerId}::uuid
+    where application_plan_id = ${id}::uuid and user_id = ${userId}::uuid
       and deleted_at is null
   `;
 }
@@ -1024,17 +1207,17 @@ function mapGoogleStatus(row?: Row): GoogleCalendarStatusRecord {
   };
 }
 
-export async function getGoogleCalendarStatus(ownerId: string) {
+export async function getGoogleCalendarStatus(userId: string) {
   const sql = getDatabase();
   const [row] = await sql`
     select * from public.calendar_connections
-    where owner_id = ${ownerId}::uuid and provider = 'GOOGLE'
+    where user_id = ${userId}::uuid and provider = 'GOOGLE'
   `;
   return mapGoogleStatus(row);
 }
 
 export async function createGoogleOauthState(input: {
-  ownerId: string;
+  userId: string;
   stateHash: string;
   encryptedCodeVerifier: string;
   expiresAt: string;
@@ -1043,14 +1226,14 @@ export async function createGoogleOauthState(input: {
   const sql = getDatabase();
   await sql`
     delete from public.calendar_oauth_states
-    where owner_id = ${input.ownerId}::uuid and provider = 'GOOGLE'
+    where user_id = ${input.userId}::uuid and provider = 'GOOGLE'
       and (consumed_at is not null or expires_at <= now())
   `;
   const [row] = await sql`
     insert into public.calendar_oauth_states (
-      owner_id, provider, state_hash, encrypted_code_verifier, expires_at, return_to
+      user_id, provider, state_hash, encrypted_code_verifier, expires_at, return_to
     ) values (
-      ${input.ownerId}::uuid, 'GOOGLE', ${input.stateHash}, ${input.encryptedCodeVerifier},
+      ${input.userId}::uuid, 'GOOGLE', ${input.stateHash}, ${input.encryptedCodeVerifier},
       ${input.expiresAt}, ${input.returnTo}
     ) returning expires_at
   `;
@@ -1063,18 +1246,18 @@ export async function consumeGoogleOauthState(stateHash: string) {
     update public.calendar_oauth_states set consumed_at = now()
     where state_hash = ${stateHash} and provider = 'GOOGLE'
       and consumed_at is null and expires_at > now()
-    returning owner_id, encrypted_code_verifier, return_to
+    returning user_id, encrypted_code_verifier, return_to
   `;
   if (!row) return null;
   return {
-    ownerId: text(row.owner_id),
+    userId: text(row.user_id),
     encryptedCodeVerifier: text(row.encrypted_code_verifier),
     returnTo: text(row.return_to),
   };
 }
 
 export async function saveGoogleCalendarConnection(input: {
-  ownerId: string;
+  userId: string;
   providerAccountId: string;
   providerEmail: string | null;
   encryptedRefreshToken: string | null;
@@ -1084,21 +1267,21 @@ export async function saveGoogleCalendarConnection(input: {
   const sql = getDatabase();
   const [existing] = await sql`
     select encrypted_refresh_token from public.calendar_connections
-    where owner_id = ${input.ownerId}::uuid and provider = 'GOOGLE'
+    where user_id = ${input.userId}::uuid and provider = 'GOOGLE'
   `;
   const encryptedToken =
     input.encryptedRefreshToken ?? nullableText(existing?.encrypted_refresh_token);
   if (!encryptedToken) throw new CalendarConflictError("Google did not return a refresh token");
   await sql`
     insert into public.calendar_connections (
-      owner_id, provider, provider_account_id, provider_email, encrypted_refresh_token,
+      user_id, provider, provider_account_id, provider_email, encrypted_refresh_token,
       scopes, connection_status, token_metadata, selected_calendar_id, last_error_code
     ) values (
-      ${input.ownerId}::uuid, 'GOOGLE', ${input.providerAccountId}, ${input.providerEmail},
+      ${input.userId}::uuid, 'GOOGLE', ${input.providerAccountId}, ${input.providerEmail},
       ${encryptedToken}, ${input.scopes}, 'CONNECTED',
       ${sql.json(input.tokenMetadata as never)},
       'primary', null
-    ) on conflict (owner_id, provider) do update set
+    ) on conflict (user_id, provider) do update set
       provider_account_id = excluded.provider_account_id,
       provider_email = excluded.provider_email,
       encrypted_refresh_token = excluded.encrypted_refresh_token,
@@ -1107,11 +1290,11 @@ export async function saveGoogleCalendarConnection(input: {
       token_metadata = excluded.token_metadata,
       last_error_code = null
   `;
-  return getGoogleCalendarStatus(input.ownerId);
+  return getGoogleCalendarStatus(input.userId);
 }
 
 export async function updateGoogleCalendarConnection(
-  ownerId: string,
+  userId: string,
   patch: {
     selectedCalendarId?: string;
     preferences?: Partial<GoogleCalendarStatusRecord["preferences"]>;
@@ -1120,7 +1303,7 @@ export async function updateGoogleCalendarConnection(
   const sql = getDatabase();
   const [current] = await sql`
     select * from public.calendar_connections
-    where owner_id = ${ownerId}::uuid and provider = 'GOOGLE'
+    where user_id = ${userId}::uuid and provider = 'GOOGLE'
   `;
   if (!current) throw new CalendarNotFoundError("Google Calendar is not connected");
   const preferences = mapGoogleStatus(current).preferences;
@@ -1134,14 +1317,14 @@ export async function updateGoogleCalendarConnection(
       sync_career_events = ${patch.preferences?.syncCareerEvents ?? preferences.syncCareerEvents}
     where id = ${text(current.id)}::uuid
   `;
-  return getGoogleCalendarStatus(ownerId);
+  return getGoogleCalendarStatus(userId);
 }
 
-export async function getGoogleRefreshCredential(ownerId: string) {
+export async function getGoogleRefreshCredential(userId: string) {
   const sql = getDatabase();
   const [row] = await sql`
     select id, encrypted_refresh_token from public.calendar_connections
-    where owner_id = ${ownerId}::uuid and provider = 'GOOGLE'
+    where user_id = ${userId}::uuid and provider = 'GOOGLE'
   `;
   return row
     ? {
@@ -1151,35 +1334,35 @@ export async function getGoogleRefreshCredential(ownerId: string) {
     : null;
 }
 
-export async function disconnectGoogleCalendar(ownerId: string): Promise<void> {
+export async function disconnectGoogleCalendar(userId: string): Promise<void> {
   const sql = getDatabase();
   await sql`
     update public.calendar_connections set connection_status = 'DISCONNECTED',
       encrypted_refresh_token = null, token_metadata = '{}', last_error_code = null
-    where owner_id = ${ownerId}::uuid and provider = 'GOOGLE'
+    where user_id = ${userId}::uuid and provider = 'GOOGLE'
   `;
   await sql`
     delete from public.calendar_oauth_states
-    where owner_id = ${ownerId}::uuid and provider = 'GOOGLE' and consumed_at is null
+    where user_id = ${userId}::uuid and provider = 'GOOGLE' and consumed_at is null
   `;
 }
 
 export async function markGoogleCalendarReauthRequired(
-  ownerId: string,
+  userId: string,
   errorCode: string,
 ): Promise<void> {
   const sql = getDatabase();
   await sql`
     update public.calendar_connections set connection_status = 'REAUTH_REQUIRED',
       last_sync_status = 'ERROR', last_error_code = ${errorCode}
-    where owner_id = ${ownerId}::uuid and provider = 'GOOGLE'
+    where user_id = ${userId}::uuid and provider = 'GOOGLE'
   `;
 }
 
-async function enqueueCalendarSyncWith(sql: QuerySql, ownerId: string) {
+async function enqueueCalendarSyncWith(sql: QuerySql, userId: string) {
   const [connection] = await sql`
     select id from public.calendar_connections
-    where owner_id = ${ownerId}::uuid and provider = 'GOOGLE'
+    where user_id = ${userId}::uuid and provider = 'GOOGLE'
       and connection_status in ('CONNECTED', 'ERROR')
   `;
   if (!connection) return null;
@@ -1197,15 +1380,15 @@ async function enqueueCalendarSyncWith(sql: QuerySql, ownerId: string) {
   if (existing) return existing;
   const [created] = await sql`
     insert into public.calendar_sync_requests (
-      calendar_connection_id, requested_by_owner_id
-    ) values (${text(connection.id)}::uuid, ${ownerId}::uuid)
+      calendar_connection_id, user_id
+    ) values (${text(connection.id)}::uuid, ${userId}::uuid)
     returning *
   `;
   return created;
 }
 
-export async function enqueueGoogleCalendarSync(ownerId: string) {
-  const row = await enqueueCalendarSyncWith(getDatabase(), ownerId);
+export async function enqueueGoogleCalendarSync(userId: string) {
+  const row = await enqueueCalendarSyncWith(getDatabase(), userId);
   if (!row) throw new CalendarConflictError("Google Calendar is not connected");
   return {
     id: text(row.id),

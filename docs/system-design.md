@@ -8,8 +8,10 @@ Create a new monorepo at the current workspace root. The directory is empty and 
 - Python for collection, normalization, change detection orchestration, and future analytics.
 - PostgreSQL as the system of record and coordination boundary.
 - Plain versioned SQL migrations compatible with PostgreSQL/Supabase.
-- Run-once Python collector commands for Milestone 1; cron or GitHub Actions can schedule the same commands later.
+- A small PostgreSQL scheduler plus typed Python dispatcher for continuous collection and recovery.
 - Provider adapters over a shared async HTTP client. External services never write directly to database tables.
+- A direct-source-first discovery path that operates without a paid search API. General web search
+  is supplemental and `ZERO_COST_MODE=true` is the runtime default.
 
 Milestone 1 deliberately has no Redis, Celery, message broker, vector search, LLM, authentication, recruiter intelligence, GitHub watcher, alert engine, or ML runtime.
 
@@ -61,6 +63,55 @@ flowchart LR
 - Web route handlers validate inputs with Zod and query through a small server-side data access package.
 - The browser never receives `raw_payload` or collector error internals.
 - Cross-language vocabularies are defined once in SQL/docs and mirrored in generated or tested TypeScript/Python enums. Milestone 1 includes parity tests where generation would add more machinery than value.
+
+## Discovery priority and source graph
+
+The canonical discovery order is known source, official ATS/API, known company careers page,
+bounded direct-domain discovery, GitHub/university sources, optional local/free search, then an
+optional commercial provider. RecruitIntel must remain useful when the final two tiers are absent.
+
+The existing `sources` table is the durable `SourceEndpoint` graph. Migration 0009 adds discovery
+method/fingerprint, first-seen/last-verified time, confidence, bounded provenance, and an optional
+parent source. Configured company careers URLs and company-homepage seeds become monitored source
+knowledge. Permitted fetched pages can deterministically yield same-domain recruiting pages and
+recognized ATS endpoints. Rediscovery is idempotent; source knowledge does not itself create jobs,
+observations, claims, or recruiting facts.
+
+```text
+Company -> SourceEndpoint -> Collector or public candidate -> evidence/facts
+              |                    ^
+              +-- discovered -----+
+```
+
+Milestone 8 adds an additive canonical job graph after source collection:
+
+```text
+Company -> SourceEndpoint -> SourcePosting (`jobs`) -> CanonicalOpportunity
+                                |                         |
+                                +-> snapshots/evidence   +-> active user-facing count
+```
+
+Every source posting receives a singleton opportunity transactionally. A bounded resolver may later
+merge memberships using only validated provider-native identity, an exact official application URL,
+or an explicit exact official cross-reference. Source postings and temporal resolution lineage are
+never deleted by canonicalization. Source authority and collection completeness are reviewed,
+versioned capabilities, so weak disappearance or partial collection cannot close an opportunity.
+See `docs/canonical-job-graph.md` for the schema, lifecycle, correction, and API contracts.
+
+Known ATS/company-career coverage short-circuits equivalent general-search work. Greenhouse and
+Lever are the currently executable ATS adapters; recognition of other ATS URL families remains
+fail-closed until their collectors and policies are implemented. Future explicit browser imports
+use the same source graph with user/browser provenance rather than a parallel monitoring system.
+
+`SearchProvider` remains provider-neutral, but search is a supplemental candidate source only.
+Static fixtures are development-only, an operator-controlled SearXNG instance is optional and
+requires upstream-engine review, and You.com remains a disabled optional adapter. Provider-returned
+URLs cannot bypass source policy, pinned DNS/redirect/robots transport, or normal processing.
+`docs/search-provider-integration.md` and `docs/zero-cost-discovery.md` are the canonical contracts.
+
+Permitted company pages can yield bounded schema.org `JobPosting` JSON-LD. Those postings are
+attached to a durable company-careers SourceEndpoint and then enter the same singleton/resolver
+path. They do not bypass source policy, robots rules, pinned transport, or provider throttling.
 
 ## Collector lifecycle
 
@@ -155,6 +206,7 @@ erDiagram
     COMPANIES ||--o{ COMPANY_ALIASES : has
     COMPANIES ||--o{ COMPANY_DOMAINS : has
     COMPANIES ||--o{ SOURCES : owns
+    SOURCES o|--o{ SOURCES : discovers
     SOURCES ||--o{ COLLECTOR_RUNS : synced_by
     COLLECTOR_RUNS ||--o{ COLLECTOR_ERRORS : records
     COMPANIES ||--o{ JOBS : posts
@@ -204,6 +256,13 @@ erDiagram
         numeric reliability
         boolean enabled
         jsonb metadata
+        source_discovery_method discovery_method
+        timestamptz first_seen_at
+        timestamptz last_verified_at
+        numeric discovery_confidence
+        uuid discovered_from_source_id FK
+        text discovery_fingerprint UK
+        jsonb discovery_provenance
     }
     COLLECTOR_RUNS {
         uuid id PK
@@ -405,11 +464,56 @@ plan sequence constraints prevent projection/task duplication. External mappings
 Google event IDs make provider retries idempotent. Refresh credentials use a versioned encryption
 abstraction and access tokens remain ephemeral.
 
+## Milestone 6 identity and ownership extensions
+
+Migration `0006_identity_privacy_audit_instrumentation.sql` adds the canonical `users`,
+`user_sessions`, `user_identities`, and `auth_verifications` contract for pinned Better Auth 1.7.1.
+Every private Calendar/planning/provider row now carries a valid user foreign key, including
+denormalized owner keys on task, mapping, request, and run tables. Compound foreign keys make
+cross-user graph construction invalid at the database boundary.
+
+Shared intelligence remains unowned. Personal routes derive user identity from an HttpOnly session
+and never accept a user identifier in browser input. Operational mutation routes use an admin user
+or a hashed, scoped service principal; admin status does not bypass private owner predicates.
+
+The migration also adds append-only minimized `audit_events`, private `product_events`, future
+ranking decision/impression denominators, privacy request lifecycle, watchlist ownership, and the
+minimal hashed/expiring/revocable browser-extension grant foundation. Exact security, privacy, and
+manual auth setup are documented in `docs/identity-privacy-audit.md`.
+
+## Milestone 7 orchestration and source-governance extensions
+
+Migration `0007_durable_orchestration_source_governance.sql` adds `schedules`, `work_items`,
+`work_attempts`, `dead_letters`, `source_policies`, `source_policy_host_rules`, pragmatic shared
+`rate_limit_states`, source-health samples/state/incidents, and database-role-to-service-principal
+bindings. WorkItems deliberately contain orchestration coordinates rather than domain payloads.
+Existing GitHub, public-web, Calendar, collector, and external-event tables remain the source of
+domain state, history, ownership, and side-effect idempotency.
+
+The scheduler transactionally enqueues one fingerprinted occurrence using PostgreSQL-authoritative
+time. Workers claim eligible lanes with `FOR UPDATE SKIP LOCKED`; every claim has an attempt row and
+fenced lease token. Short tasks use a bounded timeout and long lease. ATS, GitHub, search, and
+Calendar tasks may heartbeat. The scheduler reaper recovers expired leases and reconciles linked
+legacy request/run status. Retry classification is deterministic and respects a bounded provider
+`Retry-After`; exhausted or permanent failures become dead letters with redacted diagnostics.
+
+Source policy is fail-closed at enqueue and again immediately before outbound execution. Unknown,
+`REVIEW_REQUIRED`, and `BLOCKED` providers cannot run automatically. General public-web requests
+use an exact-version `httpx`/`httpcore` transport that resolves once, rejects mixed unsafe address
+sets, connects only to a validated address, retains the original HTTP Host and HTTPS SNI/certificate
+hostname, disables ambient proxies, and independently resolves every redirect and robots request.
+The complete contract is documented in `docs/orchestration-source-governance.md`.
+
+Search-provider cost policy is enforced twice. In the runtime registry, zero-cost mode rejects
+providers marked paid or ineligible. In PostgreSQL, each provider/credential-slot call reserves its
+daily/monthly request, estimated-cost, and paid-spend budget transactionally before network I/O.
+`FREE_TIER` usage cannot request paid overage and `PAID` usage cannot execute in zero-cost mode.
+Missing commercial credentials never prevent startup.
+
 ## Future ERD extensions
 
 Later migrations add:
 
-- `watchlists`, users, and watchlist companies.
 - `alerts` and notification deliveries.
 - application tracking CRM and analytics projections.
 
@@ -429,7 +533,7 @@ Product routes are read-only except for an explicit collector-run command intend
 
 Responses use `{ data, meta? }` and errors use a stable `{ error: { code, message } }` shape. Query parameters are validated with Zod. Pagination is cursor-ready, though a bounded `limit/offset` is sufficient for the seed-sized Milestone 1 UI.
 
-Milestone 2 adds typed repository attachment/listing, durable sync requests, deterministic company question analytics, and question provenance detail. Mutation routes require `RECRUITINTEL_ADMIN_TOKEN`; `GITHUB_TOKEN` is never exposed to the web application. Exact frontend response shapes are documented in `docs/github-intelligence.md`.
+Milestone 2 adds typed repository attachment/listing, durable sync requests, deterministic company question analytics, and question provenance detail. As of Milestone 6, mutation routes require an authenticated admin or a hashed `ADMIN_MUTATE` service principal; `GITHUB_TOKEN` is never exposed to the web application. Exact frontend response shapes are documented in `docs/github-intelligence.md`.
 
 Milestone 3 adds typed public-web intelligence, observation/detail, claim, and search-state reads plus admin-authenticated durable search/fetch requests. The browser receives normalized bounded evidence and provenance, never raw HTML. Exact frontend response shapes are documented in `docs/public-web-intelligence.md`.
 
@@ -440,26 +544,54 @@ one-way Calendar sync queue. OAuth routes retain state and refresh credentials o
 provider calls run in the finite Python worker. Exact contracts are documented in
 `docs/recruiting-calendar.md` and setup is in `docs/google-calendar-integration.md`.
 
+Milestone 6 adds pinned Better Auth session persistence, reusable user/admin/service actor
+resolution, authenticated ownership for every Milestone 5 personal route, compound ownership
+constraints, service principals, privacy request/deletion contracts, an append-only audit ledger,
+cross-language log/diagnostic redaction, and privacy-safe instrumentation for current product
+behaviors. `GET /api/me` exposes the current identity; Better Auth owns `/api/auth/*`. Public
+intelligence response shapes are otherwise unchanged.
+
+Milestone 7 adds authenticated internal/admin read APIs for safe orchestration metadata, schedules,
+source policies, source health, and incidents. Only global dead letters may be administratively
+requeued; private Calendar work cannot be inspected or requeued through these APIs. Existing
+product/public response shapes are unchanged.
+
 ## Local development and deployment
 
 Docker Compose runs PostgreSQL only. The web app and Python collector run on the host for fast feedback. Migrations and seed SQL are explicit scripts. Seed data includes recognizable companies and synthetic local jobs/events, clearly labeled as seed/demo records. Basic UI development therefore needs no network or provider credentials.
 
-Scheduling is an interface at the process boundary: `python -m recruitintel_collectors run --source <uuid>` performs one finite sync and returns a meaningful exit code. Local cron, GitHub Actions, Supabase scheduling, Celery, Temporal, or another orchestrator can invoke that command later without changing collector domain code.
+Continuous work uses two finite commands suitable for a supervised service: `scheduler` enqueues
+due `INTERVAL`/`DAILY_AT` occurrences and reaps expired leases; `worker` claims configured lanes and
+dispatches enumerated WorkTypes to typed handlers. Product routes still only enqueue durable domain
+requests. The scheduler and worker can also run `--once` for deterministic local and smoke tests.
+Deployment, role binding, backup, reconciliation, and recovery are documented in
+`docs/milestone-7-orchestration-operations.md`.
 
-Calendar synchronization uses the same boundary:
-`python -m recruitintel_collectors calendar-sync --request-id <uuid>`. The HTTP route only creates
-or returns an active durable request.
+The default environment sets `ZERO_COST_MODE=true`. No search API credential is required. An
+optional `SEARXNG_BASE_URL` registers only an operator-controlled adapter; policy and budget remain
+fail-closed until the instance and every enabled upstream engine are reviewed. Direct-source, ATS,
+GitHub, university, Calendar, and privacy work continue when SearXNG is absent or unavailable.
 
 ## Security and trust boundaries
 
 - External payloads are untrusted and validated with Pydantic.
 - Raw HTML is sanitized; the UI renders normalized text, not provider HTML.
 - Fixed provider hosts and validated tenant slugs prevent arbitrary URL fetching in Milestone 1.
-- Milestone 3 arbitrary public URLs are restricted to HTTP/HTTPS, normalized, DNS-checked against private/non-routable destinations before every request and redirect, robots-checked, rate/size/time bounded, and never rendered or executed.
+- Arbitrary public URLs are restricted to HTTP/HTTPS and approved ports; resolved address sets must
+  be entirely public. The actual socket is pinned to the approved address while Host, SNI, and TLS
+  certificate validation retain the original hostname. Every redirect and robots request repeats
+  policy and resolution checks. Ambient proxies are disabled, requests are rate/size/time bounded,
+  and content is never rendered or executed.
 - LinkedIn URLs may be retained from permitted search results or manual input, but the fetcher blocks LinkedIn hosts and redirect targets before any HTTP request. No cookies, authenticated scraping, browser automation, CAPTCHA bypass, or anti-bot circumvention exists.
 - Secrets are read from environment variables and `.env` is ignored.
-- Database users can later be split into migration, collector-write, and web-read roles.
-- Collector logs redact headers, query secrets, and response bodies.
+- Authentication and Google Calendar OAuth use separate clients and grants. Better Auth provider
+  tokens are removed before persistence; Calendar refresh credentials remain envelope-encrypted.
+- Structured TypeScript/Python logs, API errors, provider errors, and persisted worker diagnostics
+  pass through shared golden-tested secret/PII redaction behavior.
+- Personal route access always includes the authenticated user predicate. Admin status does not
+  imply access to another user's private content.
+- Scheduler, global collector, Calendar, privacy-cleanup, and trusted web-app database capability
+  roles are explicit and bound to active service principals and allowed work lanes.
 - No collected text is passed to an LLM or treated as instructions.
 - Confidence is an internal ranking attribute, not a truth claim.
 

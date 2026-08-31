@@ -1,4 +1,5 @@
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -6,9 +7,15 @@ import psycopg
 import pytest
 from psycopg.rows import dict_row
 from recruitintel_collectors.infrastructure.public_web_postgres import PostgresPublicWebRepository
-from recruitintel_collectors.public_web.models import FetchedDocument, SearchResult
+from recruitintel_collectors.public_web.direct_discovery import DirectSourceDiscovery
+from recruitintel_collectors.public_web.models import (
+    CandidateConfig,
+    CompanyWebConfig,
+    FetchedDocument,
+    SearchResult,
+)
 from recruitintel_collectors.public_web.runner import PublicWebWorker
-from recruitintel_collectors.public_web.search import StaticSearchProvider
+from recruitintel_collectors.public_web.search import SearchProviderRegistry, StaticSearchProvider
 
 FIXTURES = Path(__file__).parent / "fixtures"
 COMPANY_ID = UUID("c1000000-0000-0000-0000-000000000001")
@@ -46,11 +53,31 @@ class SyntheticFetcher:
 
 async def _reset(database_url: str) -> None:
     async with await psycopg.AsyncConnection.connect(database_url) as connection:
+        await connection.execute("delete from public.company_domains where domain = 'stripe.com'")
         await connection.execute("delete from public.companies where id = %s", (COMPANY_ID,))
 
 
 async def _seed(database_url: str) -> None:
     async with await psycopg.AsyncConnection.connect(database_url) as connection:
+        await connection.execute(
+            """
+            update public.source_policies set
+              status = 'ALLOWED_WITH_LIMITS', terms_status = 'REVIEWED',
+              reviewed_at = now(), reviewed_by = 'integration-test'
+            where provider in ('static', 'public_web')
+            """
+        )
+        await connection.execute(
+            """
+            insert into public.source_policy_host_rules (
+              source_policy_id, hostname_suffix, allow_subdomains
+            )
+            select id, host, false from public.source_policies
+            cross join (values ('stripe.com'), ('careerengagement.utexas.edu')) fixture(host)
+            where provider = 'public_web'
+            on conflict (source_policy_id, hostname_suffix) do nothing
+            """
+        )
         await connection.execute(
             """
             insert into public.companies (id, canonical_name, slug, website, careers_url)
@@ -68,10 +95,12 @@ async def _seed(database_url: str) -> None:
         await connection.execute(
             """
             insert into public.sources (
-              id, company_id, source_type, provider, external_key, name, reliability
+              id, company_id, source_type, provider, external_key, name, reliability,
+              source_policy_id
             ) values (
               %s, %s, 'PUBLIC_WEB', 'web_search',
-              'static:web-integration-stripe', 'Synthetic static search', 0.500
+              'static:web-integration-stripe', 'Synthetic static search', 0.500,
+              (select id from public.source_policies where provider = 'static')
             )
             """,
             (SEARCH_SOURCE_ID, COMPANY_ID),
@@ -82,7 +111,7 @@ async def _seed(database_url: str) -> None:
               id, company_id, source_id, provider, template_key, query,
               graduation_year, focus, minimum_interval_seconds, max_results, max_fetches
             ) values (
-              %s, %s, %s, 'static', 'internship', %s,
+              %s, %s, %s, 'static', 'career-fair', %s,
               2027, 'INTERNSHIP', 86400, 10, 5
             )
             """,
@@ -131,6 +160,121 @@ async def _enqueue_fetch(database_url: str, candidate_id: UUID) -> UUID:
         return UUID(str(row["id"]))
 
 
+async def _retire_domain_test_work(database_url: str, request_id: UUID) -> None:
+    """Domain-worker tests do not bypass orchestration in production."""
+    async with await psycopg.AsyncConnection.connect(database_url) as connection:
+        await connection.execute(
+            "delete from public.work_items where public_web_work_request_id = %s",
+            (request_id,),
+        )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_direct_source_graph_is_durable_deduplicated_and_policy_gated() -> None:
+    database_url = _database_url()
+    await _reset(database_url)
+    await _seed(database_url)
+    repository = PostgresPublicWebRepository(database_url)
+    company = CompanyWebConfig(
+        id=COMPANY_ID,
+        canonical_name="Stripe Integration",
+        slug="web-integration-stripe",
+        website="https://stripe.com",
+        careers_url="https://stripe.com/jobs",
+        domains=("stripe.com",),
+    )
+    candidate = CandidateConfig(
+        id=UUID("c5000000-0000-0000-0000-000000000001"),
+        company=company,
+        source_id=SEARCH_SOURCE_ID,
+        canonical_url="https://stripe.com",
+        original_url="https://stripe.com",
+        source_provider="direct",
+        fetch_status="PENDING",
+    )
+    async with await psycopg.AsyncConnection.connect(database_url) as connection:
+        await connection.execute(
+            """
+            insert into public.public_web_candidates (
+              id, company_id, source_id, source_provider, original_url, canonical_url
+            ) values (%s, %s, %s, 'direct', 'https://stripe.com', 'https://stripe.com')
+            """,
+            (candidate.id, COMPANY_ID, SEARCH_SOURCE_ID),
+        )
+        await connection.execute(
+            """
+            update public.source_policies set
+              status = 'ALLOWED_WITH_LIMITS', terms_status = 'REVIEWED',
+              reviewed_at = now(), reviewed_by = 'integration-test'
+            where provider = 'greenhouse'
+            """
+        )
+
+    fetched = FetchedDocument(
+        requested_url="https://stripe.com",
+        final_url="https://stripe.com",
+        status_code=200,
+        content_type="text/html",
+        body="""
+          <a href="/jobs/students">Students</a>
+          <a href="https://boards.greenhouse.io/stripe">Greenhouse jobs</a>
+          <a href="https://stripe.wd5.myworkdayjobs.com/External/jobs">Workday jobs</a>
+        """,
+        fetched_at=datetime(2026, 8, 24, tzinfo=UTC),
+    )
+    discoveries = DirectSourceDiscovery().discover(company, fetched)
+    try:
+        assert (
+            await repository.persist_direct_sources(
+                candidate=candidate,
+                discoveries=discoveries,
+                verified_at=fetched.fetched_at,
+            )
+            == 2
+        )
+        assert (
+            await repository.persist_direct_sources(
+                candidate=candidate,
+                discoveries=discoveries,
+                verified_at=fetched.fetched_at,
+            )
+            == 0
+        )
+
+        async with await psycopg.AsyncConnection.connect(
+            database_url, row_factory=dict_row
+        ) as connection:
+            cursor = await connection.execute(
+                """
+                select provider, external_key, enabled, discovery_method::text,
+                  discovery_fingerprint
+                from public.sources
+                where company_id = %s and provider in ('public_web', 'greenhouse', 'workday')
+                order by provider, external_key
+                """,
+                (COMPANY_ID,),
+            )
+            rows = await cursor.fetchall()
+            direct_rows = [row for row in rows if row["discovery_method"] != "CONFIGURED"]
+            assert len(direct_rows) == 2
+            assert len({row["discovery_fingerprint"] for row in direct_rows}) == 2
+            workday = next(row for row in direct_rows if row["provider"] == "workday")
+            assert not workday["enabled"]
+
+            cursor = await connection.execute(
+                """
+                select count(*)::int from public.schedules schedule
+                join public.sources source on source.id = schedule.source_id
+                where source.company_id = %s and source.provider in ('greenhouse', 'workday')
+                """,
+                (COMPANY_ID,),
+            )
+            assert (await cursor.fetchone())["count"] == 1
+    finally:
+        await _reset(database_url)
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_public_web_end_to_end_change_conflict_and_retry_idempotency() -> None:
@@ -158,52 +302,73 @@ async def test_public_web_end_to_end_change_conflict_and_retry_idempotency() -> 
                     title="UT Austin career fair",
                     rank=3,
                 ),
+                SearchResult(
+                    url="https://unreviewed-destination.example/internships",
+                    title="Unreviewed destination retained only as provenance",
+                    rank=4,
+                ),
             ]
         }
     )
     worker = PublicWebWorker(
         repository=repository,
-        search_providers={provider.name: provider},
+        search_registry=SearchProviderRegistry([provider]),
         fetcher=fetcher,
     )
     try:
         search = await worker.run(SEARCH_REQUEST_ID)
-        assert search.candidates == 2
+        await _retire_domain_test_work(database_url, SEARCH_REQUEST_ID)
+        assert search.candidates == 3
 
         fetch_requests = await _pending_requests(database_url, "WEB_FETCH")
         assert len(fetch_requests) == 2
         for request_id in fetch_requests:
             result = await worker.run(request_id)
+            await _retire_domain_test_work(database_url, request_id)
             assert result.fetched == 1
             assert not result.unchanged
         for request_id in await _pending_requests(database_url, "WEB_PROCESS"):
             await worker.run(request_id)
+            await _retire_domain_test_work(database_url, request_id)
 
         async with await psycopg.AsyncConnection.connect(
             database_url, row_factory=dict_row
         ) as connection:
             cursor = await connection.execute(
                 """
-                select id from public.public_web_candidates
-                where company_id = %s and canonical_url like 'https://stripe.com/%%'
+                select candidate.id, request.id as request_id
+                from public.public_web_candidates candidate
+                join public.public_web_work_requests request
+                  on request.candidate_id = candidate.id and request.work_type = 'WEB_PROCESS'
+                where candidate.company_id = %s
+                  and candidate.canonical_url like 'https://stripe.com/%%'
+                order by request.requested_at desc limit 1
                 """,
                 (COMPANY_ID,),
             )
             official = await cursor.fetchone()
             assert official is not None
             official_id = UUID(str(official["id"]))
+            resolved_source_ids = await repository.source_ids_for_request(
+                UUID(str(official["request_id"]))
+            )
+            assert len(resolved_source_ids) == 1
+            assert resolved_source_ids[0] != SEARCH_SOURCE_ID
 
         fetcher.official_fixture = "web_official_internship_v2.html"
         changed_fetch = await _enqueue_fetch(database_url, official_id)
         await worker.run(changed_fetch)
+        await _retire_domain_test_work(database_url, changed_fetch)
         changed_process = await _pending_requests(database_url, "WEB_PROCESS")
         assert len(changed_process) == 1
         changed = await worker.run(changed_process[0])
+        await _retire_domain_test_work(database_url, changed_process[0])
         assert changed.observations_created >= 1
         assert changed.events_created >= 2
 
         unchanged_fetch = await _enqueue_fetch(database_url, official_id)
         unchanged = await worker.run(unchanged_fetch)
+        await _retire_domain_test_work(database_url, unchanged_fetch)
         assert unchanged.unchanged
         assert not await _pending_requests(database_url, "WEB_PROCESS")
 
@@ -221,16 +386,52 @@ async def test_public_web_end_to_end_change_conflict_and_retry_idempotency() -> 
                   (select count(*) from public.public_recruiting_observations
                     where company_id = %s)::int observations,
                   (select count(*) from public.recruiting_events
-                    where company_id = %s and public_web_candidate_id is not null)::int events
+                    where company_id = %s and public_web_candidate_id is not null)::int events,
+                  (select count(*) from public.jobs where company_id = %s)::int source_jobs,
+                  (select count(*) from public.job_opportunities
+                    where company_id = %s and status = 'ACTIVE')::int opportunities,
+                  (select count(*) from public.job_snapshots snapshot
+                    join public.jobs job on job.id = snapshot.job_id
+                    where job.company_id = %s)::int job_snapshots
                 """,
-                (COMPANY_ID, COMPANY_ID, COMPANY_ID, COMPANY_ID),
+                (
+                    COMPANY_ID,
+                    COMPANY_ID,
+                    COMPANY_ID,
+                    COMPANY_ID,
+                    COMPANY_ID,
+                    COMPANY_ID,
+                    COMPANY_ID,
+                ),
             )
             counts = await cursor.fetchone()
             assert counts is not None
-            assert counts["candidates"] == 2
+            assert counts["candidates"] == 4  # three search candidates plus configured careers
             assert counts["documents"] == 3
             assert counts["observations"] >= 5
+            assert counts["source_jobs"] == 1
+            assert counts["opportunities"] == 1
+            assert counts["job_snapshots"] == 2
             event_count = counts["events"]
+
+            source_endpoint = await (
+                await connection.execute(
+                    """
+                    select source.source_type::text, source.provider,
+                      source.discovered_from_source_id
+                    from public.jobs job join public.sources source on source.id = job.source_id
+                    where job.company_id = %s
+                    """,
+                    (COMPANY_ID,),
+                )
+            ).fetchone()
+            assert source_endpoint == {
+                "source_type": "COMPANY_CAREERS",
+                "provider": "public_web",
+                # The configured careers source already existed, so search provenance
+                # remains on the candidate rather than replacing the known source origin.
+                "discovered_from_source_id": None,
+            }
 
             claims = await connection.execute(
                 """
@@ -267,6 +468,7 @@ async def test_public_web_end_to_end_change_conflict_and_retry_idempotency() -> 
 
         second_unchanged = await _enqueue_fetch(database_url, official_id)
         await worker.run(second_unchanged)
+        await _retire_domain_test_work(database_url, second_unchanged)
         async with await psycopg.AsyncConnection.connect(
             database_url, row_factory=dict_row
         ) as connection:

@@ -6,6 +6,8 @@ from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urljoin
 
+from recruitintel_collectors.domain.normalization import html_to_text, normalize_text
+
 from .models import ExtractedDocument, FetchedDocument
 from .urls import UnsafeUrlError, canonicalize_url
 
@@ -148,14 +150,113 @@ def _json_ld_metadata(parts: list[str]) -> tuple[dict[str, Any], datetime | None
     published: datetime | None = None
     types: list[str] = []
     people: list[dict[str, str]] = []
+    job_postings: list[dict[str, Any]] = []
+
+    def bounded_text(value: Any, maximum: int) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = normalize_text(value)[:maximum]
+        return normalized or None
+
+    def bounded_text_or_list(value: Any, maximum: int) -> str | None:
+        if isinstance(value, str):
+            return bounded_text(value, maximum)
+        if isinstance(value, list):
+            items = [bounded_text(item, maximum) for item in value[:50]]
+            return "; ".join(item for item in items if item)[:maximum] or None
+        return None
+
+    def job_location(value: Any) -> str | None:
+        values = value if isinstance(value, list) else [value]
+        locations: list[str] = []
+        for item in values[:20]:
+            if not isinstance(item, dict):
+                continue
+            address = item.get("address")
+            if isinstance(address, str):
+                candidate = bounded_text(address, 500)
+            elif isinstance(address, dict):
+                candidate = ", ".join(
+                    part
+                    for part in (
+                        bounded_text(address.get("addressLocality"), 100),
+                        bounded_text(address.get("addressRegion"), 100),
+                        bounded_text(address.get("addressCountry"), 100),
+                    )
+                    if part
+                )
+            else:
+                candidate = None
+            if candidate:
+                locations.append(candidate)
+        return "; ".join(dict.fromkeys(locations))[:1_000] or None
+
+    def normalize_job_posting(value: dict[str, Any]) -> dict[str, Any] | None:
+        title = bounded_text(value.get("title") or value.get("name"), 1_000)
+        description_value = value.get("description")
+        description = (
+            html_to_text(description_value)[:50_000] if isinstance(description_value, str) else ""
+        )
+        if not title:
+            return None
+        result: dict[str, Any] = {"title": title, "description": description}
+        for source_key, target_key, maximum in (
+            ("url", "url", 8_192),
+            ("datePosted", "date_posted", 100),
+            ("validThrough", "valid_through", 100),
+            ("jobLocationType", "job_location_type", 200),
+            ("skills", "skills_text", 2_000),
+            ("qualifications", "qualifications", 5_000),
+            ("educationRequirements", "education_requirements", 2_000),
+            ("experienceRequirements", "experience_requirements", 2_000),
+        ):
+            item = bounded_text(value.get(source_key), maximum)
+            if item:
+                result[target_key] = item
+        employment_type = bounded_text_or_list(value.get("employmentType"), 200)
+        if employment_type:
+            result["employment_type"] = employment_type
+        location = job_location(value.get("jobLocation"))
+        if location:
+            result["location"] = location
+        identifier = value.get("identifier")
+        if isinstance(identifier, dict):
+            identifier_value = bounded_text(identifier.get("value"), 500)
+            if identifier_value:
+                result["identifier"] = identifier_value
+        organization = value.get("hiringOrganization")
+        if isinstance(organization, dict):
+            name = bounded_text(organization.get("name"), 500)
+            same_as = bounded_text(organization.get("sameAs"), 8_192)
+            if name:
+                result["hiring_organization_name"] = name
+            if same_as:
+                result["hiring_organization_url"] = same_as
+        applicant_location = value.get("applicantLocationRequirements")
+        if isinstance(applicant_location, dict):
+            name = bounded_text(applicant_location.get("name"), 500)
+            if name:
+                result["applicant_location_requirements"] = name
+        return result
 
     def visit(value: Any) -> None:
         nonlocal published
         if isinstance(value, dict):
             type_value = value.get("@type")
-            if isinstance(type_value, str):
-                types.append(type_value)
-                if type_value.casefold() == "person":
+            type_values = (
+                [type_value]
+                if isinstance(type_value, str)
+                else [item for item in type_value if isinstance(item, str)]
+                if isinstance(type_value, list)
+                else []
+            )
+            for schema_type in type_values:
+                types.append(schema_type)
+                if schema_type.casefold() == "jobposting" and len(job_postings) < 50:
+                    posting = normalize_job_posting(value)
+                    if posting:
+                        job_postings.append(posting)
+                if schema_type.casefold() == "person":
                     name = value.get("name")
                     job_title = value.get("jobTitle")
                     url = value.get("url")
@@ -186,6 +287,11 @@ def _json_ld_metadata(parts: list[str]) -> tuple[dict[str, Any], datetime | None
         metadata["people"] = list(
             {json.dumps(item, sort_keys=True): item for item in people}.values()
         )[:20]
+    if job_postings:
+        metadata["job_postings"] = list(
+            {json.dumps(item, sort_keys=True): item for item in job_postings}.values()
+        )[:50]
+        metadata["job_postings_truncated"] = len(job_postings) >= 50
     return metadata, published
 
 
@@ -242,6 +348,7 @@ def normalized_content_hash(document: ExtractedDocument) -> str:
         "headings": [_clean(value).casefold() for value in document.headings],
         "text": [_clean(value).casefold() for value in document.text.splitlines() if _clean(value)],
         "published_at": document.published_at.isoformat() if document.published_at else None,
+        "structured_metadata": document.structured_metadata,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(encoded.encode()).hexdigest()

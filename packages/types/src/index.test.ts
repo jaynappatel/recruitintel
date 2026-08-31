@@ -6,6 +6,9 @@ import {
   createRecruiterRequestSchema,
   interviewQuestionAnalyticsSchema,
   jobsQuerySchema,
+  mergeOpportunityRequestSchema,
+  opportunitiesQuerySchema,
+  opportunitySourcePostingSchema,
   publicRecruitingClaimSchema,
   publicRecruitingObservationSchema,
   publicWebIntelligenceSchema,
@@ -28,6 +31,64 @@ describe("API query schemas", () => {
 
   it("turns boolean query values into booleans", () => {
     expect(jobsQuerySchema.parse({ earlyCareerOnly: "true" }).earlyCareerOnly).toBe(true);
+  });
+
+  it("validates bounded opportunity queries, provenance, and correction inputs", () => {
+    expect(
+      opportunitiesQuerySchema.parse({
+        earlyCareerOnly: "true",
+        lifecycleStatus: "OPEN",
+        limit: "20",
+      }),
+    ).toMatchObject({ earlyCareerOnly: true, lifecycleStatus: "OPEN", limit: 20 });
+    expect(
+      opportunitySourcePostingSchema.parse({
+        id: "21000000-0000-0000-0000-000000000001",
+        source: {
+          id: "22000000-0000-0000-0000-000000000001",
+          name: "Official ATS",
+          type: "ATS",
+          provider: "greenhouse",
+        },
+        externalId: "123",
+        title: "Software Engineer Intern",
+        description: "Build systems with TypeScript.",
+        location: "Austin, TX",
+        employmentType: "INTERNSHIP",
+        roleFamily: "SOFTWARE_ENGINEERING",
+        experienceLevel: "INTERNSHIP",
+        isInternship: true,
+        isNewGrad: false,
+        season: "SUMMER",
+        graduationYears: [2027],
+        applicationUrl: "https://boards.greenhouse.io/example/jobs/123",
+        sourceUrl: "https://boards.greenhouse.io/example/jobs/123",
+        firstSeenAt: "2026-08-24T00:00:00.000Z",
+        lastSeenAt: "2026-08-24T00:00:00.000Z",
+        publishedAt: null,
+        closedAt: null,
+        sourceContentHash: "a".repeat(64),
+        sourceContentVersion: 2,
+        derivationHash: "b".repeat(64),
+        derivationVersion: 1,
+        membership: {
+          method: "OFFICIAL_APPLICATION_URL",
+          pinned: false,
+          validFrom: "2026-08-24T00:00:00.000Z",
+        },
+        authority: { level: "OFFICIAL_ATS", reviewed: true, capabilityVersion: 1 },
+        skills: [{ canonicalName: "TypeScript", rawMention: "ts", requirement: "MENTIONED" }],
+        constraints: [],
+      }).authority,
+    ).toMatchObject({ level: "OFFICIAL_ATS", reviewed: true });
+    expect(() =>
+      mergeOpportunityRequestSchema.parse({
+        winnerId: "21000000-0000-0000-0000-000000000001",
+        loserId: "21000000-0000-0000-0000-000000000002",
+        reason: "ok",
+        idempotencyKey: "short",
+      }),
+    ).toThrow();
   });
 
   it("accepts a safe GitHub attachment contract and applies parser defaults", () => {
@@ -82,6 +143,9 @@ describe("API query schemas", () => {
       maxFetches: 3,
     });
     expect(() => webSearchRequestSchema.parse({ maxResults: 2, maxFetches: 3 })).toThrow();
+    expect(webSearchRequestSchema.parse({ provider: "searxng" }).provider).toBe("searxng");
+    expect(() => webSearchRequestSchema.parse({ provider: "unreviewed-vendor" })).toThrow();
+    expect(() => webSearchRequestSchema.parse({ provider: "you" })).toThrow();
   });
 
   it("validates public-web provenance and claim conflicts", () => {

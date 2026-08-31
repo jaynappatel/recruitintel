@@ -28,6 +28,13 @@ def _database_url() -> str:
 async def _reset(database_url: str) -> None:
     async with await psycopg.AsyncConnection.connect(database_url) as connection:
         await connection.execute(
+            "delete from public.school_aliases where school_id = %s", (SCHOOL_ID,)
+        )
+        await connection.execute(
+            "delete from public.school_aliases "
+            "where normalized_alias in ('university of texas at austin', 'ut austin')"
+        )
+        await connection.execute(
             "delete from public.recruiter_profiles where company_id = %s", (COMPANY_ID,)
         )
         await connection.execute(
@@ -147,7 +154,7 @@ async def _seed(database_url: str) -> None:
               id, canonical_name, slug, website, domains, aliases, city,
               state_region, country
             ) values (
-              %s, 'University of Texas at Austin', 'm4-ut-austin',
+              %s, 'M4 University of Texas at Austin', 'm4-ut-austin',
               'https://utexas.edu', '{utexas.edu}',
               '{"UT Austin","The University of Texas at Austin"}',
               'Austin', 'Texas', 'US'
@@ -270,7 +277,7 @@ async def test_recruiter_campus_observation_graph_and_retry_idempotency() -> Non
                 "evidence": 4,
                 "campus_events": 2,
                 "campus_event_sources": 3,
-                "unresolved": 2,
+                "unresolved": 4,
                 "recruiter_events": 5,
             }
             profile_cursor = await connection.execute(

@@ -4,6 +4,7 @@ from uuid import UUID
 from recruitintel_collectors.adapters.base import BaseCollector, CollectorError
 from recruitintel_collectors.domain.enums import CollectorStage
 from recruitintel_collectors.domain.models import SyncStats
+from recruitintel_collectors.redaction import redact_text, redact_value
 
 from .repository import CollectorRepository
 
@@ -62,9 +63,9 @@ class CollectorRunner:
                     run_id=run_id,
                     stage=stage,
                     error_type=type(exc).__name__,
-                    message=str(exc),
+                    message=redact_text(str(exc)),
                     retryable=retryable,
-                    context=context,
+                    context=redact_value(context),
                 )
                 await self.repository.fail_run(run_id, discovered=discovered)
             except Exception:

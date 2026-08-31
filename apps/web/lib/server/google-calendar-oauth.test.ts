@@ -13,7 +13,7 @@ import {
   stateHash,
 } from "./google-calendar-oauth";
 
-const ownerId = "00000000-0000-0000-0000-000000000001";
+const userId = "00000000-0000-0000-0000-000000000001";
 
 describe("Google Calendar web-server OAuth flow", () => {
   beforeEach(() => {
@@ -32,7 +32,7 @@ describe("Google Calendar web-server OAuth flow", () => {
   it("persists hashed state and PKCE while returning no verifier", async () => {
     const cipher = new AesGcmCredentialCipher(randomBytes(32).toString("base64url"));
     const createState = vi.fn(async () => "2026-08-20T12:10:00.000Z");
-    const authorization = await createGoogleCalendarAuthorization(ownerId, {
+    const authorization = await createGoogleCalendarAuthorization(userId, {
       cipher,
       now: new Date("2026-08-20T12:00:00.000Z"),
       createState,
@@ -44,7 +44,7 @@ describe("Google Calendar web-server OAuth flow", () => {
     expect(url.searchParams.get("scope")?.split(" ")).toEqual(GOOGLE_CALENDAR_SCOPES);
     expect(createState).toHaveBeenCalledWith(
       expect.objectContaining({
-        ownerId,
+        userId,
         stateHash: stateHash(state ?? ""),
         encryptedCodeVerifier: expect.stringMatching(/^v1\./),
       }),
@@ -56,7 +56,7 @@ describe("Google Calendar web-server OAuth flow", () => {
     const fetcher = vi.fn(async () => new Response());
     await expect(
       completeGoogleCalendarAuthorization(
-        { code: "code", state: "invalid-state" },
+        { code: "code", state: "invalid-state", userId },
         { consumeState: async () => null, fetch: fetcher },
       ),
     ).rejects.toMatchObject({ code: "INVALID_OAUTH_STATE" });
@@ -74,11 +74,11 @@ describe("Google Calendar web-server OAuth flow", () => {
     );
     await expect(
       completeGoogleCalendarAuthorization(
-        { code: "bad-code", state: "valid-state" },
+        { code: "bad-code", state: "valid-state", userId },
         {
           cipher,
           consumeState: async () => ({
-            ownerId,
+            userId,
             encryptedCodeVerifier: cipher.encrypt("pkce-verifier"),
             returnTo: "/settings",
           }),
@@ -132,11 +132,11 @@ describe("Google Calendar web-server OAuth flow", () => {
       });
     });
     await completeGoogleCalendarAuthorization(
-      { code: "valid-code", state: "valid-state" },
+      { code: "valid-code", state: "valid-state", userId },
       {
         cipher,
         consumeState: async () => ({
-          ownerId,
+          userId,
           encryptedCodeVerifier: cipher.encrypt("pkce-verifier"),
           returnTo: "/settings",
         }),
@@ -148,5 +148,29 @@ describe("Google Calendar web-server OAuth flow", () => {
     expect(cipher.decrypt(saved?.encryptedRefreshToken ?? "")).toBe("refresh-secret");
     expect(JSON.stringify(saved?.tokenMetadata)).not.toContain("access-secret");
     expect(JSON.stringify(saved?.tokenMetadata)).not.toContain("id-secret");
+  });
+
+  it("rejects a valid Calendar OAuth state owned by another authenticated user", async () => {
+    const cipher = new AesGcmCredentialCipher(randomBytes(32).toString("base64url"));
+    const fetcher = vi.fn(async () => new Response());
+    await expect(
+      completeGoogleCalendarAuthorization(
+        {
+          code: "valid-code",
+          state: "valid-state",
+          userId: "00000000-0000-0000-0000-000000000099",
+        },
+        {
+          cipher,
+          consumeState: async () => ({
+            userId,
+            encryptedCodeVerifier: cipher.encrypt("pkce-verifier"),
+            returnTo: "/settings",
+          }),
+          fetch: fetcher,
+        },
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_OAUTH_STATE" });
+    expect(fetcher).not.toHaveBeenCalled();
   });
 });

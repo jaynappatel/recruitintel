@@ -10,7 +10,7 @@ from recruitintel_collectors.domain.enums import (
     ExperienceLevel,
     RoleFamily,
 )
-from recruitintel_collectors.domain.fingerprints import fingerprint_job
+from recruitintel_collectors.domain.fingerprints import fingerprint_job, fingerprint_job_derivation
 from recruitintel_collectors.domain.models import (
     CollectorResult,
     FingerprintedJob,
@@ -121,6 +121,24 @@ async def test_postgres_repository_persists_complete_job_lifecycle() -> None:
         )
         assert unchanged.unchanged == 1
 
+        reclassified_job = initial.jobs[0].job.model_copy(
+            update={
+                "role_family": RoleFamily.DATA_SCIENCE,
+                "classification_version": 2,
+                "derivation_version": 2,
+            }
+        )
+        derivation_only = FingerprintedJob(
+            job=reclassified_job,
+            content_hash=initial.jobs[0].content_hash,
+            derivation_hash=fingerprint_job_derivation(reclassified_job),
+        )
+        run_id = await repository.create_run(source, source.provider)
+        recomputed = await repository.persist_complete_batch(
+            run_id=run_id, source=source, result=_result(derivation_only)
+        )
+        assert recomputed.unchanged == 1
+
         run_id = await repository.create_run(source, source.provider)
         changed = await repository.persist_complete_batch(
             run_id=run_id, source=source, result=_result(_job("Chicago, IL"))
@@ -154,9 +172,14 @@ async def test_postgres_repository_persists_complete_job_lifecycle() -> None:
                   (select count(*) from public.recruiting_events
                     where source_id = %s)::int as events,
                   (select count(*) from public.collector_runs
-                    where source_id = %s and status = 'SUCCEEDED')::int as successful_runs
+                    where source_id = %s and status = 'SUCCEEDED')::int as successful_runs,
+                  (select count(*) from public.job_derivation_events derivation
+                    join public.jobs job on job.id = derivation.job_id
+                    where job.source_id = %s
+                      and derivation.event_type = 'DERIVATION_RECOMPUTED')::int
+                    as derivation_events
                 """,
-                (SOURCE_ID, SOURCE_ID, SOURCE_ID, SOURCE_ID, SOURCE_ID),
+                (SOURCE_ID, SOURCE_ID, SOURCE_ID, SOURCE_ID, SOURCE_ID, SOURCE_ID),
             )
             counts = await cursor.fetchone()
             assert counts == {
@@ -164,7 +187,8 @@ async def test_postgres_repository_persists_complete_job_lifecycle() -> None:
                 "snapshots": 2,
                 "observations": 3,
                 "events": 4,
-                "successful_runs": 5,
+                "successful_runs": 6,
+                "derivation_events": 1,
             }
             events = await connection.execute(
                 """

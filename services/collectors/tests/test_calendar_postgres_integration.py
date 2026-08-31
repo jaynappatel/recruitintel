@@ -40,7 +40,7 @@ class PersistentMockProvider:
     async def create_event(self, calendar_id: str, event: ProviderEvent) -> str:
         assert calendar_id == "primary"
         if event.private_metadata["recruitintelCalendarItemId"] == str(self.fail_item_id):
-            raise CalendarProviderError("MOCK_PARTIAL_FAILURE")
+            raise CalendarProviderError("access_token=provider-secret owner@example.com")
         if event.external_id not in self.events:
             self.created += 1
         self.events[event.external_id] = event
@@ -73,14 +73,22 @@ async def connect(database_url: str) -> psycopg.AsyncConnection[dict[str, Any]]:
 async def reset(database_url: str) -> None:
     async with await connect(database_url) as connection:
         await connection.execute(
-            "delete from public.calendar_oauth_states where owner_id = %s", (OWNER_ID,)
+            "delete from public.work_items where user_id = %s or exclusive_key = %s",
+            (OWNER_ID, f"m9-alert-user:{OWNER_ID}"),
         )
         await connection.execute(
-            "delete from public.calendar_connections where owner_id = %s", (OWNER_ID,)
+            "delete from public.alert_evaluation_requests where user_id = %s", (OWNER_ID,)
         )
         await connection.execute(
-            "delete from public.calendar_items where owner_id = %s", (OWNER_ID,)
+            "delete from public.calendar_oauth_states where user_id = %s", (OWNER_ID,)
         )
+        await connection.execute(
+            "delete from public.calendar_connections where user_id = %s", (OWNER_ID,)
+        )
+        await connection.execute(
+            "delete from public.calendar_items where user_id = %s", (OWNER_ID,)
+        )
+        await connection.execute("delete from public.users where id = %s", (OWNER_ID,))
 
 
 async def enqueue(database_url: str) -> UUID:
@@ -88,7 +96,7 @@ async def enqueue(database_url: str) -> UUID:
         cursor = await connection.execute(
             """
             insert into public.calendar_sync_requests (
-              calendar_connection_id, requested_by_owner_id
+              calendar_connection_id, user_id
             ) values (%s, %s) returning id
             """,
             (CONNECTION_ID, OWNER_ID),
@@ -96,6 +104,19 @@ async def enqueue(database_url: str) -> UUID:
         row = await cursor.fetchone()
         assert row
         return row["id"]
+
+
+async def retire_domain_test_work(database_url: str, request_id: UUID) -> None:
+    """Domain-worker tests do not bypass orchestration in production."""
+    async with await connect(database_url) as connection:
+        await connection.execute(
+            "delete from public.work_items where calendar_sync_request_id = %s",
+            (request_id,),
+        )
+        await connection.execute(
+            "delete from public.work_items where user_id = %s and work_type = 'ALERT_EVALUATE'",
+            (OWNER_ID,),
+        )
 
 
 @pytest.mark.integration
@@ -109,8 +130,15 @@ async def test_postgres_mock_provider_retry_update_delete_no_duplicates() -> Non
     async with await connect(test_database_url) as connection:
         await connection.execute(
             """
+            insert into public.users (id, name, email, email_verified, status)
+            values (%s, 'Calendar Worker User', 'calendar-worker@example.com', true, 'ACTIVE')
+            """,
+            (OWNER_ID,),
+        )
+        await connection.execute(
+            """
             insert into public.calendar_items (
-              id, owner_id, type, title, starts_at, starts_on, all_day, timezone,
+              id, user_id, type, title, starts_at, starts_on, all_day, timezone,
               status, source, sync_enabled
             ) values (%s, %s, 'CUSTOM', 'PostgreSQL sync contract', %s, %s, true,
               'America/Chicago', 'TODO', 'USER', true)
@@ -125,7 +153,7 @@ async def test_postgres_mock_provider_retry_update_delete_no_duplicates() -> Non
         await connection.execute(
             """
             insert into public.calendar_connections (
-              id, owner_id, provider, provider_account_id, selected_calendar_id,
+              id, user_id, provider, provider_account_id, selected_calendar_id,
               encrypted_refresh_token, scopes, connection_status
             ) values (%s, %s, 'GOOGLE', 'mock-account', 'primary', %s,
               '{https://www.googleapis.com/auth/calendar.events.owned}', 'CONNECTED')
@@ -142,8 +170,12 @@ async def test_postgres_mock_provider_retry_update_delete_no_duplicates() -> Non
         app_url="https://recruitintel.example",
     )
 
-    first = await worker.run(await enqueue(test_database_url))
-    retry = await worker.run(await enqueue(test_database_url))
+    first_request = await enqueue(test_database_url)
+    first = await worker.run(first_request)
+    await retire_domain_test_work(test_database_url, first_request)
+    unchanged_request = await enqueue(test_database_url)
+    retry = await worker.run(unchanged_request)
+    await retire_domain_test_work(test_database_url, unchanged_request)
     assert first.created == 1
     assert retry.unchanged == 1
     assert provider.created == 1
@@ -153,7 +185,9 @@ async def test_postgres_mock_provider_retry_update_delete_no_duplicates() -> Non
             "update public.calendar_items set title = 'Changed sync contract' where id = %s",
             (ITEM_ID,),
         )
-    changed = await worker.run(await enqueue(test_database_url))
+    changed_request = await enqueue(test_database_url)
+    changed = await worker.run(changed_request)
+    await retire_domain_test_work(test_database_url, changed_request)
     assert changed.updated == 1
     assert provider.updated == 1
 
@@ -165,7 +199,9 @@ async def test_postgres_mock_provider_retry_update_delete_no_duplicates() -> Non
             """,
             (ITEM_ID,),
         )
-    deleted = await worker.run(await enqueue(test_database_url))
+    deleted_request = await enqueue(test_database_url)
+    deleted = await worker.run(deleted_request)
+    await retire_domain_test_work(test_database_url, deleted_request)
     assert deleted.deleted == 1
     assert provider.deleted == 1
 
@@ -173,7 +209,7 @@ async def test_postgres_mock_provider_retry_update_delete_no_duplicates() -> Non
         await connection.execute(
             """
             insert into public.calendar_items (
-              id, owner_id, type, title, starts_at, starts_on, all_day, timezone,
+              id, user_id, type, title, starts_at, starts_on, all_day, timezone,
               status, source, sync_enabled
             ) values (%s, %s, 'CUSTOM', 'Retry after partial failure', %s, %s, true,
               'America/Chicago', 'TODO', 'USER', true)
@@ -231,4 +267,15 @@ async def test_postgres_mock_provider_retry_update_delete_no_duplicates() -> Non
             (CONNECTION_ID,),
         )
         assert (await cursor.fetchone()) == {"runs": 5}
+        cursor = await connection.execute(
+            """
+            select errors::text as errors from public.calendar_sync_runs
+            where calendar_connection_id = %s and status = 'FAILED'
+            """,
+            (CONNECTION_ID,),
+        )
+        failed_diagnostics = await cursor.fetchone()
+        assert failed_diagnostics is not None
+        assert "provider-secret" not in failed_diagnostics["errors"]
+        assert "owner@example.com" not in failed_diagnostics["errors"]
     await reset(test_database_url)

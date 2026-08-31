@@ -1,8 +1,22 @@
 import type { Metadata } from "next";
+import { Fraunces, Inter } from "next/font/google";
 
-import { AppSidebar } from "@/components/app-sidebar";
+import { AppShell } from "@/components/app-shell";
 
 import "./globals.css";
+
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-inter",
+  display: "swap",
+});
+
+const fraunces = Fraunces({
+  subsets: ["latin"],
+  variable: "--font-fraunces",
+  style: ["normal", "italic"],
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: { default: "RecruitIntel", template: "%s · RecruitIntel" },
@@ -11,12 +25,9 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en">
+    <html lang="en" className={`${inter.variable} ${fraunces.variable}`}>
       <body>
-        <div className="page-grid">
-          <AppSidebar />
-          <main className="app-main">{children}</main>
-        </div>
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );

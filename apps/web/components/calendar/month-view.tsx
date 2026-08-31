@@ -2,7 +2,7 @@
 
 import clsx from "clsx";
 
-import type { CalendarItem } from "@/lib/types/calendar";
+import type { CalendarItemView } from "@/lib/types/calendar";
 
 import { CategoryDot } from "./category-badge";
 import { buildMonthGrid, isSameIsoMonth } from "./date-grid";
@@ -19,13 +19,13 @@ export function MonthView({
 }: {
   year: number;
   month: number;
-  items: CalendarItem[];
+  items: CalendarItemView[];
   today: string;
   selectedDate: string | null;
   onSelectDate: (iso: string) => void;
 }) {
   const grid = buildMonthGrid(year, month);
-  const itemsByDate = new Map<string, CalendarItem[]>();
+  const itemsByDate = new Map<string, CalendarItemView[]>();
   for (const item of items) {
     const start = item.date;
     const end = item.endDate ?? item.date;

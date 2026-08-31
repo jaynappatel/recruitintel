@@ -2,7 +2,7 @@ import type { CalendarCategory, CalendarItemType, CalendarStatus } from "@/lib/t
 
 /** A few overrides for acronyms/proper nouns humanizeEnum can't get right. */
 const TYPE_OVERRIDES: Partial<Record<CalendarItemType, string>> = {
-  COMPLETE_OA: "Complete OA",
+  OA: "Online assessment",
   LEETCODE: "LeetCode",
 };
 
@@ -25,6 +25,7 @@ export const statusLabels: Record<CalendarStatus, string> = {
   CONFIRMED: "Confirmed",
   ESTIMATED: "Estimated",
   HISTORICAL: "Historical",
+  CLAIMED: "Claimed",
   USER_SCHEDULED: "Scheduled",
 };
 
@@ -32,5 +33,6 @@ export const statusDescriptions: Record<CalendarStatus, string> = {
   CONFIRMED: "Verified directly from a source such as a careers page or ATS.",
   ESTIMATED: "Modeled from historical timing — not yet confirmed.",
   HISTORICAL: "A past-cycle reference date, shown for pattern context only.",
+  CLAIMED: "Reported by a public source, but not independently confirmed.",
   USER_SCHEDULED: "An action or prep session you scheduled yourself.",
 };

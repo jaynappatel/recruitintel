@@ -62,8 +62,9 @@ class NormalizedJob(BaseModel):
     application_url: str
     source_url: str
     published_at: datetime | None = None
-    fingerprint_version: int = Field(default=1, ge=1)
+    fingerprint_version: int = Field(default=2, ge=1)
     classification_version: int = Field(default=1, ge=1)
+    derivation_version: int = Field(default=1, ge=1)
     raw_payload: dict[str, Any]
 
     @field_validator("published_at")
@@ -98,6 +99,7 @@ class FingerprintedJob(BaseModel):
 
     job: NormalizedJob
     content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    derivation_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class CollectorResult(BaseModel):

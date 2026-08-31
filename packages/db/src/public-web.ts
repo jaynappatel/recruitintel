@@ -377,13 +377,16 @@ export async function createWebSearchRequests(
   return sql.begin(async (transaction) => {
     const [source] = await transaction`
       insert into public.sources (
-        company_id, source_type, provider, external_key, name, reliability, metadata
+        company_id, source_type, provider, external_key, name, reliability, metadata,
+        source_policy_id
       ) values (
         ${company.id}::uuid, 'PUBLIC_WEB', 'web_search', ${`${input.provider}:${company.id}`},
         ${`Web search: ${input.provider} / ${company.canonicalName}`}, 0.500,
-        ${transaction.json({ provider: input.provider })}
+        ${transaction.json({ provider: input.provider })},
+        (select id from public.source_policies where provider = ${input.provider})
       )
-      on conflict (provider, external_key) do update set enabled = true
+      on conflict (provider, external_key) do update set enabled = true,
+        source_policy_id = excluded.source_policy_id
       returning id
     `;
     if (!source) throw new Error("Web search source upsert returned no row");
@@ -405,13 +408,14 @@ export async function createWebSearchRequests(
         insert into public.public_web_search_queries (
           company_id, source_id, provider, template_key, query, role_family,
           school_id, graduation_year, focus, minimum_interval_seconds,
-          max_results, max_fetches, metadata
+          max_results, max_fetches, metadata, provider_policy_id
         ) values (
           ${company.id}::uuid, ${stringValue(source.id)}::uuid, ${input.provider},
           ${value.key}, ${value.query}, ${input.roleFamily ?? null}, ${schoolId}::uuid,
           ${input.graduationYear ?? null}, ${input.focus}, ${input.minimumIntervalSeconds},
           ${input.maxResults}, ${input.maxFetches},
-          ${transaction.json({ school_name: input.school ?? null })}
+          ${transaction.json({ school_name: input.school ?? null })},
+          (select id from public.source_policies where provider = ${input.provider})
         )
         on conflict (company_id, provider, query) do update set
           role_family = excluded.role_family, school_id = excluded.school_id,
@@ -422,6 +426,25 @@ export async function createWebSearchRequests(
         returning id, next_allowed_run_at, status
       `;
       if (!query) throw new Error("Web search query upsert returned no row");
+      await transaction`
+        insert into public.schedules (
+          name, work_type, work_class, public_web_search_query_id, enabled,
+          schedule_kind, interval_seconds, anchor_at, next_run_at,
+          jitter_seconds, priority, max_attempts
+        ) values (
+          ${`public-web-search:${stringValue(query.id)}`},
+          'PUBLIC_WEB_SEARCH', 'WEB_SEARCH', ${stringValue(query.id)}::uuid,
+          false, 'INTERVAL', ${Math.max(input.minimumIntervalSeconds, 21_600)},
+          now(), now() + make_interval(secs => ${Math.max(
+            input.minimumIntervalSeconds,
+            21_600,
+          )}), 1800, 30, 3
+        )
+        on conflict (name) do update set
+          interval_seconds = excluded.interval_seconds,
+          jitter_seconds = excluded.jitter_seconds,
+          priority = excluded.priority
+      `;
       const nextAllowed = iso(query.next_allowed_run_at);
       if (nextAllowed && new Date(nextAllowed).getTime() > Date.now()) {
         skippedByBudget += 1;

@@ -10,7 +10,7 @@ import { isCompanyIdentifier } from "@/lib/identifiers";
 type Context = { params: Promise<{ identifier: string }> };
 
 export async function POST(request: Request, { params }: Context) {
-  const unauthorized = requireAdmin(request);
+  const unauthorized = await requireAdmin(request);
   if (unauthorized) return unauthorized;
   const { identifier } = await params;
   if (!isCompanyIdentifier(identifier)) {

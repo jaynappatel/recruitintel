@@ -1,21 +1,30 @@
-import { timingSafeEqual } from "node:crypto";
+import { recordAuditEvent } from "@recruitintel/db";
 
-import { apiError } from "@/lib/api";
+import { authorizationApiError, requireAdmin as resolveAdmin } from "@/lib/server/authorization";
 
-export function requireAdmin(request: Request) {
-  const expected = process.env.RECRUITINTEL_ADMIN_TOKEN;
-  if (!expected) {
-    return apiError(503, "ADMIN_NOT_CONFIGURED", "Administrative API access is not configured");
+export async function requireAdmin(request: Request) {
+  try {
+    const actor = await resolveAdmin(request);
+    await recordAuditEvent({
+      actorKind: actor.kind,
+      actorUserId: "user" in actor ? actor.user.id : null,
+      actorServicePrincipalId: "servicePrincipal" in actor ? actor.servicePrincipal.id : null,
+      action: "ADMIN_API_AUTHORIZED",
+      resourceType: "API_ROUTE",
+      outcome: "SUCCEEDED",
+      requestId: actor.requestId,
+      ipHash: actor.ipHash,
+      metadata: { method: request.method, path: new URL(request.url).pathname },
+    });
+    return null;
+  } catch (error) {
+    await recordAuditEvent({
+      actorKind: "SYSTEM",
+      action: "ADMIN_API_DENIED",
+      resourceType: "API_ROUTE",
+      outcome: "DENIED",
+      metadata: { method: request.method, path: new URL(request.url).pathname },
+    }).catch(() => undefined);
+    return authorizationApiError(error);
   }
-  const authorization = request.headers.get("authorization") ?? "";
-  const supplied = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
-  const expectedBytes = Buffer.from(expected);
-  const suppliedBytes = Buffer.from(supplied);
-  if (
-    expectedBytes.length !== suppliedBytes.length ||
-    !timingSafeEqual(expectedBytes, suppliedBytes)
-  ) {
-    return apiError(401, "UNAUTHORIZED", "A valid administrative bearer token is required");
-  }
-  return null;
 }

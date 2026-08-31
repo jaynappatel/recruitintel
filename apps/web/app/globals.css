@@ -1,24 +1,53 @@
 @import "tailwindcss";
 
+@theme inline {
+  --font-sans: var(--font-inter);
+  --font-serif: var(--font-fraunces);
+}
+
 :root {
-  /* Minimal base palette: neutral paper, near-black ink, one warm accent.
-     Everything else (glass surfaces, dark panels) is derived from these. */
+  /* Warm editorial palette: paper, ink, and a warm terracotta-rose accent.
+     Everything else (glass surfaces, dark panels, tints) is derived from these. */
   --paper: #f3f2ee;
   --ink: #14151a;
   --muted: #6b6d76;
-  --line: rgb(20 21 26 / 10%);
+  --line: rgb(20 21 26 / 12%);
 
   --panel: #121317;
   --panel-bright: #1d1e24;
   --panel-line: rgb(255 255 255 / 9%);
-  --panel-glass: rgb(15 16 20 / 78%);
+  --panel-glass: rgb(15 16 20 / 92%);
 
-  --accent: #c9974a;
-  --accent-bright: #dcac66;
-  --accent-soft: rgb(201 151 74 / 14%);
+  --accent: #9c4b3f;
+  --accent-bright: #b5675a;
+  --accent-soft: rgb(156 75 63 / 14%);
+  --accent-warm: #d98a7c;
 
-  --surface: rgb(255 255 255 / 64%);
+  --surface: rgb(255 255 255 / 88%);
   --surface-soft: rgb(20 21 26 / 4%);
+
+  /* Soft paper-adjacent tints used for page-header bands and status "sticky note" badges. */
+  --tint-rose: #f6e3dd;
+  --tint-rose-line: #e7c3b8;
+  --tint-sand: #f1e6d3;
+  --tint-sand-line: #ddc79f;
+  --tint-sage: #e8ede2;
+  --tint-sage-line: #c6d4bb;
+
+  /* Semantic status colors, kept muted/editorial rather than stock Tailwind palette colors. */
+  --success: #4c6f4a;
+  --success-bg: var(--tint-sage);
+  --success-border: var(--tint-sage-line);
+  --warning: #8a5a1f;
+  --warning-bg: var(--tint-sand);
+  --warning-border: var(--tint-sand-line);
+  --danger: #9c3f3f;
+  --danger-bg: #f7e6e2;
+  --danger-border: #e3bfb4;
+
+  --radius-sm: 0.5rem;
+  --radius-md: 0.875rem;
+  --radius-lg: 1.25rem;
 
   /* Legacy aliases so existing components render through the new palette unchanged. */
   --background: var(--paper);
@@ -26,6 +55,20 @@
   --forest-bright: var(--accent);
   --mint: var(--accent);
   --amber: var(--accent-bright);
+
+  /* shadcn-style aliases so components authored against that convention (e.g. sign-in)
+     resolve through the same palette instead of falling back to Tailwind defaults. */
+  --foreground: var(--ink);
+  --card: #fff;
+  --card-foreground: var(--ink);
+  --primary: var(--accent);
+  --primary-foreground: #fff;
+  --destructive: var(--danger);
+  --destructive-foreground: #fff;
+  --border: var(--line);
+  --input: var(--line);
+  --ring: var(--accent);
+  --muted-foreground: var(--muted);
 }
 
 * {
@@ -39,12 +82,12 @@ html {
 body {
   margin: 0;
   background:
-    radial-gradient(circle at 90% -6%, rgb(201 151 74 / 10%), transparent 32rem),
+    radial-gradient(circle at 90% -6%, rgb(156 75 63 / 8%), transparent 32rem),
     radial-gradient(circle at 4% 18%, rgb(20 21 26 / 4%), transparent 26rem), var(--background);
   background-attachment: fixed;
   color: var(--ink);
   font-family:
-    Inter,
+    var(--font-sans),
     ui-sans-serif,
     system-ui,
     -apple-system,
@@ -64,9 +107,25 @@ select {
   font: inherit;
 }
 
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
 ::selection {
   background: var(--accent-soft);
   color: var(--ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 .page-grid {
@@ -77,8 +136,6 @@ select {
 
 .app-sidebar {
   background: var(--panel-glass);
-  backdrop-filter: blur(22px) saturate(140%);
-  -webkit-backdrop-filter: blur(22px) saturate(140%);
   border-right: 1px solid var(--panel-line);
   color: #f6f5f2;
   display: flex;
@@ -95,24 +152,27 @@ select {
   padding: 1.5rem clamp(1rem, 3vw, 3rem) 4rem;
 }
 
-/* Frosted glass panel used for cards, sections, and headers throughout the app. */
+/* Card surface used throughout the app: a warm paper card with a thin border,
+   a single soft shadow, and no glass blur (kept restrained per the editorial direction). */
 .surface {
   background: var(--surface);
-  backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
   border: 1px solid var(--line);
-  border-radius: 1rem;
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 55%),
-    0 12px 30px rgb(20 21 26 / 6%);
+  border-radius: var(--radius-md);
+  box-shadow: 0 6px 20px rgb(20 21 26 / 5%);
 }
 
 /* Dark counterpart of .surface — for hero/header bands that sit on a dark ink panel. */
 .glass-dark {
   background: var(--panel-glass);
-  backdrop-filter: blur(22px) saturate(140%);
-  -webkit-backdrop-filter: blur(22px) saturate(140%);
   border: 1px solid var(--panel-line);
+}
+
+/* Soft color-block band for page headers — the "editorial" warmth accent, used once per
+   page rather than on every card so the product stays calm and information-dense. */
+.header-band {
+  background: var(--tint-rose);
+  border: 1px solid var(--tint-rose-line);
+  border-radius: var(--radius-lg);
 }
 
 .eyebrow {
@@ -124,7 +184,7 @@ select {
 }
 
 .metric-number {
-  font-family: Georgia, "Times New Roman", serif;
+  font-family: var(--font-serif), Georgia, "Times New Roman", serif;
   font-variant-numeric: tabular-nums;
 }
 
@@ -135,6 +195,7 @@ select {
 
   .app-sidebar {
     min-height: auto;
+    min-width: 0;
     height: auto;
     position: static;
     padding: 1rem;

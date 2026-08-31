@@ -1,0 +1,65 @@
+{
+  "textCases": [
+    {
+      "name": "authorization_and_email",
+      "input": "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.secret.signature for jayna@example.com",
+      "expected": "Authorization: [REDACTED] for [REDACTED_EMAIL]",
+      "forbidden": ["eyJhbGciOiJIUzI1NiJ9", "jayna@example.com"]
+    },
+    {
+      "name": "oauth_callback_query",
+      "input": "provider failed at https://localhost:3000/api/callback?code=oauth-secret&state=csrf-secret",
+      "expected": "provider failed at https://localhost:3000/api/callback",
+      "forbidden": ["oauth-secret", "csrf-secret"]
+    },
+    {
+      "name": "cookie_header",
+      "input": "Cookie: better-auth.session_token=session-secret; theme=dark",
+      "expected": "Cookie: [REDACTED]",
+      "forbidden": ["session-secret", "theme=dark"]
+    },
+    {
+      "name": "provider_token_message",
+      "input": "access_token=access-secret refresh_token=refresh-secret client_secret=client-secret",
+      "expected": "access_token=[REDACTED] refresh_token=[REDACTED] client_secret=[REDACTED]",
+      "forbidden": ["access-secret", "refresh-secret", "client-secret"]
+    },
+    {
+      "name": "search_provider_api_key",
+      "input": "X-API-Key: you-search-secret api_key=second-search-secret",
+      "expected": "X-API-Key=[REDACTED] api_key=[REDACTED]",
+      "forbidden": ["you-search-secret", "second-search-secret"]
+    }
+  ],
+  "objectCase": {
+    "input": {
+      "event": "provider_error",
+      "authorization": "Bearer top-secret",
+      "provider": {
+        "error": "invalid_grant for owner@example.com",
+        "refresh_token": "refresh-secret",
+        "callback_url": "https://app.example.com/callback?code=oauth-secret"
+      },
+      "resume_text": "private resume contents",
+      "safe_id": "run-123"
+    },
+    "expected": {
+      "event": "provider_error",
+      "authorization": "[REDACTED]",
+      "provider": {
+        "error": "invalid_grant for [REDACTED_EMAIL]",
+        "refresh_token": "[REDACTED]",
+        "callback_url": "https://app.example.com/callback"
+      },
+      "resume_text": "[REDACTED]",
+      "safe_id": "run-123"
+    },
+    "forbidden": [
+      "top-secret",
+      "owner@example.com",
+      "refresh-secret",
+      "oauth-secret",
+      "private resume contents"
+    ]
+  }
+}

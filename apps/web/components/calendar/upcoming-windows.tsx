@@ -3,11 +3,11 @@
 import { formatCompactDate } from "@recruitintel/shared";
 import Link from "next/link";
 
-import type { CalendarItem } from "@/lib/types/calendar";
+import type { CalendarItemView } from "@/lib/types/calendar";
 
 import { CalendarStatusBadge } from "./status-badge";
 
-function formatWindow(item: CalendarItem): string {
+function formatWindow(item: CalendarItemView): string {
   if (!item.endDate || item.endDate === item.date) return formatCompactDate(item.date);
   return `${formatCompactDate(item.date)} – ${formatCompactDate(item.endDate)}`;
 }
@@ -16,7 +16,7 @@ export function UpcomingRecruitingWindows({
   items,
   onSelectItem,
 }: {
-  items: CalendarItem[];
+  items: CalendarItemView[];
   onSelectItem: (id: string) => void;
 }) {
   const windows = items.filter((item) => item.category === "RECRUITING_DATE").slice(0, 8);

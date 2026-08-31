@@ -1,0 +1,40 @@
+body {
+  font:
+    14px system-ui,
+    sans-serif;
+  color: #132238;
+  margin: 0;
+  background: #f8fafc;
+}
+main {
+  padding: 16px;
+}
+h1 {
+  margin: 0 0 8px;
+}
+label {
+  display: block;
+  margin: 10px 0;
+  font-weight: 600;
+}
+input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 4px;
+  padding: 8px;
+}
+button {
+  margin: 8px 8px 8px 0;
+  padding: 8px 10px;
+}
+article {
+  background: white;
+  border: 1px solid #d8e1eb;
+  margin: 8px 0;
+  padding: 10px;
+  border-radius: 6px;
+}
+.muted {
+  color: #526477;
+}

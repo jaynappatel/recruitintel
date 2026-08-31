@@ -10,6 +10,10 @@ import { EmptyState } from "@/components/empty-state";
 import { EventList } from "@/components/event-list";
 import { JobList } from "@/components/job-list";
 import { PageHeader } from "@/components/page-header";
+import { RecommendationsPanel } from "@/components/personalization/recommendations-panel";
+import { OnboardingChecklist } from "@/components/onboarding-checklist";
+import { Badge } from "@/components/ui/badge";
+import { buttonVariants } from "@/components/ui/button";
 
 export const dynamic = "force-dynamic";
 
@@ -52,9 +56,11 @@ export default async function DashboardPage() {
     <>
       <PageHeader
         action={
-          <div className="rounded-full border border-[var(--line)] bg-white px-3 py-2 text-xs font-bold text-[var(--forest)] shadow-sm">
-            <span className="mr-2 inline-block size-2 rounded-full bg-emerald-500" />
-            Deterministic pipeline
+          <div className="flex items-center gap-3">
+            <Link className={buttonVariants({ size: "sm" })} href="/today">
+              Open today&apos;s queue
+            </Link>
+            <Badge tone="neutral">Ranked by your settings, not ML</Badge>
           </div>
         }
         description="Monitor source-backed recruiting changes without confusing activity with prediction."
@@ -62,10 +68,11 @@ export default async function DashboardPage() {
         title="Recruiting signal desk"
       />
       <DemoNotice />
+      <OnboardingChecklist />
 
       <section
         aria-label="Summary metrics"
-        className="mb-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4"
+        className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4"
       >
         {metrics.map(({ label, value, icon: Icon }) => (
           <div className="surface p-5" key={label}>
@@ -73,11 +80,22 @@ export default async function DashboardPage() {
               <span className="text-xs font-bold tracking-wide uppercase">{label}</span>
               <Icon className="size-4" />
             </div>
-            <div className="metric-number mt-4 text-4xl font-semibold text-[var(--forest)]">
+            <div className="metric-number mt-4 text-4xl font-semibold text-[var(--ink)]">
               {value}
             </div>
           </div>
         ))}
+      </section>
+
+      <section className="mb-8">
+        <div className="mb-4">
+          <div className="eyebrow mb-1">For you</div>
+          <h2 className="m-0 font-serif text-2xl font-semibold">Opportunities to review</h2>
+          <p className="mt-1 mb-0 text-sm text-[var(--muted)]">
+            Ranked using the preferences you set — not a prediction of who gets hired.
+          </p>
+        </div>
+        <RecommendationsPanel compact />
       </section>
 
       <section className="mb-8">
@@ -87,34 +105,34 @@ export default async function DashboardPage() {
             <h2 className="m-0 font-serif text-2xl font-semibold">Companies in focus</h2>
           </div>
           <Link
-            className="flex items-center gap-1 text-sm font-bold text-[var(--forest)]"
+            className="flex items-center gap-1 text-sm font-bold text-[var(--accent)]"
             href="/companies"
           >
             View all <ArrowRight className="size-4" />
           </Link>
         </div>
         {data.companies.items.length ? (
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
             {data.companies.items.map((company) => (
               <CompanyCard company={company} key={company.id} />
             ))}
           </div>
         ) : (
           <EmptyState
-            copy="Add and seed a company to begin tracking its recruiting state."
+            copy="Companies appear here automatically as recruiting sources are connected."
             title="No companies yet"
           />
         )}
       </section>
 
-      <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.05fr_0.95fr]">
         <section className="surface overflow-hidden">
           <div className="flex items-center justify-between border-b border-[var(--line)] p-5">
             <div>
               <div className="eyebrow mb-1">Open now</div>
               <h2 className="m-0 font-serif text-2xl font-semibold">New target jobs</h2>
             </div>
-            <Link className="text-xs font-bold text-[var(--forest)]" href="/jobs">
+            <Link className="text-xs font-bold text-[var(--accent)]" href="/jobs">
               All jobs
             </Link>
           </div>
@@ -125,7 +143,7 @@ export default async function DashboardPage() {
           ) : (
             <div className="p-5">
               <EmptyState
-                copy="A successful ATS sync will populate this queue."
+                copy="New roles show up here as soon as tracked companies post them."
                 title="No open target jobs"
               />
             </div>
@@ -135,10 +153,10 @@ export default async function DashboardPage() {
         <section className="surface overflow-hidden">
           <div className="flex items-center justify-between border-b border-[var(--line)] p-5">
             <div>
-              <div className="eyebrow mb-1">Immutable history</div>
+              <div className="eyebrow mb-1">Signal history</div>
               <h2 className="m-0 font-serif text-2xl font-semibold">Latest recruiting signals</h2>
             </div>
-            <Link className="text-xs font-bold text-[var(--forest)]" href="/events">
+            <Link className="text-xs font-bold text-[var(--accent)]" href="/events">
               Full stream
             </Link>
           </div>

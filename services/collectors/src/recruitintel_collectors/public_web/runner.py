@@ -7,10 +7,12 @@ from recruitintel_collectors.recruiter_campus.protocols import (
 )
 
 from .classification import DeterministicRelevanceClassifier, classify_source
+from .direct_discovery import DirectSourceDiscovery
 from .extraction import DeterministicHtmlExtractor, normalized_content_hash
 from .information import DeterministicRecruitingInformationExtractor
-from .models import PublicWebWorkRequest, WebRunStats
-from .protocols import PublicWebFetcher, PublicWebRepository, SearchProvider
+from .models import PublicWebWorkRequest, SearchBatch, SearchRequest, WebRunStats
+from .protocols import PublicWebFetcher, PublicWebRepository
+from .search import SearchProviderRegistry
 
 
 class SearchFrequencyLimitError(RuntimeError):
@@ -22,19 +24,21 @@ class PublicWebWorker:
         self,
         *,
         repository: PublicWebRepository,
-        search_providers: dict[str, SearchProvider],
+        search_registry: SearchProviderRegistry,
         fetcher: PublicWebFetcher,
         extractor: DeterministicHtmlExtractor | None = None,
         relevance_classifier: DeterministicRelevanceClassifier | None = None,
         information_extractor: DeterministicRecruitingInformationExtractor | None = None,
+        direct_source_discovery: DirectSourceDiscovery | None = None,
         recruiter_campus_processor: RecruiterCampusObservationProcessor | None = None,
     ) -> None:
         self._repository = repository
-        self._search_providers = search_providers
+        self._search_registry = search_registry
         self._fetcher = fetcher
         self._extractor = extractor or DeterministicHtmlExtractor()
         self._relevance = relevance_classifier or DeterministicRelevanceClassifier()
         self._information = information_extractor or DeterministicRecruitingInformationExtractor()
+        self._direct_sources = direct_source_discovery or DirectSourceDiscovery()
         self._recruiter_campus = recruiter_campus_processor
 
     async def run(self, request_id: UUID) -> WebRunStats:
@@ -52,22 +56,35 @@ class PublicWebWorker:
                     raise SearchFrequencyLimitError(
                         f"query cannot run before {query.next_allowed_run_at.isoformat()}"
                     )
-                try:
-                    provider = self._search_providers[query.provider]
-                except KeyError as exc:
-                    raise KeyError(f"search provider {query.provider!r} is not configured") from exc
                 run_id = await self._repository.start_run(request, query.source_id)
-                results = await provider.search(query.query, max_results=query.max_results)
+                skip_search = await self._repository.has_direct_source_coverage(query)
+                if skip_search:
+                    batch = SearchBatch(
+                        results=(),
+                        provider_calls=0,
+                        cost_units=0,
+                        estimated_cost_micros=0,
+                    )
+                else:
+                    provider = self._search_registry.get(query.provider)
+                    batch = await provider.search(
+                        SearchRequest(query=query.query, max_results=query.max_results)
+                    )
                 count, _fetch_ids = await self._repository.persist_search_results(
                     run_id=run_id,
                     request=request,
                     query=query,
-                    results=results,
+                    batch=batch,
                 )
                 stats = WebRunStats(
                     request_id=request.id,
                     work_type=request.work_type,
                     candidates=count,
+                    provider_calls=batch.provider_calls,
+                    cost_units=batch.cost_units,
+                    estimated_cost_micros=batch.estimated_cost_micros,
+                    paid_spend_micros=batch.paid_spend_micros,
+                    general_search_skipped=skip_search,
                     duration_ms=int((monotonic() - started) * 1000),
                 )
             elif request.work_type.value == "WEB_FETCH":
@@ -77,6 +94,12 @@ class PublicWebWorker:
                 run_id = await self._repository.start_run(request, candidate.source_id)
                 fetched = await self._fetcher.fetch(candidate.canonical_url)
                 extracted = self._extractor.extract(fetched)
+                discoveries = self._direct_sources.discover(candidate.company, fetched)
+                direct_count = await self._repository.persist_direct_sources(
+                    candidate=candidate,
+                    discoveries=discoveries,
+                    verified_at=fetched.fetched_at,
+                )
                 content_hash = normalized_content_hash(extracted)
                 _document, unchanged = await self._repository.persist_fetched_document(
                     run_id=run_id,
@@ -91,6 +114,7 @@ class PublicWebWorker:
                     work_type=request.work_type,
                     fetched=1,
                     unchanged=unchanged,
+                    direct_sources_discovered=direct_count,
                     duration_ms=int((monotonic() - started) * 1000),
                 )
             else:

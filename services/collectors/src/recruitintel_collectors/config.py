@@ -2,6 +2,18 @@ import os
 from dataclasses import dataclass
 
 
+def _environment_boolean(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip().casefold()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be true or false")
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     database_url: str
@@ -14,6 +26,8 @@ class Settings:
     public_web_static_results_file: str | None
     public_web_max_response_bytes: int
     public_web_requests_per_second: float
+    zero_cost_mode: bool
+    searxng_base_url: str | None
     google_client_id: str | None
     google_client_secret: str | None
     calendar_token_encryption_key: str | None
@@ -42,6 +56,8 @@ class Settings:
             public_web_requests_per_second=float(
                 os.environ.get("PUBLIC_WEB_REQUESTS_PER_SECOND", "1")
             ),
+            zero_cost_mode=_environment_boolean("ZERO_COST_MODE", True),
+            searxng_base_url=os.environ.get("SEARXNG_BASE_URL") or None,
             google_client_id=os.environ.get("GOOGLE_CLIENT_ID") or None,
             google_client_secret=os.environ.get("GOOGLE_CLIENT_SECRET") or None,
             calendar_token_encryption_key=(os.environ.get("CALENDAR_TOKEN_ENCRYPTION_KEY") or None),

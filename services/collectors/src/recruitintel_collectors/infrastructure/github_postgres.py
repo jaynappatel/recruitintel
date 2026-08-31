@@ -8,6 +8,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from recruitintel_collectors.domain.enums import RecruitingEventType
+from recruitintel_collectors.domain.fingerprints import fingerprint_job_derivation
 from recruitintel_collectors.github.enums import GitHubRecordType
 from recruitintel_collectors.github.fingerprints import (
     github_event_fingerprint,
@@ -26,13 +27,15 @@ from recruitintel_collectors.github.models import (
 )
 from recruitintel_collectors.github.resolution import GitHubCompanyResolver
 from recruitintel_collectors.pipeline.memory import RunAlreadyActiveError
+from recruitintel_collectors.redaction import redact_text
 
 
 class PostgresGitHubSyncRepository:
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, *, work_attempt_id: UUID | None = None) -> None:
         if not database_url.startswith(("postgresql://", "postgres://")):
             raise ValueError("DATABASE_URL must be a PostgreSQL URL")
         self.database_url = database_url
+        self.work_attempt_id = work_attempt_id
 
     async def _connect(self) -> psycopg.AsyncConnection[dict[str, Any]]:
         return await psycopg.AsyncConnection.connect(self.database_url, row_factory=dict_row)
@@ -135,11 +138,16 @@ class PostgresGitHubSyncRepository:
                             raise ValueError("sync request is not pending for this repository")
                     cursor = await connection.execute(
                         """
-                        insert into public.collector_runs (source_id, collector, metadata)
-                        values (%s, 'github', %s)
+                        insert into public.collector_runs (
+                          source_id, collector, metadata, work_attempt_id
+                        ) values (%s, 'github', %s, %s)
                         returning id
                         """,
-                        (repository.source_id, Jsonb({"repository_id": str(repository.id)})),
+                        (
+                            repository.source_id,
+                            Jsonb({"repository_id": str(repository.id)}),
+                            self.work_attempt_id,
+                        ),
                     )
                     row = await cursor.fetchone()
                     if row is None:
@@ -149,10 +157,16 @@ class PostgresGitHubSyncRepository:
                         """
                         insert into public.github_sync_runs (
                           collector_run_id, github_repository_id, sync_request_id,
-                          previous_commit_sha
-                        ) values (%s, %s, %s, %s)
+                          previous_commit_sha, work_attempt_id
+                        ) values (%s, %s, %s, %s, %s)
                         """,
-                        (run_id, repository.id, request_id, repository.last_processed_commit_sha),
+                        (
+                            run_id,
+                            repository.id,
+                            request_id,
+                            repository.last_processed_commit_sha,
+                            self.work_attempt_id,
+                        ),
                     )
                     return run_id
         except UniqueViolation as exc:
@@ -577,9 +591,13 @@ class PostgresGitHubSyncRepository:
     ) -> str:
         job = resolved.job
         content_hash = github_job_content_fingerprint(job)
+        derivation_hash = fingerprint_job_derivation(job)
         await cursor.execute(
             """
-            select id, content_hash from public.jobs
+            select id, content_hash, source_content_hash, source_content_version,
+              derivation_hash, derivation_version, title, description, location,
+              application_url, source_url, published_at
+            from public.jobs
             where source_id = %s and external_id = %s
             for update
             """,
@@ -594,10 +612,13 @@ class PostgresGitHubSyncRepository:
                   employment_type, role_family, experience_level, is_internship,
                   is_new_grad, season, graduation_years, application_url, source_url,
                   first_seen_at, last_seen_at, changed_at, published_at, content_hash,
-                  fingerprint_version, classification_version, last_seen_run_id, raw_payload
+                  fingerprint_version, source_content_hash, source_content_version,
+                  derivation_hash, derivation_version, classification_version,
+                  last_seen_run_id, raw_payload
                 ) values (
                   %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                  %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                  %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                  %s, %s, %s, %s
                 ) returning id
                 """,
                 (
@@ -622,6 +643,10 @@ class PostgresGitHubSyncRepository:
                     job.published_at,
                     content_hash,
                     job.fingerprint_version,
+                    content_hash,
+                    job.fingerprint_version,
+                    derivation_hash,
+                    job.derivation_version,
                     job.classification_version,
                     run_id,
                     Jsonb(job.raw_payload),
@@ -634,7 +659,23 @@ class PostgresGitHubSyncRepository:
             transition = "new"
         else:
             job_id = existing["id"]
-            transition = "unchanged" if existing["content_hash"] == content_hash else "updated"
+            same_source_content = (
+                existing["title"] == job.title
+                and existing["description"] == job.description
+                and existing["location"] == job.location
+                and existing["application_url"] == job.application_url
+                and existing["source_url"] == job.source_url
+                and existing["published_at"] == job.published_at
+            )
+            transition = "unchanged" if same_source_content else "updated"
+            derivation_changed = (
+                existing["derivation_hash"] != derivation_hash
+                or existing["derivation_version"] != job.derivation_version
+            )
+            source_hash_recomputed = same_source_content and (
+                existing["source_content_hash"] != content_hash
+                or existing["source_content_version"] != job.fingerprint_version
+            )
             await cursor.execute(
                 """
                 update public.jobs set
@@ -643,8 +684,10 @@ class PostgresGitHubSyncRepository:
                   is_internship = %s, is_new_grad = %s, season = %s,
                   graduation_years = %s, application_url = %s, source_url = %s,
                   last_seen_at = %s,
-                  changed_at = case when content_hash <> %s then %s else changed_at end,
+                  changed_at = case when %s then changed_at else %s end,
                   closed_at = null, content_hash = %s, fingerprint_version = %s,
+                  source_content_hash = %s, source_content_version = %s,
+                  derivation_hash = %s, derivation_version = %s,
                   classification_version = %s, last_seen_run_id = %s, raw_payload = %s
                 where id = %s
                 """,
@@ -663,16 +706,41 @@ class PostgresGitHubSyncRepository:
                     job.application_url,
                     job.source_url,
                     observed_at,
-                    content_hash,
+                    same_source_content,
                     observed_at,
                     content_hash,
                     job.fingerprint_version,
+                    content_hash,
+                    job.fingerprint_version,
+                    derivation_hash,
+                    job.derivation_version,
                     job.classification_version,
                     run_id,
                     Jsonb(job.raw_payload),
                     job_id,
                 ),
             )
+            if transition == "unchanged" and (derivation_changed or source_hash_recomputed):
+                await cursor.execute(
+                    """
+                    insert into public.job_derivation_events (
+                      job_id, event_type, previous_derivation_hash, derivation_hash,
+                      derivation_version, source_content_hash, reason_code
+                    ) values (%s, %s, %s, %s, %s, %s, %s)
+                    on conflict do nothing
+                    """,
+                    (
+                        job_id,
+                        "DERIVATION_RECOMPUTED" if derivation_changed else "SOURCE_HASH_RECOMPUTED",
+                        existing["derivation_hash"],
+                        derivation_hash,
+                        job.derivation_version,
+                        content_hash,
+                        "CLASSIFIER_OR_PARSER_VERSION_CHANGED"
+                        if derivation_changed
+                        else "SOURCE_HASH_VERSION_CHANGED",
+                    ),
+                )
 
         normalized = job.model_dump(mode="json", exclude={"raw_payload"})
         await cursor.execute(
@@ -941,7 +1009,7 @@ class PostgresGitHubSyncRepository:
                     (
                         run_id,
                         type(error).__name__,
-                        str(error)[:10_000],
+                        redact_text(str(error))[:10_000],
                         retryable,
                         Jsonb({"repository_id": str(repository.id)}),
                     ),
@@ -979,5 +1047,5 @@ class PostgresGitHubSyncRepository:
                           status = 'FAILED', finished_at = %s, error_message = %s
                         where id = %s and status = 'RUNNING'
                         """,
-                        (now, str(error)[:10_000], request_id),
+                        (now, redact_text(str(error))[:10_000], request_id),
                     )

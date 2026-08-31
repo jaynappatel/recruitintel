@@ -15,6 +15,7 @@ from recruitintel_collectors.public_web.enums import (
     PublicObservationType,
     RelevanceStatus,
     ReliabilityLevel,
+    SearchProviderCostCategory,
     WebSourceClassification,
 )
 from recruitintel_collectors.public_web.extraction import (
@@ -23,6 +24,7 @@ from recruitintel_collectors.public_web.extraction import (
 )
 from recruitintel_collectors.public_web.fetcher import (
     HostRateLimiter,
+    PublicWebRateLimitedError,
     ResponseTooLargeError,
     RestrictedSiteError,
     RobotsDeniedError,
@@ -35,9 +37,15 @@ from recruitintel_collectors.public_web.models import (
     CompanyWebConfig,
     FetchedDocument,
     SearchContext,
+    SearchRequest,
 )
 from recruitintel_collectors.public_web.query_templates import generate_search_queries
-from recruitintel_collectors.public_web.search import JsonFileSearchProvider
+from recruitintel_collectors.public_web.search import (
+    JsonFileSearchProvider,
+    SearchProviderDescriptor,
+    SearchProviderRegistry,
+    StaticSearchProvider,
+)
 from recruitintel_collectors.public_web.urls import (
     UnsafeUrlError,
     canonicalize_url,
@@ -163,6 +171,38 @@ async def test_fetcher_revalidates_redirects_and_enforces_size_and_robots() -> N
         ) as fetcher:
             with pytest.raises(ResponseTooLargeError):
                 await fetcher.fetch("https://example.com/large")
+
+
+@pytest.mark.asyncio
+async def test_fetcher_escalates_long_retry_after_to_durable_orchestration() -> None:
+    sleeps: list[float] = []
+
+    async def no_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                429,
+                headers={"Retry-After": "120"},
+                request=request,
+            )
+        )
+    )
+    async with client:
+        async with SafePublicWebFetcher(
+            user_agent="RecruitIntelTest/1",
+            resolver=Resolver("93.184.216.34"),
+            robots_policy=Robots(),
+            client=client,
+            requests_per_second=1000,
+            sleep=no_sleep,
+        ) as fetcher:
+            with pytest.raises(PublicWebRateLimitedError) as raised:
+                await fetcher.fetch("https://example.com/rate-limited")
+
+    assert raised.value.retry_after_seconds == 120
+    assert sleeps == []
 
     denied_client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(500)))
     async with denied_client:
@@ -338,6 +378,29 @@ def test_information_extraction_keeps_page_title_without_headings() -> None:
 @pytest.mark.asyncio
 async def test_static_search_provider_preserves_independent_results() -> None:
     provider = JsonFileSearchProvider(FIXTURES / "web_static_search_results.json")
-    results = await provider.search('"Stripe" internship 2027', max_results=10)
-    assert len(results) == 3
-    assert results[0].rank == 1
+    batch = await provider.search(SearchRequest(query='"Stripe" internship 2027', max_results=10))
+    assert len(batch.results) == 2
+    assert batch.results[0].rank == 1
+    assert batch.provider_calls == 0
+
+
+def test_search_registry_requires_an_explicit_descriptor_for_every_provider() -> None:
+    provider = StaticSearchProvider({})
+    registry = SearchProviderRegistry([provider])
+    assert registry.descriptor("static").production_capable is False
+    with pytest.raises(ValueError, match="reviewed descriptor"):
+        SearchProviderRegistry(
+            [provider],
+            [
+                SearchProviderDescriptor(
+                    name="unmatched",
+                    production_capable=False,
+                    official_api=False,
+                    minimum_interval_seconds=60,
+                    maximum_daily_queries=0,
+                    cost_category=SearchProviderCostCategory.FREE,
+                    zero_cost_eligible=True,
+                    terms_status="REVIEW_REQUIRED",
+                )
+            ],
+        )

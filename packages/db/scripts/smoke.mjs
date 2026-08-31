@@ -13,6 +13,17 @@ try {
       (select count(*) from public.companies)::int as companies,
       (select count(*) from public.sources)::int as sources,
       (select count(*) from public.jobs)::int as jobs,
+      (select count(*) from public.job_opportunities)::int as job_opportunities,
+      (select count(*) from public.job_opportunity_postings
+        where valid_to is null)::int as active_opportunity_memberships,
+      (
+        select count(*) from public.jobs job
+        left join public.job_opportunity_postings membership
+          on membership.job_id = job.id and membership.valid_to is null
+        where membership.id is null
+      )::int as opportunity_membership_orphans,
+      (select count(*) from public.jobs
+        where source_content_hash is null or derivation_hash is null)::int as missing_job_hash_domains,
       (select count(*) from public.github_repositories)::int as github_repositories,
       (select count(*) from public.interview_questions)::int as interview_questions,
       (select count(*) from public.interview_question_observations)::int
@@ -39,6 +50,68 @@ try {
       (select count(*) from public.calendar_connections)::int as calendar_connections,
       (select count(*) from public.calendar_external_events)::int as calendar_external_events,
       (select count(*) from public.calendar_sync_runs)::int as calendar_sync_runs,
+      (select count(*) from public.users)::int as users,
+      (select count(*) from public.user_profiles)::int as user_profiles,
+      (select count(*) from public.service_principals)::int as service_principals,
+      (select count(*) from public.audit_events)::int as audit_events,
+      (select count(*) from public.product_events)::int as product_events,
+      (select count(*) from public.privacy_requests)::int as privacy_requests,
+      (select count(*) from public.source_policies)::int as source_policies,
+      (select count(*) from public.schedules)::int as schedules,
+      (select count(*) from public.work_items)::int as work_items,
+      (select count(*) from public.work_attempts)::int as work_attempts,
+      (select count(*) from public.worker_role_bindings)::int as worker_role_bindings,
+      (select count(*) from public.search_provider_budgets)::int as search_provider_budgets,
+      (select count(*) from public.sources
+        where discovery_fingerprint is not null)::int as source_endpoints,
+      (select coalesce(sum(paid_spend_micros), 0)::bigint
+        from public.search_provider_usage_daily)::text as search_paid_spend_micros,
+      0::text as model_paid_spend_micros,
+      (
+        select coalesce(sum(orphan_count),0) from (
+          select count(*)::bigint orphan_count from public.user_profiles child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.user_sessions child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.calendar_items child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.application_plans child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.applications child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.application_events child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.application_assessments child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.application_interviews child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.resume_documents child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.resume_versions child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.resume_parse_runs child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.candidate_evidence child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.evidence_confirmations child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.resume_job_matches child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.match_evidence child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.browser_scan_sessions child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.page_snapshots child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.page_job_candidates child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.browser_ingest_decisions child
+            left join public.users owner on owner.id=child.user_id where owner.id is null
+          union all select count(*) from public.work_items child
+            left join public.users owner on owner.id=child.user_id
+            where child.user_id is not null and owner.id is null
+        ) private_orphans
+      )::int as private_owner_orphans,
       (select count(*) from public.recruiting_events)::int as events,
       (select count(*) from public.schema_migrations)::int as migrations
   `;
@@ -62,6 +135,23 @@ try {
     "application_plans_owner_id_plan_fingerprint_key",
     "calendar_external_events_calendar_item_id_calendar_connecti_key",
     "calendar_external_events_calendar_connection_id_external_ca_key",
+    "user_identities_no_persisted_credentials",
+    "calendar_items_plan_owner_fkey",
+    "calendar_external_events_connection_owner_fkey",
+    "calendar_sync_runs_request_owner_fkey",
+    "public_web_search_queries_provider_policy_fkey",
+    "public_web_search_queries_source_policy_fkey",
+    "source_policies_provider_id_key",
+    "sources_id_source_policy_id_key",
+    "work_items_no_search_api_key_diagnostics",
+    "work_attempts_no_search_api_key_diagnostics",
+    "dead_letters_no_search_api_key_diagnostics",
+    "public_web_runs_no_raw_search_payload",
+    "sources_discovery_fingerprint_key",
+    "sources_discovery_fingerprint_check",
+    "sources_discovery_confidence_check",
+    "schedules_check",
+    "jobs_id_company_unique",
   ];
   const constraints = await sql`
     select conname
@@ -72,13 +162,25 @@ try {
   const requiredIndexes = [
     "calendar_items_recruiting_date_owner_unique_idx",
     "calendar_sync_requests_active_unique_idx",
+    "work_items_exclusive_active_idx",
+    "work_items_eligible_idx",
+    "work_items_lease_expiry_idx",
+    "source_incidents_one_open_idx",
+    "public_web_runs_request_idx",
+    "public_web_search_queries_provider_policy_idx",
+    "search_provider_usage_month_idx",
+    "sources_company_discovery_idx",
+    "schedules_public_web_candidate_idx",
+    "job_opportunities_company_active_idx",
+    "job_opportunity_postings_one_active_job_idx",
+    "job_identity_keys_match_idx",
   ];
   const indexes = await sql`
     select indexname from pg_indexes
     where schemaname = 'public' and indexname in ${sql(requiredIndexes)}
   `;
 
-  if (!counts || counts.migrations < 5) {
+  if (!counts || counts.migrations < 10) {
     throw new Error("no applied RecruitIntel migrations were found");
   }
   if (counts.companies < 1 || counts.sources < 1 || counts.schools < 1) {
@@ -97,6 +199,29 @@ try {
   }
   if (indexes.length !== requiredIndexes.length) {
     throw new Error("calendar partial idempotency indexes are missing");
+  }
+  if (counts.users < 1 || counts.user_profiles < 1 || counts.private_owner_orphans !== 0) {
+    throw new Error("Milestone 6 user/profile seed or private ownership integrity is missing");
+  }
+  if (counts.source_policies < 1 || counts.schedules < 1 || counts.worker_role_bindings < 1) {
+    throw new Error("Milestone 7 policy, schedule, or worker binding seed is missing");
+  }
+  if (counts.search_provider_budgets < 1) {
+    throw new Error("Gate 7.1A search-provider budgets are missing");
+  }
+  if (counts.source_endpoints !== counts.sources) {
+    throw new Error("Gate 7.1A.1 source graph provenance is incomplete");
+  }
+  if (Number(counts.search_paid_spend_micros) !== 0) {
+    throw new Error("development zero-cost mode recorded paid search spend");
+  }
+  if (
+    counts.job_opportunities < counts.jobs ||
+    counts.active_opportunity_memberships !== counts.jobs ||
+    counts.opportunity_membership_orphans !== 0 ||
+    counts.missing_job_hash_domains !== 0
+  ) {
+    throw new Error("Milestone 8 singleton opportunity or hash-domain integrity is missing");
   }
 
   console.log(JSON.stringify({ status: "ok", ...counts }));

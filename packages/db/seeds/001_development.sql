@@ -317,3 +317,251 @@ select
   '{"seed":true,"live":false,"commit_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
 from public.interview_questions iq where iq.normalized_title = 'number of islands'
 on conflict (fingerprint) do nothing;
+do $$
+begin
+  if to_regclass('public.users') is not null then
+    insert into public.users (id, name, email, email_verified, status)
+    values (
+      '00000000-0000-0000-0000-000000000001',
+      'RecruitIntel Development User',
+      'legacy+00000000-0000-0000-0000-000000000001@recruitintel.invalid',
+      false,
+      'PENDING_IDENTITY'
+    )
+    on conflict (id) do nothing;
+
+    insert into public.user_profiles (user_id, timezone, locale)
+    values ('00000000-0000-0000-0000-000000000001', 'America/Chicago', 'en-US')
+    on conflict (user_id) do nothing;
+  end if;
+end;
+$$;
+
+-- Milestone 7 development-only governance. These records explicitly authorize local
+-- fixtures and must never be interpreted as a production legal/terms review.
+do $$
+declare
+  development_principal_id uuid := '97000000-0000-0000-0000-000000000001';
+begin
+  if to_regclass('public.source_policies') is not null then
+    insert into public.source_policies (
+      provider, display_name, status, collection_method, official_api_available,
+      authentication_mode, robots_policy, rate_policy, retention_policy,
+      content_restrictions, allowed_uses, terms_status, reviewed_at, reviewed_by,
+      maintainer, notes
+    )
+    select provider, initcap(replace(provider, '_', ' ')) || ' development fixture',
+      case when provider = 'manual'
+        then 'MANUAL_ONLY'::public.source_policy_status
+        else 'ALLOWED_WITH_LIMITS'::public.source_policy_status end,
+      case when provider in ('greenhouse', 'lever', 'github')
+        then 'OFFICIAL_API'::public.collection_method
+        when provider in ('manual', 'static')
+          then 'MANUAL_REFERENCE_ONLY'::public.collection_method
+        else 'ROBOTS_PERMITTED_HTTP'::public.collection_method end,
+      provider in ('greenhouse', 'lever', 'github'),
+      case when provider = 'github' then 'API_TOKEN' else 'NONE' end,
+      case when provider in ('greenhouse', 'lever', 'github', 'manual', 'static')
+        then 'NOT_APPLICABLE'::public.robots_policy_mode
+        else 'RESPECT_REQUIRED'::public.robots_policy_mode end,
+      '{"development_only":true,"requests_per_second":1}'::jsonb,
+      '{"development_only":true}'::jsonb,
+      '{"development_only":true}'::jsonb,
+      array['LOCAL_TESTING'], 'REVIEWED', now(), 'development-fixture',
+      'RecruitIntel developers',
+      'DEVELOPMENT_FIXTURE_ONLY. This is not a production legal or terms review.'
+    from (
+      select distinct provider from public.sources
+      union select provider from (values
+        ('greenhouse'), ('lever'), ('github'), ('web_search'), ('public_web'), ('manual'),
+        ('static')
+      ) known(provider)
+    ) providers where provider not in (
+      'you', 'searxng', 'ashby', 'workday', 'smartrecruiters',
+      'icims', 'successfactors', 'bamboohr'
+    )
+    on conflict (provider) do update set
+      status = excluded.status,
+      collection_method = excluded.collection_method,
+      official_api_available = excluded.official_api_available,
+      authentication_mode = excluded.authentication_mode,
+      robots_policy = excluded.robots_policy,
+      rate_policy = excluded.rate_policy,
+      retention_policy = excluded.retention_policy,
+      content_restrictions = excluded.content_restrictions,
+      allowed_uses = excluded.allowed_uses,
+      terms_status = excluded.terms_status,
+      reviewed_at = excluded.reviewed_at,
+      reviewed_by = excluded.reviewed_by,
+      maintainer = excluded.maintainer,
+      notes = excluded.notes;
+
+    update public.sources source set source_policy_id = policy.id
+    from public.source_policies policy
+    where source.provider = policy.provider
+      and not exists (
+        select 1 from public.public_web_search_queries query where query.source_id = source.id
+      )
+      and source.source_policy_id is distinct from policy.id;
+
+    update public.sources source set source_policy_id = policy.id
+    from public.public_web_search_queries query
+    join public.source_policies policy on policy.provider = query.provider
+    where query.source_id = source.id
+      and source.source_policy_id is distinct from policy.id;
+
+    insert into public.source_policy_host_rules (
+      source_policy_id, hostname_suffix, allow_subdomains, https_required, allowed_ports
+    )
+    select distinct source.source_policy_id,
+      lower(substring(source.base_url from '^https?://([^/:]+)')),
+      false,
+      source.base_url like 'https://%',
+      case when source.base_url like 'https://%' then array[443] else array[80] end
+    from public.sources source
+    join public.source_policies policy on policy.id = source.source_policy_id
+    where source.base_url is not null
+      and policy.collection_method = 'ROBOTS_PERMITTED_HTTP'
+      and substring(source.base_url from '^https?://([^/:]+)') is not null
+    on conflict (source_policy_id, hostname_suffix) do nothing;
+
+    update public.sources source set enabled = true
+    where source.provider = 'public_web'
+      and source.discovery_method = 'CONFIGURED'
+      and public.source_policy_is_executable(source.id);
+
+    insert into public.source_policy_host_rules (
+      source_policy_id, hostname_suffix, allow_subdomains, https_required,
+      allowed_ports
+    )
+    select policy.id, fixture.hostname, false, true, array[443]
+    from public.source_policies policy
+    cross join (values
+      ('stripe.com'), ('careerengagement.utexas.edu'), ('example.com')
+    ) fixture(hostname)
+    where policy.provider = 'public_web'
+      and policy.notes like 'DEVELOPMENT_FIXTURE_ONLY%'
+    on conflict (source_policy_id, hostname_suffix) do nothing;
+
+    insert into public.service_principals (
+      id, name, kind, token_prefix, token_hash, scopes, status
+    ) values (
+      development_principal_id,
+      'Development orchestration worker',
+      'WORKER',
+      'ri_worker_M7Dev0001',
+      encode(digest('disabled-development-orchestration-token', 'sha256'), 'hex'),
+      array[
+        'WORKER_INGEST', 'WORKER_CALENDAR_SYNC', 'WORKER_SCHEDULER',
+        'WORKER_GLOBAL', 'WORKER_PRIVACY'
+      ]::public.service_scope[],
+      'ACTIVE'
+    ) on conflict (id) do update set
+      scopes = excluded.scopes, status = 'ACTIVE', revoked_at = null;
+
+    insert into public.worker_role_bindings (
+      database_role, service_principal_id, allowed_work_classes, can_schedule
+    ) values (
+      current_user, development_principal_id,
+      array[
+        'ATS', 'GITHUB', 'WEB_SEARCH', 'WEB_FETCH', 'PROJECTION',
+        'CALENDAR', 'PRIVACY', 'CONTROL'
+      ]::public.work_class[],
+      true
+    ) on conflict (database_role) do update set
+      service_principal_id = excluded.service_principal_id,
+      allowed_work_classes = excluded.allowed_work_classes,
+      can_schedule = excluded.can_schedule;
+
+    insert into public.schedules (
+      name, work_type, work_class, source_id, enabled, schedule_kind,
+      interval_seconds, anchor_at, next_run_at, jitter_seconds, priority,
+      max_attempts, retry_policy
+    )
+    select 'ats:' || source.id::text, 'ATS_COLLECT', 'ATS', source.id, true,
+      'INTERVAL', 3600, now(), now() + interval '5 minutes', 300, 60, 3,
+      'EXPONENTIAL_V1'
+    from public.sources source
+    where source.source_type = 'ATS' and source.enabled
+      and public.source_policy_is_executable(source.id)
+    on conflict (name) do update set
+      enabled = excluded.enabled,
+      interval_seconds = excluded.interval_seconds,
+      jitter_seconds = excluded.jitter_seconds,
+      priority = excluded.priority;
+
+    insert into public.schedules (
+      name, work_type, work_class, github_repository_id, enabled, schedule_kind,
+      interval_seconds, anchor_at, next_run_at, jitter_seconds, priority,
+      max_attempts, retry_policy
+    )
+    select 'github:' || repository.id::text, 'GITHUB_SYNC', 'GITHUB', repository.id,
+      false, 'INTERVAL', 21600, now(), now() + interval '6 hours', 900, 45, 3,
+      'EXPONENTIAL_V1'
+    from public.github_repositories repository
+    on conflict (name) do update set
+      interval_seconds = excluded.interval_seconds,
+      jitter_seconds = excluded.jitter_seconds,
+      priority = excluded.priority;
+
+    insert into public.schedules (
+      name, work_type, work_class, public_web_search_query_id, enabled,
+      schedule_kind, interval_seconds, anchor_at, next_run_at, jitter_seconds,
+      priority, max_attempts, retry_policy
+    )
+    select 'public-web-search:' || query.id::text, 'PUBLIC_WEB_SEARCH', 'WEB_SEARCH',
+      query.id, false, 'INTERVAL', greatest(query.minimum_interval_seconds, 21600),
+      now(), now() + make_interval(secs => greatest(query.minimum_interval_seconds, 21600)),
+      1800, 30, 3, 'EXPONENTIAL_V1'
+    from public.public_web_search_queries query
+    on conflict (name) do update set
+      interval_seconds = excluded.interval_seconds,
+      jitter_seconds = excluded.jitter_seconds,
+      priority = excluded.priority;
+
+    insert into public.schedules (
+      name, work_type, work_class, public_web_candidate_id, enabled,
+      schedule_kind, interval_seconds, anchor_at, next_run_at, jitter_seconds,
+      priority, max_attempts, retry_policy
+    )
+    select 'direct-web:' || candidate.id::text, 'PUBLIC_WEB_FETCH', 'WEB_FETCH',
+      candidate.id, public.source_policy_is_executable(candidate.source_id),
+      'INTERVAL', case when source.source_type = 'COMPANY_CAREERS' then 21600 else 604800 end,
+      now(), now() + case when source.source_type = 'COMPANY_CAREERS'
+        then interval '6 hours' else interval '7 days' end,
+      case when source.source_type = 'COMPANY_CAREERS' then 900 else 3600 end,
+      case when source.source_type = 'COMPANY_CAREERS' then 45 else 25 end,
+      3, 'EXPONENTIAL_V1'
+    from public.public_web_candidates candidate
+    join public.sources source on source.id = candidate.source_id
+    where source.provider = 'public_web'
+      and source.discovery_method in ('CONFIGURED', 'PAGE_LINK')
+    on conflict (name) do update set
+      enabled = excluded.enabled,
+      interval_seconds = excluded.interval_seconds,
+      jitter_seconds = excluded.jitter_seconds,
+      priority = excluded.priority;
+
+    insert into public.schedules (
+      name, work_type, work_class, enabled, schedule_kind, daily_local_time,
+      timezone, next_run_at, priority, max_attempts, retry_policy
+    ) values
+      (
+        'system:source-health-rollup', 'SOURCE_HEALTH_ROLLUP', 'CONTROL', true,
+        'DAILY_AT', '02:30', 'America/Chicago',
+        public.next_daily_occurrence(now(), '02:30', 'America/Chicago'), 20, 1, 'NO_RETRY'
+      ),
+      (
+        'system:privacy-retention-cleanup', 'PRIVACY_RETENTION_CLEANUP', 'PRIVACY', true,
+        'DAILY_AT', '03:00', 'America/Chicago',
+        public.next_daily_occurrence(now(), '03:00', 'America/Chicago'), 15, 3,
+        'EXPONENTIAL_V1'
+      )
+    on conflict (name) do update set
+      enabled = excluded.enabled,
+      daily_local_time = excluded.daily_local_time,
+      timezone = excluded.timezone,
+      priority = excluded.priority;
+  end if;
+end;
+$$;

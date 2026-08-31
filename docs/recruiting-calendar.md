@@ -1,15 +1,15 @@
 # Recruiting calendar and application planning
 
-Milestone 5 connects date-bearing recruiting intelligence to owner-scoped actions and optional
-one-way Google Calendar synchronization. It does not add alerts, an application-tracking CRM,
-analytics, ML, multi-user authentication, or two-way calendar sync.
+Milestone 5 connects date-bearing recruiting intelligence to user-owned actions and optional
+one-way Google Calendar synchronization. Milestone 6 subsequently added authenticated ownership;
+alerts, an application-tracking CRM, analytics, ML, and two-way calendar sync remain out of scope.
 
 ## Domain and ownership
 
-`RECRUITINTEL_MVP_OWNER_ID` is the current-owner abstraction. Route handlers resolve it on the
-server and never accept an owner ID from the browser. The default is the stable UUID
-`00000000-0000-0000-0000-000000000001`. This isolates all calendar, plan, OAuth, and sync reads
-without pretending Milestone 5 has implemented user authentication.
+Calendar items, application plans, Calendar connections, OAuth states, external mappings, and sync
+requests are owned by the authenticated `users.id`. Route handlers derive that ID only from the
+HttpOnly Better Auth session. Browser requests never accept `userId` or `ownerId`; another user's
+resource is indistinguishable from a missing resource and returns `404`.
 
 `RecruitingDate` is source intelligence. It retains certainty, precision, confidence, source URL,
 source ID, source-specific identity, and provenance JSON. `materializeRecruitingDates()` projects
@@ -245,17 +245,18 @@ frontend types need an adapter update when Claude switches off mocks:
 
 ## Sync lifecycle and observability
 
-Run one queued request with:
+Run the owner-isolated Calendar worker lane (or add `--once` for a local smoke):
 
 ```bash
-uv run recruitintel-collectors calendar-sync --request-id REQUEST_UUID
+uv run recruitintel-collectors worker --classes CALENDAR
 ```
 
-The worker refreshes an access token in memory, selects eligible items by item opt-in and connection
-preferences, then creates, updates, deletes, or no-ops. It records attempted/created/updated/deleted/
-unchanged/failed counts, duration, sanitized item error codes, request attempt state, connection
-status, and mapping status. Partial failures retry with bounded exponential backoff. Revoked or
-invalid refresh credentials transition the connection to `REAUTH_REQUIRED` without repeated retry.
+The typed handler claims an owner-bound request with a fenced lease, refreshes an access token in
+memory, selects eligible items by item opt-in and connection preferences, then creates, updates,
+deletes, or no-ops. It records attempted/created/updated/deleted/unchanged/failed counts, duration,
+sanitized item error codes, request/attempt state, connection status, and mapping status. Partial
+provider failures retry with durable exponential backoff and quota `Retry-After`. Authorization
+failures transition the connection/work to `REAUTH_REQUIRED` without repeated retry.
 
 Every external event has a unique database mapping and a deterministic provider event ID derived
 from connection and item IDs. If Google accepts a create but local persistence fails, a retry gets

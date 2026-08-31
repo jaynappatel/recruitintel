@@ -12,7 +12,10 @@ from recruitintel_collectors.domain.enums import (
     JobTransition,
     RecruitingEventType,
 )
-from recruitintel_collectors.domain.fingerprints import fingerprint_event
+from recruitintel_collectors.domain.fingerprints import (
+    fingerprint_event,
+    fingerprint_job_derivation,
+)
 from recruitintel_collectors.domain.models import (
     CollectorResult,
     FingerprintedJob,
@@ -24,6 +27,7 @@ from recruitintel_collectors.pipeline.transitions import (
     decide_job_transition,
     ensure_unique_external_ids,
 )
+from recruitintel_collectors.redaction import redact_text, redact_value
 
 
 def _source_from_row(row: dict[str, Any]) -> SourceConfig:
@@ -41,10 +45,11 @@ def _source_from_row(row: dict[str, Any]) -> SourceConfig:
 
 
 class PostgresCollectorRepository:
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, *, work_attempt_id: UUID | None = None) -> None:
         if not database_url.startswith(("postgresql://", "postgres://")):
             raise ValueError("DATABASE_URL must be a PostgreSQL URL")
         self.database_url = database_url
+        self.work_attempt_id = work_attempt_id
 
     async def _connect(self) -> psycopg.AsyncConnection[dict[str, Any]]:
         return await psycopg.AsyncConnection.connect(self.database_url, row_factory=dict_row)
@@ -89,11 +94,11 @@ class PostgresCollectorRepository:
             async with await self._connect() as connection:
                 cursor = await connection.execute(
                     """
-                    insert into public.collector_runs (source_id, collector)
-                    values (%s, %s)
+                    insert into public.collector_runs (source_id, collector, work_attempt_id)
+                    values (%s, %s, %s)
                     returning id
                     """,
-                    (source.id, collector),
+                    (source.id, collector, self.work_attempt_id),
                 )
                 row = await cursor.fetchone()
                 if row is None:
@@ -101,6 +106,22 @@ class PostgresCollectorRepository:
                 return UUID(str(row["id"]))
         except UniqueViolation as exc:
             raise RunAlreadyActiveError(f"source {source.id} already has an active run") from exc
+
+    @staticmethod
+    def _derivation_hash(value: FingerprintedJob) -> str:
+        return value.derivation_hash or fingerprint_job_derivation(value.job)
+
+    @staticmethod
+    def _same_source_content(existing: dict[str, Any], value: FingerprintedJob) -> bool:
+        job = value.job
+        return bool(
+            existing["title"] == job.title
+            and existing["description"] == job.description
+            and existing["location"] == job.location
+            and existing["application_url"] == job.application_url
+            and existing["source_url"] == job.source_url
+            and existing["published_at"] == job.published_at
+        )
 
     @staticmethod
     async def _insert_snapshot_and_observation(
@@ -235,6 +256,10 @@ class PostgresCollectorRepository:
             job.published_at,
             value.content_hash,
             job.fingerprint_version,
+            value.content_hash,
+            job.fingerprint_version,
+            PostgresCollectorRepository._derivation_hash(value),
+            job.derivation_version,
             job.classification_version,
             run_id,
             Jsonb(job.raw_payload),
@@ -274,7 +299,10 @@ class PostgresCollectorRepository:
                 for incoming in result.jobs:
                     await cursor.execute(
                         """
-                        select id, content_hash, closed_at
+                        select id, content_hash, source_content_hash, source_content_version,
+                               derivation_hash, derivation_version, closed_at,
+                               title, description, location, application_url, source_url,
+                               published_at
                         from public.jobs
                         where source_id = %s and external_id = %s
                         for update
@@ -282,8 +310,17 @@ class PostgresCollectorRepository:
                         (source.id, incoming.job.external_id),
                     )
                     existing = await cursor.fetchone()
+                    source_content_equal = bool(
+                        existing and self._same_source_content(existing, incoming)
+                    )
                     transition = decide_job_transition(
-                        existing_hash=existing["content_hash"] if existing else None,
+                        existing_hash=(
+                            incoming.content_hash
+                            if source_content_equal
+                            else existing["content_hash"]
+                        )
+                        if existing
+                        else None,
                         existing_closed_at=existing["closed_at"] if existing else None,
                         incoming_hash=incoming.content_hash,
                     )
@@ -296,11 +333,13 @@ class PostgresCollectorRepository:
                               employment_type, role_family, experience_level, is_internship,
                               is_new_grad, season, graduation_years, application_url, source_url,
                               first_seen_at, last_seen_at, changed_at, published_at, content_hash,
-                              fingerprint_version, classification_version, last_seen_run_id,
-                              raw_payload
+                              fingerprint_version, source_content_hash, source_content_version,
+                              derivation_hash, derivation_version, classification_version,
+                              last_seen_run_id, raw_payload
                             ) values (
                               %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                              %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                              %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                              %s, %s, %s, %s
                             ) returning id
                             """,
                             self._job_parameters(
@@ -336,8 +375,22 @@ class PostgresCollectorRepository:
 
                     job_id = existing["id"]
                     previous_hash = existing["content_hash"]
+                    previous_derivation_hash = existing["derivation_hash"]
                     previous_closed_at = existing["closed_at"]
-                    if transition is JobTransition.UNCHANGED:
+                    incoming_derivation_hash = self._derivation_hash(incoming)
+                    derivation_changed = (
+                        existing["derivation_hash"] != incoming_derivation_hash
+                        or existing["derivation_version"] != incoming.job.derivation_version
+                    )
+                    source_hash_recomputed = source_content_equal and (
+                        existing["source_content_hash"] != incoming.content_hash
+                        or existing["source_content_version"] != incoming.job.fingerprint_version
+                    )
+                    if (
+                        transition is JobTransition.UNCHANGED
+                        and not derivation_changed
+                        and not source_hash_recomputed
+                    ):
                         await cursor.execute(
                             """
                             update public.jobs
@@ -345,6 +398,70 @@ class PostgresCollectorRepository:
                             where id = %s
                             """,
                             (now, run_id, job_id),
+                        )
+                        counts["unchanged"] += 1
+                        continue
+
+                    if transition is JobTransition.UNCHANGED:
+                        job = incoming.job
+                        await cursor.execute(
+                            """
+                            update public.jobs set
+                              employment_type = %s, role_family = %s, experience_level = %s,
+                              is_internship = %s, is_new_grad = %s, season = %s,
+                              graduation_years = %s, last_seen_at = %s,
+                              content_hash = %s, fingerprint_version = %s,
+                              source_content_hash = %s, source_content_version = %s,
+                              derivation_hash = %s, derivation_version = %s,
+                              classification_version = %s, last_seen_run_id = %s,
+                              raw_payload = %s
+                            where id = %s
+                            """,
+                            (
+                                job.employment_type.value,
+                                job.role_family.value,
+                                job.experience_level.value,
+                                job.is_internship,
+                                job.is_new_grad,
+                                job.season,
+                                list(job.graduation_years),
+                                now,
+                                incoming.content_hash,
+                                job.fingerprint_version,
+                                incoming.content_hash,
+                                job.fingerprint_version,
+                                incoming_derivation_hash,
+                                job.derivation_version,
+                                job.classification_version,
+                                run_id,
+                                Jsonb(job.raw_payload),
+                                job_id,
+                            ),
+                        )
+                        event_type = (
+                            "DERIVATION_RECOMPUTED"
+                            if derivation_changed
+                            else "SOURCE_HASH_RECOMPUTED"
+                        )
+                        await cursor.execute(
+                            """
+                            insert into public.job_derivation_events (
+                              job_id, event_type, previous_derivation_hash, derivation_hash,
+                              derivation_version, source_content_hash, reason_code
+                            ) values (%s, %s, %s, %s, %s, %s, %s)
+                            on conflict do nothing
+                            """,
+                            (
+                                job_id,
+                                event_type,
+                                previous_derivation_hash,
+                                incoming_derivation_hash,
+                                job.derivation_version,
+                                incoming.content_hash,
+                                "CLASSIFIER_OR_PARSER_VERSION_CHANGED"
+                                if derivation_changed
+                                else "SOURCE_HASH_VERSION_CHANGED",
+                            ),
                         )
                         counts["unchanged"] += 1
                         continue
@@ -359,6 +476,8 @@ class PostgresCollectorRepository:
                           graduation_years = %s, application_url = %s, source_url = %s,
                           last_seen_at = %s, changed_at = %s, published_at = %s,
                           closed_at = null, content_hash = %s, fingerprint_version = %s,
+                          source_content_hash = %s, source_content_version = %s,
+                          derivation_hash = %s, derivation_version = %s,
                           classification_version = %s, last_seen_run_id = %s, raw_payload = %s
                         where id = %s
                         """,
@@ -380,6 +499,10 @@ class PostgresCollectorRepository:
                             job.published_at,
                             incoming.content_hash,
                             job.fingerprint_version,
+                            incoming.content_hash,
+                            job.fingerprint_version,
+                            incoming_derivation_hash,
+                            job.derivation_version,
                             job.classification_version,
                             run_id,
                             Jsonb(job.raw_payload),
@@ -460,6 +583,48 @@ class PostgresCollectorRepository:
                         payload={"content_hash": row["content_hash"], "reason": "source_absent"},
                     )
 
+                await cursor.execute(
+                    """
+                    insert into public.source_collection_evidence (
+                      source_id, collector_run_id, coverage, successful,
+                      absence_evidence_valid, capability_version, observed_at,
+                      fingerprint, safe_metadata
+                    )
+                    select %s, %s, 'COMPLETE', true,
+                      capability.reviewed and capability.supports_complete_listing
+                        and capability.absence_can_close,
+                      capability.capability_version, %s,
+                      encode(digest('source-collection:' || %s::text, 'sha256'), 'hex'),
+                      jsonb_build_object('collector', %s::text, 'complete', true)
+                    from public.source_job_capabilities capability
+                    where capability.source_id = %s
+                    on conflict (fingerprint) do nothing
+                    """,
+                    (
+                        source.id,
+                        run_id,
+                        now,
+                        run_id,
+                        source.provider,
+                        source.id,
+                    ),
+                )
+
+                await cursor.execute(
+                    """
+                    select distinct membership.opportunity_id
+                    from public.job_opportunity_postings membership
+                    join public.jobs job on job.id = membership.job_id
+                    where job.source_id = %s and membership.valid_to is null
+                    """,
+                    (source.id,),
+                )
+                for opportunity in await cursor.fetchall():
+                    await cursor.execute(
+                        "select public.recompute_job_opportunity(%s)",
+                        (opportunity["opportunity_id"],),
+                    )
+
                 stats = SyncStats(discovered=result.discovered, **counts)
                 await cursor.execute(
                     """
@@ -498,7 +663,14 @@ class PostgresCollectorRepository:
                   collector_run_id, stage, error_type, message, retryable, context
                 ) values (%s, %s, %s, %s, %s, %s)
                 """,
-                (run_id, stage.value, error_type, message[:10_000], retryable, Jsonb(context)),
+                (
+                    run_id,
+                    stage.value,
+                    error_type,
+                    redact_text(message)[:10_000],
+                    retryable,
+                    Jsonb(redact_value(context)),
+                ),
             )
 
     async def fail_run(self, run_id: UUID, *, discovered: int, errors: int = 1) -> None:

@@ -19,7 +19,7 @@ export function EventList({
         <article className={compact ? "relative py-4 pl-8" : "relative p-5 pl-12"} key={event.id}>
           <CircleDot
             aria-hidden="true"
-            className={`absolute text-[var(--forest-bright)] ${compact ? "top-5 left-0 size-4" : "top-6 left-5 size-4"}`}
+            className={`absolute text-[var(--accent)] ${compact ? "top-5 left-0 size-4" : "top-6 left-5 size-4"}`}
           />
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
@@ -32,7 +32,7 @@ export function EventList({
               </h3>
               <div className="mt-1 text-sm text-[var(--muted)]">
                 <Link
-                  className="font-semibold text-[var(--forest)] hover:underline"
+                  className="font-semibold text-[var(--ink)] hover:underline"
                   href={`/companies/${event.companySlug}`}
                 >
                   {event.companyName}
@@ -43,7 +43,7 @@ export function EventList({
             </div>
             <div className="text-right text-xs text-[var(--muted)]">
               <div>{formatCompactDate(event.occurredAt)}</div>
-              <div className="mt-1 font-mono">confidence {event.confidence.toFixed(2)}</div>
+              <div className="mt-1">Confidence: {Math.round(event.confidence * 100)}%</div>
             </div>
           </div>
         </article>

@@ -16,21 +16,21 @@ this document only covers `apps/web` and the frontend-only packages it depends o
 
 ## Page architecture
 
-| Route | Rendering | Data source |
-|---|---|---|
-| `/dashboard` | Server component, `dynamic = "force-dynamic"` | `@recruitintel/db` directly |
-| `/companies`, `/companies/[slug]` | Server component | `@recruitintel/db` directly |
-| `/jobs`, `/events` | Server component | `@recruitintel/db` directly |
-| `/calendar` | Server shell + client `CalendarApp` | Mocked, via `lib/api/calendar.ts` |
-| `/settings` | Server shell + client `GoogleCalendarCard` | Mocked, via `lib/api/calendar.ts` |
+| Route                             | Rendering                                     | Data source                                                          |
+| --------------------------------- | --------------------------------------------- | -------------------------------------------------------------------- |
+| `/dashboard`                      | Server component, `dynamic = "force-dynamic"` | `@recruitintel/db` directly                                          |
+| `/companies`, `/companies/[slug]` | Server component                              | `@recruitintel/db` directly                                          |
+| `/jobs`, `/events`                | Server component                              | `@recruitintel/db` directly                                          |
+| `/calendar`                       | Server shell + client `CalendarApp`           | Canonical Calendar/ApplicationPlan APIs via `lib/api/calendar.ts`    |
+| `/settings`                       | Server shell + client `GoogleCalendarCard`    | Canonical Google Calendar integration APIs via `lib/api/calendar.ts` |
 
 The DB-backed pages query `@recruitintel/db` directly from server components (not through a
 fetch layer) and wrap every query in try/catch, rendering `<DatabaseError>` if Postgres isn't
 reachable — this is intentional: it's a real, already-wired backend, so there's no mock layer
-to maintain for it. **Calendar and Settings are different**: Codex has not built calendar
-endpoints yet, so those routes are 100% frontend-owned and mocked (see below). This is also
-why `/calendar` and `/settings` build as static pages while the DB-backed routes build as
-dynamic (`ƒ`) — they have no server dependency to fail.
+to maintain for it. Calendar and Settings keep client-side interaction state, but their
+production data now comes from the Milestone 5 route handlers. They surface intentional loading,
+API-unavailable, queued-sync, reauthorization, and provider-error states without exposing raw
+provider responses.
 
 Still missing from the original nav spec: **Recruiters**, **Interview Prep**, **Watchlist**.
 Not built this pass — no page exists for them yet, so they're intentionally left off the
@@ -44,12 +44,13 @@ Tailwind arbitrary values (`bg-[var(--panel)]`) or the two shared classes `.surf
 `.glass-dark`.
 
 **Base palette (minimal, on purpose):**
+
 - `--paper` — warm off-white page background
 - `--ink` / `--muted` — near-black text, neutral gray secondary text
 - `--panel` — near-black, used for dark solid UI (buttons, badges, sidebar text-on-white)
 - `--panel-glass` — translucent version of `--panel`, used with `backdrop-filter: blur()`
   for the sidebar and the company-detail header band
-- `--accent` (`#c9974a`, warm gold) — the *one* accent color. Used sparingly: hover states,
+- `--accent` (`#c9974a`, warm gold) — the _one_ accent color. Used sparingly: hover states,
   active-nav glyphs, the eyebrow label color, estimated-status badges.
 - `--surface` — translucent white, the frosted "glass" fill used by `.surface` (every card,
   panel, and section wrapper in the app)
@@ -76,35 +77,30 @@ system would.
 ## Certainty is visually encoded, not just labeled
 
 Per the product's core UX principle (fact vs. observation vs. inference vs. prediction must
-never look the same), the calendar's four statuses have deliberately different visual weight
+never look the same), the calendar's five presentation statuses have deliberately different visual weight
 in `components/calendar/status-badge.tsx`:
 
 - `CONFIRMED` — solid emerald fill (the only solid/filled status)
 - `ESTIMATED` — dashed border, soft gold fill
 - `HISTORICAL` — muted gray, no color
+- `CLAIMED` — dashed violet treatment for reported but unconfirmed dates
 - `USER_SCHEDULED` — solid ink/black (a personal task, not a claim about the world)
 
-Never restyle `ESTIMATED` or `HISTORICAL` to look as confident as `CONFIRMED`.
+Never restyle `ESTIMATED`, `HISTORICAL`, or `CLAIMED` to look as confident as `CONFIRMED`.
 
 ## Recruiting Calendar + Application Planner
 
-New feature this pass. Fully decoupled from any real backend — everything reads and writes
-through `lib/api/calendar.ts`, which is implemented as an in-memory mock store today and is
-the only file that should need to change once Codex exposes real calendar endpoints.
+Everything reads and writes through `lib/api/calendar.ts`. That adapter validates canonical
+`@recruitintel/types` response schemas, translates only presentation fields used by the existing
+visual design, and sanitizes API/provider failures. There is no production in-memory store.
 
 ### Data flow
 
 ```
-lib/types/calendar.ts     — domain types (CalendarItem, ApplicationPlan, CalendarIntegration…)
-lib/mock-data/calendar.ts — seed data (recruiting dates use the real seeded companies —
-                             Stripe/Cloudflare/Figma/Netflix/Datadog — so their /companies/[slug]
-                             links resolve; a few illustrative companies like Roblox/United
-                             Airlines/Microsoft appear without a slug and render as plain text)
-lib/api/calendar.ts       — mocked API surface (getCalendarItems, createCalendarItem,
-                             updateCalendarItem, deleteCalendarItem, createApplicationPlan,
-                             getApplicationPlan, connectCalendarProvider,
-                             disconnectCalendarProvider, syncCalendar,
-                             updateCalendarSyncSetting)
+@recruitintel/types       — canonical Calendar, ApplicationPlan, and Google schemas
+lib/types/calendar.ts     — presentation-only Calendar view types derived from canonical types
+lib/api/calendar.ts       — typed API adapter, canonical request/response validation, timezone
+                             conversion, and presentation mapping
 components/calendar/*     — all UI, consumes only lib/api/calendar.ts
 components/settings/google-calendar-card.tsx — integration UI, same API module
 ```
@@ -120,9 +116,10 @@ components/settings/google-calendar-card.tsx — integration UI, same API module
   Airlines/Microsoft-style examples), filtered from the same item store
 - `detail-panel.tsx` — selected item detail; for a `RECRUITING_DATE` item or a company-page
   deep link, shows the suggested prep-action list and a "Create application plan" action
-- `plan-timeline.tsx` — renders the generated plan as an offset-day timeline (7 days before
-  → opening day → 2 days afterward), per the fixed template in `lib/api/calendar.ts`
-- `add-item-form.tsx` — quick-add for an arbitrary action/prep session/recruiting date
+- `plan-timeline.tsx` — renders backend-generated ordered/relative tasks and explicitly activates
+  a plan with Google sync off unless the user opts in
+- `add-item-form.tsx` — quick-add for timed or all-day action/prep items with IANA timezone,
+  company association, and explicit sync opt-in; source recruiting dates are never fabricated here
 - `filter-bar.tsx`, `sync-status-chip.tsx`, `status-badge.tsx`, `category-badge.tsx`, `labels.ts`
 
 ### Application Plan integration point
@@ -134,22 +131,22 @@ server component.
 
 ### Google Calendar integration (Settings → Integrations)
 
-`components/settings/google-calendar-card.tsx` implements the full state machine described
-in the brief: `NOT_CONNECTED → CONNECTING → CONNECTED → SYNCING`/`SYNC_ERROR`, with per-type
-sync toggles (recruiting tasks, LeetCode sessions, application deadlines, career events) once
-connected. No OAuth is implemented — `connectCalendarProvider()` is a timed mock that lands on
-a fake account email. Real OAuth is a backend/infra concern.
+`components/settings/google-calendar-card.tsx` uses backend connection status as truth and supports
+`DISCONNECTED`, transient `CONNECTING`, `CONNECTED`, `REAUTH_REQUIRED`, transient request
+queueing, and `ERROR`. Authorization navigates to the backend-issued OAuth URL. The card loads
+owned Google calendars, updates the selected target and all five canonical sync preferences,
+reports HTTP 202 as “Calendar sync queued,” and disconnects through the backend. OAuth credentials
+never enter frontend state or browser storage.
 
-## Backend integration points Codex should know about
+## Backend integration points
 
-1. **Calendar/planner endpoints** — when these exist, only `lib/api/calendar.ts` changes.
-   The function signatures in that file are the intended contract
-   (`getCalendarItems(filters)`, `createCalendarItem(input)`, `createApplicationPlan(input)`,
-   `connectCalendarProvider()`, etc.) — matching them on the backend means no component changes.
+1. **Calendar/planner endpoints** — the Milestone 5 backend contracts are canonical. The frontend
+   adapter maps `startsOn`/timed values into existing visual date fields, keeps scheduling status
+   separate from intelligence certainty, and never generates application-plan tasks in-browser.
 2. **Recruiters, Interview Prep, Watchlist** — no pages exist yet; when Codex has data models
    ready, these can follow the same server-component-queries-`@recruitintel/db`-directly
    pattern already used by Companies/Jobs/Events, or a mocked-first approach like Calendar if
    the backend isn't ready yet.
-3. **Google OAuth** — the Settings integration card assumes a backend flow will eventually
-   replace `connectCalendarProvider()`'s mock timer with a real redirect/callback; the UI
-   states (connecting/connected/syncing/error) are already built to support that swap.
+3. **Google OAuth** — callback, state/PKCE, token exchange, encryption, provider calls, and refresh
+   handling are backend-only. The frontend receives only status, owned calendar metadata,
+   preferences, an authorization URL, and queued sync-request metadata.

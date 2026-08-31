@@ -5,10 +5,14 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  activateApplicationPlan,
+  completeCalendarItem,
   createApplicationPlan,
   createCalendarItem,
-  getCalendarIntegration,
+  deleteCalendarItem,
+  getGoogleCalendarStatus,
   getCalendarItems,
+  listApplicationPlans,
   updateCalendarItem,
 } from "@/lib/api/calendar";
 import {
@@ -16,10 +20,11 @@ import {
   calendarStatuses,
   type ApplicationPlan,
   type CalendarCategory,
-  type CalendarIntegration,
-  type CalendarItem,
+  type CalendarItemView,
   type CalendarStatus,
   type CreateCalendarItemInput,
+  type GoogleCalendarStatus,
+  type UpdateCalendarItemInput,
 } from "@/lib/types/calendar";
 
 import { AddCalendarItemForm } from "./add-item-form";
@@ -45,15 +50,16 @@ export function CalendarApp() {
   const deepLinkCompanyName = searchParams.get("companyName") ?? undefined;
   const wantsPlan = searchParams.get("plan") === "1";
 
-  const [items, setItems] = useState<CalendarItem[]>([]);
+  const [items, setItems] = useState<CalendarItemView[]>([]);
   const [loading, setLoading] = useState(true);
-  const [integration, setIntegration] = useState<CalendarIntegration | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [integration, setIntegration] = useState<GoogleCalendarStatus | null>(null);
   const [view, setView] = useState<"month" | "week">("month");
   const [cursor, setCursor] = useState(todayYearMonth);
   const [selectedDate, setSelectedDate] = useState<string | null>(today);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
-  const [plansByTarget, setPlansByTarget] = useState<Record<string, ApplicationPlan>>({});
+  const [plans, setPlans] = useState<ApplicationPlan[]>([]);
   const [activeCategories, setActiveCategories] = useState<Set<CalendarCategory>>(
     new Set(calendarCategories),
   );
@@ -67,13 +73,21 @@ export function CalendarApp() {
   }, []);
 
   useEffect(() => {
-    Promise.all([getCalendarItems(), getCalendarIntegration()]).then(
-      ([calItems, integrationState]) => {
+    Promise.all([getCalendarItems(), listApplicationPlans()])
+      .then(([calItems, applicationPlans]) => {
         setItems(calItems);
-        setIntegration(integrationState);
+        setPlans(applicationPlans);
+        setError(null);
+      })
+      .catch((caught: unknown) => {
+        setError(caught instanceof Error ? caught.message : "The calendar could not be loaded.");
+      })
+      .finally(() => {
         setLoading(false);
-      },
-    );
+      });
+    getGoogleCalendarStatus()
+      .then(setIntegration)
+      .catch(() => setIntegration(null));
   }, []);
 
   const filteredItems = useMemo(
@@ -99,7 +113,30 @@ export function CalendarApp() {
       : null;
 
   const planTargetKey = selectedItem?.id ?? deepLinkCompanySlug ?? deepLinkCompanyName;
-  const existingPlan = planTargetKey ? (plansByTarget[planTargetKey] ?? null) : null;
+  const existingPlan = useMemo(() => {
+    if (!planTargetKey) return null;
+    const currentPlans = plans.filter((plan) => plan.status !== "ARCHIVED");
+    if (selectedItem?.planId) {
+      const direct = currentPlans.find((plan) => plan.id === selectedItem.planId);
+      if (direct) return direct;
+    }
+    if (selectedItem?.recruitingDateId) {
+      const byDate = currentPlans.find(
+        (plan) => plan.recruitingDateId === selectedItem.recruitingDateId,
+      );
+      if (byDate) return byDate;
+    }
+    const companyId = selectedItem?.companyId;
+    if (companyId) {
+      const byCompanyAndDate = currentPlans.find(
+        (plan) => plan.company.id === companyId && plan.targetDate === selectedItem?.date,
+      );
+      if (byCompanyAndDate) return byCompanyAndDate;
+      return currentPlans.find((plan) => plan.company.id === companyId) ?? null;
+    }
+    const companySlug = selectedItem?.companySlug ?? deepLinkCompanySlug;
+    return currentPlans.find((plan) => plan.company.slug === companySlug) ?? null;
+  }, [deepLinkCompanySlug, planTargetKey, plans, selectedItem]);
 
   function toggleCategory(category: CalendarCategory) {
     setActiveCategories((prev) => {
@@ -119,9 +156,20 @@ export function CalendarApp() {
     });
   }
 
-  async function handleToggleComplete(item: CalendarItem) {
-    setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, completed: !i.completed } : i)));
-    await updateCalendarItem(item.id, { completed: !item.completed });
+  function replaceItem(updated: CalendarItemView) {
+    setItems((previous) => previous.map((item) => (item.id === updated.id ? updated : item)));
+  }
+
+  async function handleToggleComplete(item: CalendarItemView) {
+    setError(null);
+    try {
+      const updated = item.completed
+        ? await updateCalendarItem(item.id, { status: "TODO" })
+        : await completeCalendarItem(item.id);
+      replaceItem(updated);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The task status could not be updated.");
+    }
   }
 
   async function handleAddItem(input: CreateCalendarItemInput) {
@@ -132,15 +180,37 @@ export function CalendarApp() {
 
   async function handleCreatePlan(input: Parameters<typeof createApplicationPlan>[0]) {
     const plan = await createApplicationPlan(input);
-    const key = selectedItem?.id ?? input.companySlug ?? input.companyName;
-    setPlansByTarget((prev) => ({ ...prev, [key]: plan }));
+    setPlans((previous) => [plan, ...previous.filter((candidate) => candidate.id !== plan.id)]);
     await refresh();
+  }
+
+  async function handleActivatePlan(plan: ApplicationPlan, sync: boolean) {
+    const active = await activateApplicationPlan(plan.id, sync);
+    setPlans((previous) =>
+      previous.map((candidate) => (candidate.id === active.id ? active : candidate)),
+    );
+    await refresh();
+  }
+
+  async function handleUpdateItem(id: string, input: UpdateCalendarItemInput) {
+    const updated = await updateCalendarItem(id, input);
+    replaceItem(updated);
+  }
+
+  async function handleDeleteItem(id: string) {
+    await deleteCalendarItem(id);
+    setItems((previous) => previous.filter((item) => item.id !== id));
   }
 
   const monthLabel = formatMonthLabel(cursor.year, cursor.month);
 
   return (
     <div className="flex flex-col gap-6">
+      {error && (
+        <div className="surface border-[var(--danger-border)] bg-[var(--danger-bg)] p-4 text-sm font-semibold text-[var(--danger)]">
+          {error}
+        </div>
+      )}
       <div className="surface flex flex-wrap items-center gap-3 p-4">
         <div className="flex items-center gap-1 rounded-full border border-[var(--line)] bg-white p-1">
           {(["month", "week"] as const).map((option) => (
@@ -221,7 +291,7 @@ export function CalendarApp() {
         />
       )}
 
-      <div className="grid gap-6 xl:grid-cols-[1.6fr_1fr]">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.6fr_1fr]">
         <div className="flex flex-col gap-6">
           {loading ? (
             <div className="surface grid h-64 place-items-center text-sm text-[var(--muted)]">
@@ -254,8 +324,12 @@ export function CalendarApp() {
           <CalendarDetailPanel
             existingPlan={existingPlan}
             item={selectedItem}
+            key={selectedItem?.id ?? deepLinkCompanySlug ?? "calendar-detail"}
+            onActivatePlan={handleActivatePlan}
             onClose={() => setSelectedItemId(null)}
             onCreatePlan={handleCreatePlan}
+            onDeleteItem={handleDeleteItem}
+            onUpdateItem={handleUpdateItem}
             pendingPlanTarget={pendingPlanTarget}
           />
         </div>

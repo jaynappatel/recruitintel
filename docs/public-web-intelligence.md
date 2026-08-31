@@ -1,12 +1,27 @@
 # Public web recruiting intelligence
 
+## Company JobPosting projection
+
+Milestone 8 permits bounded schema.org `JobPosting` JSON-LD extraction from reviewed, executable
+company pages. Extraction validates company identity and retains only normalized job fields; raw
+HTML/provider payloads are not copied into opportunity responses. A recognized posting is persisted
+as a provenance-bearing `jobs` source posting under a durable company-careers SourceEndpoint, then
+enters the canonical opportunity resolver. Missing markup never counts as complete-listing absence
+and cannot close an opportunity. The promoted source ID, not a generic search source ID, is used for
+resolution and future direct monitoring.
+
+This path remains downstream of source policy, robots, M7 DNS pinning and redirect validation,
+response limits, and rate controls. It is not a general browser renderer and executes no scripts.
+See `docs/canonical-job-graph.md`.
+
 Milestone 3 adds a bounded, provider-independent pipeline for permitted public recruiting pages. It discovers candidate URLs, fetches public HTML safely, extracts normalized text, classifies relevance and reliability with deterministic rules, preserves independent evidence, aggregates compatible claims, and emits immutable recruiting events. It does not scrape authenticated sites, run browser automation, call an LLM, or create a second job database.
 
 ## Architecture
 
 ```text
-Company -> query templates -> SearchProvider -> candidate URLs
-        -> durable WEB_SEARCH requests
+Company -> known careers/homepage source -> direct source discovery -> candidate/ATS source
+        -> optional query templates -> SearchProvider -> candidate URLs
+        -> durable WEB_FETCH / WEB_SEARCH requests
 
 candidate -> WEB_FETCH -> safe HTML fetch -> normalized document + content hash
           -> unchanged: update liveness and stop
@@ -16,7 +31,11 @@ document -> source/reliability rules -> relevance rules -> date/information extr
          -> source observation -> lightweight claim -> RecruitingEvent
 ```
 
-PostgreSQL is the coordination boundary. Each CLI invocation claims and completes one durable request, so cron, GitHub Actions, Supabase scheduling, or a later queue can invoke the same finite worker. External HTTP, pure extraction, and persistence remain separate interfaces.
+PostgreSQL is the coordination boundary. Milestone 7 maps each domain request to a generic WorkItem,
+then the typed worker claims it with a fenced lease and records every attempt. The scheduler enqueues
+eligible queries and recovers expired leases. Domain requests, runs, content hashes, observations,
+and processing state remain in their Milestone 3 tables; the orchestration layer does not duplicate
+them. External HTTP, pure extraction, and persistence remain separate interfaces.
 
 ## Data model
 
@@ -36,14 +55,19 @@ Candidate identity is `(company_id, canonical_url)`. Document identity is `(cand
 
 ## Search provider and query templates
 
-`SearchProvider` exposes only:
+Gate 7.1A replaces the original tuple contract with one canonical `SearchProvider`:
 
 ```python
 name: str
-async search(query: str, *, max_results: int) -> Sequence[SearchResult]
+async search(request: SearchRequest) -> SearchBatch
 ```
 
-Business logic never reads provider-specific response shapes. Milestone 3 registers the `static` provider:
+`SearchRequest` carries bounded query/result/country/language/freshness/domain-filter inputs.
+`SearchBatch` carries bounded canonical results and aggregate provider call/cost/quota metadata.
+Business logic never reads provider-specific response shapes. Search is supplemental; known
+ATS/company-career coverage short-circuits matching general-search queries. The zero-cost runtime
+always registers `static` for local fixtures and may register an operator-controlled `searxng`
+adapter when `SEARXNG_BASE_URL` is configured:
 
 - with `PUBLIC_WEB_STATIC_RESULTS_FILE=/absolute/path/results.json`, it loads deterministic results from a JSON object keyed by exact query text;
 - without the variable, it remains a valid inert provider that returns no results;
@@ -67,13 +91,12 @@ The JSON shape is:
 
 Generated queries cover early career, university/campus recruiting, application deadlines, interview experiences, role focus, internship/new-grad focus, optional school and graduation year, and bounded `site:reddit.com`/`site:github.com` references. Search parameters configure `minimumIntervalSeconds` (60–2,592,000), `maxResults` (1–100), and `maxFetches` (0–`maxResults`). The API skips queries whose `nextAllowedRunAt` is still in the future.
 
-To add a live provider:
-
-1. Implement `SearchProvider` under `public_web` and map its response to `SearchResult`.
-2. Keep credentials, pagination, quota/rate handling, and provider errors inside the adapter.
-3. Register the provider by name in the CLI composition root.
-4. Add offline fixtures for empty, duplicate, malformed, paginated, and rate-limited responses.
-5. Verify the provider's API terms before enabling it. Do not scrape search-result HTML.
+Gate 7.1A includes an offline-testable `YouSearchProvider`, explicit provider-policy linkage, and
+transactional usage budgets. Gate 7.1A.1 adds default zero-cost enforcement, an optional SearXNG
+adapter, and direct source discovery into the durable `sources` graph. SearXNG and all upstream
+engines remain review-required; You.com remains unregistered, disabled, and non-required. See
+`docs/search-provider-integration.md` and `docs/zero-cost-discovery.md`. Do not scrape search-result
+HTML.
 
 ## URL normalization and safe fetching
 
@@ -81,10 +104,17 @@ Canonicalization lowercases/IDNA-normalizes hosts, removes fragments and default
 
 `SafePublicWebFetcher`:
 
-- permits HTTP/HTTPS only and rejects credentials, malformed ports, localhost, private, loopback, link-local, multicast, reserved, and otherwise non-global destinations;
-- resolves every requested URL and every redirect target before fetching;
+- permits HTTP/HTTPS on approved ports only and rejects credentials, malformed ports, localhost,
+  private, loopback, link-local, multicast, reserved, transition-address, and otherwise non-global
+  destinations;
+- resolves once, rejects the entire destination if the address set mixes safe and unsafe addresses,
+  and connects only to an address from that approved set;
+- retains the original hostname for HTTP `Host`, TLS SNI, and certificate hostname verification;
+- disables ambient proxy configuration so a proxy cannot bypass address pinning;
+- independently repeats source policy, DNS, and pinning checks for every redirect target;
 - uses manual redirects with a configured maximum;
-- checks cached `robots.txt` policy and treats `401`/`403` robots responses as disallow-all;
+- fetches `robots.txt` through the same pinned transport and treats `401`/`403` or fetch failures as
+  disallow-all;
 - uses explicit timeouts, bounded retries/backoff, a per-host rate limiter, and an identifying user agent;
 - accepts HTML/XHTML only and enforces both declared and streamed response-size limits;
 - retains only safe response headers and normalized extracted data, never raw HTML;
@@ -129,10 +159,12 @@ New evidence emits the applicable existing event type: `RECRUITING_ARTICLE_DISCO
 
 ## Worker operation
 
-Queue searches with the admin API, then run each returned request:
+Queue searches with the admin API or an enabled reviewed schedule. Run the supervised scheduler and
+public worker lanes:
 
 ```bash
-uv run recruitintel-collectors public-web-work --request-id REQUEST_UUID
+uv run recruitintel-collectors scheduler
+uv run recruitintel-collectors worker --classes WEB_SEARCH,WEB_FETCH,PROJECTION
 ```
 
 The three work types are:
@@ -143,11 +175,17 @@ The three work types are:
 
 After a successful `WEB_PROCESS`, Milestone 4 consumes the just-created observations through the recruiter/campus processor. Existing observation IDs can be replayed with `recruiter-campus-process` without fetching their pages again. See `docs/recruiter-campus-intelligence.md`.
 
-Runs record start/end/status, company, provider/query where applicable, candidates, fetched/relevant counts, observations/events created, duration, and errors. Work claims increment attempt count atomically. Retryable failures return to `PENDING` with bounded exponential delay until `maxAttempts`; SSRF/robots denials become blocked/terminal. A PostgreSQL one-running-run-per-source constraint prevents concurrent processing of the same source.
+Runs record start/end/status, company, provider/query where applicable, candidates,
+fetched/relevant counts, observations/events created, duration, and safe errors. Work claims create
+an attempt atomically. Retryable failures return to durable eligibility with bounded exponential
+jitter until `maxAttempts`; provider `Retry-After` takes precedence. Policy/robots denials are
+classified `POLICY_BLOCKED` and do not spin. Multiple retry attempts retain multiple
+`public_web_runs`; content, observation, and event fingerprints prevent duplicate domain output.
+An active exclusive key prevents concurrent processing of the same target.
 
 ## Stable frontend API contracts
 
-All success responses use `{ "data": ..., "meta"?: ... }`. Errors use `{ "error": { "code": string, "message": string, "details"?: unknown } }`. Company identifiers accept a canonical slug or UUID. UUID path parameters are validated. Mutation routes require `Authorization: Bearer $RECRUITINTEL_ADMIN_TOKEN` and return `503 ADMIN_TOKEN_NOT_CONFIGURED` when the server token is absent.
+All success responses use `{ "data": ..., "meta"?: ... }`. Errors use `{ "error": { "code": string, "message": string, "details"?: unknown } }`. Company identifiers accept a canonical slug or UUID. UUID path parameters are validated. Mutation routes require an authenticated admin session or an active hashed service token with `ADMIN_MUTATE`; invalid credentials return `401` and insufficient scope returns `403`.
 
 ### `GET /api/companies/:identifier/web-intelligence`
 
@@ -272,7 +310,11 @@ Admin-authenticated. Returns HTTP `202 { data: PublicWebWorkRequest }`, `400` fo
 
 ## Troubleshooting
 
-- `search provider 'x' is not configured`: use `provider: "static"` or register a reviewed adapter in the CLI.
+- `search provider 'x' is not configured`: use the development/test `static` provider or configure
+  an operator-controlled SearXNG instance. SearXNG still needs an executable reviewed policy and
+  enabled zero-cost budget; commercial Gate 7.1B is optional.
+- `SEARCH_PROVIDER_ZERO_COST_BLOCKED`: the descriptor or PostgreSQL budget is paid/ineligible.
+  Keep the provider disabled; do not turn off zero-cost mode merely to clear the error.
 - Static searches return zero candidates: set `PUBLIC_WEB_STATIC_RESULTS_FILE` and ensure its keys exactly match the generated query strings shown by the search-query API.
 - `UnsafeUrlError`: the URL is malformed, contains credentials, or resolves to a non-public address.
 - `RobotsDeniedError`: the candidate remains blocked; do not bypass the policy.
@@ -284,4 +326,8 @@ Admin-authenticated. Returns HTTP `202 { data: PublicWebWorkRequest }`, `400` fo
 
 ## Deferred scope
 
-Milestone 3 itself does not add recruiter/person graph modeling. Milestone 4 layers that graph on these immutable observations without changing public-web candidate or document identity. Calendar backend, watchlists, alerts, application tracking, activity scoring, authenticated LinkedIn collection, live commercial search credentials, browser/JavaScript rendering, LLM extraction, embeddings, and ML remain deferred.
+Milestone 3 itself does not add recruiter/person graph modeling. Milestone 4 layers that graph on
+these immutable observations without changing public-web candidate or document identity. Calendar
+backend, watchlists, alerts, application tracking, activity scoring, authenticated LinkedIn
+collection, optional commercial search activation, browser/JavaScript rendering, LLM extraction,
+embeddings, and ML remain deferred. Commercial search credentials are not required for the product.

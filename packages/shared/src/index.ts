@@ -28,3 +28,5 @@ export function formatRelativeTime(value: string, now = new Date()): string {
   if (Math.abs(hours) < 24) return formatter.format(hours, "hour");
   return formatter.format(Math.round(hours / 24), "day");
 }
+
+export { REDACTED, REDACTED_EMAIL, redactError, redactText, redactValue } from "./redaction";

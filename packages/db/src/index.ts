@@ -5,6 +5,21 @@ export * from "./interview-questions";
 export * from "./public-web";
 export * from "./recruiter-campus";
 export * from "./calendar";
+export * from "./identity";
+export * from "./instrumentation";
+export * from "./orchestration";
+export * from "./opportunities";
+export * from "./recommendation-scoring";
+export * from "./personalization";
+export * from "./applications";
+export * from "./resume";
+export * from "./browser-companion";
+export * from "./model-gateway";
+export * from "./analytics";
+export * from "./operations";
+export * from "./outreach";
+export * from "./interview-prep";
+export * from "./beta-access";
 
 export interface CompanyRecord {
   id: string;
@@ -67,6 +82,7 @@ export interface Page<T> {
 }
 
 export interface ListJobsOptions {
+  query?: string;
   companyId?: string;
   roleFamily?: string;
   earlyCareerOnly?: boolean;
@@ -237,12 +253,14 @@ export async function listJobs(options: ListJobsOptions = {}): Promise<Page<JobR
   const limit = options.limit ?? 50;
   const offset = options.offset ?? 0;
   const companyId = options.companyId ?? null;
+  const query = options.query?.trim() || null;
   const roleFamily = options.roleFamily ?? null;
   const earlyCareerOnly = options.earlyCareerOnly ?? false;
   const includeClosed = options.includeClosed ?? false;
 
   const filters = sql`
     (${companyId}::uuid is null or j.company_id = ${companyId}::uuid)
+    and (${query}::text is null or (j.title ilike '%' || ${query}::text || '%' or j.location ilike '%' || ${query}::text || '%' or c.canonical_name ilike '%' || ${query}::text || '%'))
     and (${roleFamily}::text is null or j.role_family::text = ${roleFamily}::text)
     and (${earlyCareerOnly}::boolean = false or j.is_internship or j.is_new_grad)
     and (${includeClosed}::boolean = true or j.closed_at is null)
@@ -263,7 +281,9 @@ export async function listJobs(options: ListJobsOptions = {}): Promise<Page<JobR
     limit ${limit} offset ${offset}
   `;
   const [{ count = 0 } = {}] = await sql`
-    select count(*)::int as count from public.jobs j where ${filters}
+    select count(*)::int as count from public.jobs j
+    join public.companies c on c.id = j.company_id
+    where ${filters}
   `;
   return { items: rows.map(mapJob), total: numberValue(count) };
 }

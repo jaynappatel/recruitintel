@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from recruitintel_collectors.domain.enums import CollectorStage
-from recruitintel_collectors.domain.fingerprints import fingerprint_job
+from recruitintel_collectors.domain.fingerprints import fingerprint_job, fingerprint_job_derivation
 from recruitintel_collectors.domain.models import (
     CollectorResult,
     CollectorTarget,
@@ -78,7 +78,13 @@ class BaseCollector(ABC):
             for index, item in enumerate(batch.items):
                 try:
                     job = self.normalize(item, source)
-                    jobs.append(FingerprintedJob(job=job, content_hash=self.fingerprint(job)))
+                    jobs.append(
+                        FingerprintedJob(
+                            job=job,
+                            content_hash=self.fingerprint(job),
+                            derivation_hash=fingerprint_job_derivation(job),
+                        )
+                    )
                 except CollectorError:
                     raise
                 except Exception as exc:

@@ -10,12 +10,22 @@
     "migrate": "node scripts/migrate.mjs",
     "seed": "node scripts/seed.mjs",
     "smoke": "node scripts/smoke.mjs",
+    "smoke:migration-0006": "node scripts/migration-0006-smoke.mjs",
+    "smoke:migration-0007": "node scripts/migration-0007-smoke.mjs",
+    "smoke:migration-0008": "node scripts/migration-0008-smoke.mjs",
+    "smoke:migration-0009": "node scripts/migration-0009-smoke.mjs",
+    "smoke:migration-0010": "node scripts/migration-0010-smoke.mjs",
+    "smoke:migration-0011": "node scripts/migration-0010-smoke.mjs",
+    "benchmark:m8": "node scripts/opportunity-benchmark.mjs",
+    "service-principal:create": "node scripts/create-service-principal.mjs",
+    "worker-role:bind": "node scripts/bind-worker-role.mjs",
     "lint": "eslint src scripts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "format:check": "prettier --check ."
   },
   "dependencies": {
+    "@recruitintel/shared": "workspace:*",
     "postgres": "3.4.9"
   },
   "devDependencies": {

@@ -5,6 +5,7 @@ from recruitintel_collectors.domain.classification import CLASSIFICATION_VERSION
 from recruitintel_collectors.domain.enums import EmploymentType, ExperienceLevel, RoleFamily
 from recruitintel_collectors.domain.models import NormalizedJob
 from recruitintel_collectors.domain.normalization import normalize_text, normalize_url
+from recruitintel_collectors.redaction import redact_text
 
 from .enums import GitHubRecordType, GitHubRepositoryType
 from .models import (
@@ -118,7 +119,7 @@ class GitHubRecordNormalizer:
                     source_path=file.path,
                     source_url=file.source_url,
                     commit_sha=file.commit_sha,
-                    reason=str(exc),
+                    reason=redact_text(str(exc)),
                     raw_company_name=record.company_name,
                     raw_title=record.raw_title or record.problem_url,
                     metadata=record.metadata,
