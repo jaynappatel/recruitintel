@@ -23,5 +23,29 @@ services:
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
 
-# Run collectors in a separately built, separately credentialed deployment.
-# It must use a PostgreSQL role bound only to its allowed M7 work classes.
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.collectors
+    command: ["scheduler"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${COLLECTOR_DATABASE_URL:?secret-manager-injected}
+      RECRUITINTEL_USER_AGENT: ${RECRUITINTEL_USER_AGENT:?required}
+      ZERO_COST_MODE: "true"
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.collectors
+    command: ["worker", "--classes", "ATS,GITHUB,WEB_SEARCH,WEB_FETCH,PROJECTION,CONTROL,RESUME"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${COLLECTOR_DATABASE_URL:?secret-manager-injected}
+      RECRUITINTEL_USER_AGENT: ${RECRUITINTEL_USER_AGENT:?required}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      ZERO_COST_MODE: "true"
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
