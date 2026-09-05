@@ -12,6 +12,7 @@ import {
   BriefcaseBusiness,
   CalendarDays,
   LayoutDashboard,
+  LogIn,
   Radar,
   FileText,
   Settings,
@@ -33,6 +34,7 @@ const navigation = [
   { href: "/alerts", label: "Alerts", icon: Bell },
   { href: "/events", label: "Event stream", icon: Activity },
   { href: "/calendar", label: "Calendar", icon: CalendarDays },
+  { href: "/sign-in", label: "Sign in", icon: LogIn },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
