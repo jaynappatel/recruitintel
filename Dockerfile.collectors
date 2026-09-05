@@ -13,7 +13,7 @@ COPY pyproject.toml uv.lock ./
 COPY services/collectors/pyproject.toml services/collectors/pyproject.toml
 COPY services/collectors services/collectors
 RUN pip install --no-cache-dir uv \
-  && uv sync --frozen --no-dev
+  && uv sync --frozen --no-dev --package recruitintel-collectors
 
 FROM runtime AS collectors
 WORKDIR /app/services/collectors
