@@ -6,44 +6,42 @@
 }
 
 :root {
-  /* Warm editorial palette: paper, ink, and a warm terracotta-rose accent.
-     Everything else (glass surfaces, dark panels, tints) is derived from these. */
-  --paper: #f3f2ee;
-  --ink: #14151a;
-  --muted: #6b6d76;
-  --line: rgb(20 21 26 / 12%);
+  --paper: #edf7fa;
+  --ink: #173040;
+  --muted: #66808d;
+  --line: rgb(23 48 64 / 14%);
 
-  --panel: #121317;
-  --panel-bright: #1d1e24;
-  --panel-line: rgb(255 255 255 / 9%);
-  --panel-glass: rgb(15 16 20 / 92%);
+  --panel: #173e52;
+  --panel-bright: #22536b;
+  --panel-line: rgb(255 255 255 / 14%);
+  --panel-glass: rgb(23 62 82 / 94%);
 
-  --accent: #9c4b3f;
-  --accent-bright: #b5675a;
-  --accent-soft: rgb(156 75 63 / 14%);
-  --accent-warm: #d98a7c;
+  --accent: #3d88a5;
+  --accent-bright: #68abc1;
+  --accent-soft: rgb(61 136 165 / 15%);
+  --accent-warm: #a7d6e2;
 
   --surface: rgb(255 255 255 / 88%);
   --surface-soft: rgb(20 21 26 / 4%);
 
   /* Soft paper-adjacent tints used for page-header bands and status "sticky note" badges. */
-  --tint-rose: #f6e3dd;
-  --tint-rose-line: #e7c3b8;
-  --tint-sand: #f1e6d3;
-  --tint-sand-line: #ddc79f;
-  --tint-sage: #e8ede2;
-  --tint-sage-line: #c6d4bb;
+  --tint-rose: #dceff4;
+  --tint-rose-line: #b8d8e2;
+  --tint-sand: #edf1e7;
+  --tint-sand-line: #cfdbc2;
+  --tint-sage: #e3f0ee;
+  --tint-sage-line: #bdd9d4;
 
   /* Semantic status colors, kept muted/editorial rather than stock Tailwind palette colors. */
-  --success: #4c6f4a;
+  --success: #34766c;
   --success-bg: var(--tint-sage);
   --success-border: var(--tint-sage-line);
-  --warning: #8a5a1f;
+  --warning: #8a6b2d;
   --warning-bg: var(--tint-sand);
   --warning-border: var(--tint-sand-line);
-  --danger: #9c3f3f;
-  --danger-bg: #f7e6e2;
-  --danger-border: #e3bfb4;
+  --danger: #a34d55;
+  --danger-bg: #f8e5e7;
+  --danger-border: #e4bec4;
 
   --radius-sm: 0.5rem;
   --radius-md: 0.875rem;
@@ -82,8 +80,8 @@ html {
 body {
   margin: 0;
   background:
-    radial-gradient(circle at 90% -6%, rgb(156 75 63 / 8%), transparent 32rem),
-    radial-gradient(circle at 4% 18%, rgb(20 21 26 / 4%), transparent 26rem), var(--background);
+    radial-gradient(circle at 90% -6%, rgb(104 171 193 / 18%), transparent 32rem),
+    radial-gradient(circle at 4% 18%, rgb(23 62 82 / 5%), transparent 26rem), var(--background);
   background-attachment: fixed;
   color: var(--ink);
   font-family:
