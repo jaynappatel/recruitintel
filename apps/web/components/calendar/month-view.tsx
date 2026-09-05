@@ -37,18 +37,18 @@ export function MonthView({
   }
 
   return (
-    <div>
-      <div className="grid grid-cols-7 gap-px overflow-hidden rounded-t-xl border border-b-0 border-[var(--line)] bg-[var(--line)] text-center">
+    <div className="overflow-hidden rounded-[var(--radius-lg)] border-[1.5px] border-[var(--line-strong)] bg-[var(--surface)]">
+      <div className="grid grid-cols-7 border-b-[1.5px] border-[var(--line-strong)] text-center">
         {WEEKDAYS.map((day) => (
           <div
-            className="bg-[var(--surface-soft)] py-2 text-[0.65rem] font-bold tracking-wide text-[var(--muted)] uppercase"
+            className="py-2 text-[0.65rem] font-bold tracking-wide text-[var(--muted)] uppercase"
             key={day}
           >
             {day}
           </div>
         ))}
       </div>
-      <div className="grid grid-cols-7 gap-px overflow-hidden rounded-b-xl border border-[var(--line)] bg-[var(--line)]">
+      <div className="grid grid-cols-7">
         {grid.map((iso) => {
           const dayItems = itemsByDate.get(iso) ?? [];
           const inMonth = isSameIsoMonth(iso, year, month);
@@ -58,9 +58,9 @@ export function MonthView({
           return (
             <button
               className={clsx(
-                "flex min-h-24 flex-col items-start gap-1.5 bg-white p-2 text-left transition focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--accent)]",
+                "flex min-h-24 flex-col items-start gap-1.5 border-t-[1.5px] border-l-[1.5px] border-[var(--line)] p-2 text-left transition-colors first:border-l-0 [&:nth-child(7n+1)]:border-l-0 hover:bg-[var(--surface-soft)] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--accent)]",
                 !inMonth && "bg-[var(--surface-soft)] text-[var(--muted)]",
-                isSelected && "ring-2 ring-inset ring-[var(--accent)]",
+                isSelected && "bg-[var(--accent-soft)]",
               )}
               key={iso}
               onClick={() => onSelectDate(iso)}
@@ -69,7 +69,9 @@ export function MonthView({
               <span
                 className={clsx(
                   "grid size-6 place-items-center rounded-full text-xs font-bold",
-                  isToday && "bg-[var(--panel)] text-white",
+                  isToday
+                    ? "bg-[var(--accent)] text-white"
+                    : inMonth && "text-[var(--ink)]",
                 )}
               >
                 {dayNumber}

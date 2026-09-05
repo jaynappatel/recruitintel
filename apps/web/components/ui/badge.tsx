@@ -8,7 +8,7 @@ const tones: Record<BadgeTone, string> = {
   success: "border-[var(--success-border)] bg-[var(--success-bg)] text-[var(--success)]",
   warning: "border-[var(--warning-border)] bg-[var(--warning-bg)] text-[var(--warning)]",
   danger: "border-[var(--danger-border)] bg-[var(--danger-bg)] text-[var(--danger)]",
-  accent: "border-[var(--tint-rose-line)] bg-[var(--tint-rose)] text-[var(--accent)]",
+  accent: "border-[var(--tint-sky-line)] bg-[var(--tint-sky)] text-[var(--accent)]",
 };
 
 export function Badge({
