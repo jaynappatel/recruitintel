@@ -33,6 +33,7 @@ import { CalendarDetailPanel } from "./detail-panel";
 import { CalendarFilterBar } from "./filter-bar";
 import { MonthView } from "./month-view";
 import { SyncStatusChip } from "./sync-status-chip";
+import { SeasonalCalendarHeader } from "./seasonal-header";
 import { UpcomingAgenda } from "./upcoming-agenda";
 import { UpcomingRecruitingWindows } from "./upcoming-windows";
 import { WeekView } from "./week-view";
@@ -206,6 +207,7 @@ export function CalendarApp() {
 
   return (
     <div className="flex flex-col gap-6">
+      <SeasonalCalendarHeader month={cursor.month} />
       {error && (
         <div className="surface border-[var(--danger-border)] bg-[var(--danger-bg)] p-4 text-sm font-semibold text-[var(--danger)]">
           {error}

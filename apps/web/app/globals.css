@@ -1,47 +1,47 @@
 @import "tailwindcss";
 
 @theme inline {
-  --font-sans: var(--font-inter);
-  --font-serif: var(--font-fraunces);
+  --font-sans: var(--font-dm-sans);
+  --font-serif: var(--font-cormorant);
 }
 
 :root {
-  --paper: #edf7fa;
-  --ink: #173040;
-  --muted: #66808d;
-  --line: rgb(23 48 64 / 14%);
+  --paper: #f7f3eb;
+  --ink: #2d302f;
+  --muted: #777a72;
+  --line: rgb(45 48 47 / 14%);
 
-  --panel: #173e52;
-  --panel-bright: #22536b;
+  --panel: #294850;
+  --panel-bright: #3a626a;
   --panel-line: rgb(255 255 255 / 14%);
-  --panel-glass: rgb(23 62 82 / 94%);
+  --panel-glass: rgb(41 72 80 / 94%);
 
-  --accent: #3d88a5;
-  --accent-bright: #68abc1;
-  --accent-soft: rgb(61 136 165 / 15%);
-  --accent-warm: #a7d6e2;
+  --accent: #a66768;
+  --accent-bright: #c48684;
+  --accent-soft: rgb(166 103 104 / 15%);
+  --accent-warm: #e3b9ae;
 
-  --surface: rgb(255 255 255 / 88%);
-  --surface-soft: rgb(20 21 26 / 4%);
+  --surface: rgb(255 253 248 / 92%);
+  --surface-soft: rgb(45 48 47 / 4%);
 
   /* Soft paper-adjacent tints used for page-header bands and status "sticky note" badges. */
-  --tint-rose: #dceff4;
-  --tint-rose-line: #b8d8e2;
-  --tint-sand: #edf1e7;
-  --tint-sand-line: #cfdbc2;
-  --tint-sage: #e3f0ee;
-  --tint-sage-line: #bdd9d4;
+  --tint-rose: #f2e3de;
+  --tint-rose-line: #ddc1b8;
+  --tint-sand: #f1ecd9;
+  --tint-sand-line: #d9cfae;
+  --tint-sage: #e5ecdf;
+  --tint-sage-line: #c8d6bd;
 
   /* Semantic status colors, kept muted/editorial rather than stock Tailwind palette colors. */
-  --success: #34766c;
+  --success: #527259;
   --success-bg: var(--tint-sage);
   --success-border: var(--tint-sage-line);
-  --warning: #8a6b2d;
+  --warning: #927343;
   --warning-bg: var(--tint-sand);
   --warning-border: var(--tint-sand-line);
-  --danger: #a34d55;
-  --danger-bg: #f8e5e7;
-  --danger-border: #e4bec4;
+  --danger: #a75b61;
+  --danger-bg: #f7e4e2;
+  --danger-border: #e2bfba;
 
   --radius-sm: 0.5rem;
   --radius-md: 0.875rem;
@@ -80,8 +80,8 @@ html {
 body {
   margin: 0;
   background:
-    radial-gradient(circle at 90% -6%, rgb(104 171 193 / 18%), transparent 32rem),
-    radial-gradient(circle at 4% 18%, rgb(23 62 82 / 5%), transparent 26rem), var(--background);
+    radial-gradient(circle at 90% -6%, rgb(210 159 151 / 18%), transparent 32rem),
+    radial-gradient(circle at 4% 18%, rgb(144 177 167 / 12%), transparent 26rem), var(--background);
   background-attachment: fixed;
   color: var(--ink);
   font-family:
@@ -171,6 +171,50 @@ select {
   background: var(--tint-rose);
   border: 1px solid var(--tint-rose-line);
   border-radius: var(--radius-lg);
+}
+
+.seasonal-calendar {
+  --season-accent: #a66768;
+  --season-soft: #f2e3de;
+  --season-line: #ddc1b8;
+  position: relative;
+  overflow: hidden;
+  background: var(--season-soft);
+  border: 1px solid var(--season-line);
+  border-radius: var(--radius-lg);
+  min-height: 11rem;
+}
+
+.seasonal-calendar::before,
+.seasonal-calendar::after {
+  position: absolute;
+  content: "";
+  border: 1px solid rgb(45 48 47 / 12%);
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.seasonal-calendar::before {
+  width: 17rem;
+  height: 17rem;
+  right: -4rem;
+  top: -7rem;
+  background: rgb(255 253 248 / 28%);
+}
+
+.seasonal-calendar::after {
+  width: 9rem;
+  height: 9rem;
+  right: 7rem;
+  bottom: -5rem;
+  background: rgb(255 253 248 / 20%);
+}
+
+.seasonal-calendar-mark {
+  color: var(--season-accent);
+  font-family: var(--font-caveat), cursive;
+  font-size: 2.25rem;
+  line-height: 1;
 }
 
 .eyebrow {
