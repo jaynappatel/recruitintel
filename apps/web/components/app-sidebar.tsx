@@ -13,13 +13,16 @@ import {
   CalendarDays,
   LayoutDashboard,
   LogIn,
+  LogOut,
   Radar,
   FileText,
   Settings,
   Sparkles,
 } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+
+import { authClient } from "@/lib/auth-client";
 
 const navigation = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -40,6 +43,15 @@ const navigation = [
 
 export function AppSidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const { data: session } = authClient.useSession();
+
+  async function signOut() {
+    await authClient.signOut();
+    router.push("/sign-in");
+    router.refresh();
+  }
+
   return (
     <aside className="app-sidebar">
       <div className="flex items-center gap-3 px-2">
@@ -55,7 +67,9 @@ export function AppSidebar() {
       </div>
 
       <nav aria-label="Primary navigation" className="mt-8 flex gap-2 overflow-x-auto md:flex-col">
-        {navigation.map(({ href, label, icon: Icon }) => {
+        {navigation
+          .filter(({ href }) => href !== "/sign-in")
+          .map(({ href, label, icon: Icon }) => {
           const active =
             pathname === href || (href !== "/dashboard" && pathname.startsWith(`${href}/`));
           return (
@@ -73,7 +87,30 @@ export function AppSidebar() {
               {label}
             </Link>
           );
-        })}
+          })}
+        {session ? (
+          <button
+            className="flex shrink-0 items-center gap-3 rounded-[var(--radius-sm)] border-[1.5px] border-transparent px-3.5 py-2.5 text-sm font-semibold text-white/65 transition-all hover:bg-white/8 hover:text-white md:text-left"
+            onClick={() => void signOut()}
+            type="button"
+          >
+            <LogOut aria-hidden="true" className="size-4" />
+            Sign out
+          </button>
+        ) : (
+          <Link
+            className={clsx(
+              "flex shrink-0 items-center gap-3 rounded-[var(--radius-sm)] border-[1.5px] border-transparent px-3.5 py-2.5 text-sm font-semibold transition-all",
+              pathname === "/sign-in"
+                ? "border-white bg-[var(--accent)] text-white"
+                : "text-white/65 hover:bg-white/8 hover:text-white",
+            )}
+            href="/sign-in"
+          >
+            <LogIn aria-hidden="true" className="size-4" />
+            Sign in
+          </Link>
+        )}
       </nav>
 
       <div className="desktop-sidebar-copy mt-auto rounded-[var(--radius-sm)] border-[1.5px] border-white/15 p-4">

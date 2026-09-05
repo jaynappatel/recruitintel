@@ -107,7 +107,12 @@ export function ResumesPanel() {
       body: JSON.stringify({ originalFilename: file.name, mediaType: file.type, content }),
     });
     if (!response.ok) {
-      setMessage("Resume upload failed. The file may be unsupported.");
+      const payload = await response.json().catch(() => null);
+      setMessage(
+        typeof payload?.error?.message === "string"
+          ? payload.error.message
+          : "Resume upload failed. The file may be unsupported.",
+      );
       return;
     }
     const document = (await response.json()).data as Resume;
