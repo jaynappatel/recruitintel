@@ -180,6 +180,21 @@ export const createApplicationRequestSchema = z
     appliedAt: z.iso.datetime().nullable().optional(),
   })
   .strict();
+export const importApplicationRequestSchema = z
+  .object({
+    companyName: z.string().trim().min(1).max(200),
+    title: z.string().trim().min(1).max(300),
+    location: z.string().trim().max(300).default(""),
+    salary: z.string().trim().max(200).default(""),
+    description: z.string().trim().max(100_000).default(""),
+    notes: z.string().trim().max(10_000).default(""),
+    applicationUrl: z
+      .string()
+      .url()
+      .refine((v) => v.startsWith("https://")),
+    appliedAt: z.iso.datetime(),
+  })
+  .strict();
 export const applicationStatusRequestSchema = z
   .object({
     status: applicationStatusSchema,

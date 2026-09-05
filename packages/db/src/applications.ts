@@ -229,6 +229,82 @@ export async function createApplication(
   });
 }
 
+export async function importManualApplication(
+  userId: string,
+  input: {
+    companyName: string;
+    title: string;
+    location: string;
+    salary: string;
+    description: string;
+    notes: string;
+    applicationUrl: string;
+    appliedAt: string;
+  },
+) {
+  const normalizedCompany = input.companyName.trim();
+  const normalizedTitle = input.title.trim();
+  const fingerprint = createHash("sha256")
+    .update(`${userId}\x1f${normalizedCompany}\x1f${normalizedTitle}\x1f${input.applicationUrl}`)
+    .digest("hex");
+  const cycleKey = `manual-${fingerprint.slice(0, 24)}`;
+  const jobId = await getDatabase().begin(async (tx) => {
+    const [company] = await tx`
+      insert into public.companies (canonical_name, slug)
+      values (${normalizedCompany}, ${`${
+        normalizedCompany
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-|-$/g, "") || "company"
+      }-${fingerprint.slice(0, 8)}`})
+      on conflict (slug) do update set canonical_name = public.companies.canonical_name
+      returning id`;
+    if (!company) throw new ApplicationConflictError("Company could not be created");
+    const companyId = String(company.id);
+    const [source] = await tx`
+      insert into public.sources (source_type, provider, external_key, name, reliability, enabled)
+      values ('MANUAL', 'manual_import', 'user-paste', 'User-pasted job applications', 1.000, true)
+      on conflict (provider, external_key) do update set updated_at = now()
+      returning id`;
+    if (!source) throw new ApplicationConflictError("Manual import source could not be created");
+    const [existing] = await tx`
+      select id from public.jobs where source_id = ${String(source.id)}::uuid and external_id = ${fingerprint}`;
+    if (existing) return String(existing.id);
+    const [job] = await tx`
+      insert into public.jobs (
+        company_id, source_id, external_id, title, description, location,
+        employment_type, role_family, experience_level, application_url, source_url,
+        content_hash, raw_payload, published_at
+      ) values (
+        ${companyId}::uuid, ${String(source.id)}::uuid, ${fingerprint}, ${normalizedTitle},
+        ${input.description}, ${input.location}, 'UNKNOWN', 'OTHER', 'UNKNOWN',
+        ${input.applicationUrl}, ${input.applicationUrl}, ${fingerprint},
+        ${tx.json({ source: "USER_PASTE", salary: input.salary, notes: input.notes })},
+        ${input.appliedAt}::timestamptz
+      ) returning id`;
+    if (!job) throw new ApplicationConflictError("Imported job could not be created");
+    return String(job.id);
+  });
+  const [opportunity] = await getDatabase()`
+    select opportunity_id from public.job_opportunity_postings
+    where job_id = ${jobId}::uuid and valid_to is null limit 1`;
+  if (!opportunity) throw new ApplicationNotFoundError("Imported job could not be tracked");
+  const application = await createApplication(userId, {
+    opportunityId: String(opportunity.opportunity_id),
+    sourcePostingId: jobId,
+    cycleKey,
+    applicationUrlUsed: input.applicationUrl,
+    appliedAt: input.appliedAt,
+  });
+  await getDatabase()`update public.applications set target_snapshot = target_snapshot || ${getDatabase().json({ companyName: normalizedCompany, title: normalizedTitle, location: input.location, salary: input.salary, description: input.description, notes: input.notes, source: "USER_PASTE" })}, updated_at = now() where id = ${application.id}::uuid and user_id = ${userId}::uuid`;
+  return changeApplicationStatus(userId, application.id, {
+    status: "APPLIED",
+    occurredAt: input.appliedAt,
+    reasonCode: "USER_PASTE_IMPORT",
+    idempotencyKey: `manual-import:${fingerprint}`,
+  });
+}
+
 export async function listApplications(
   userId: string,
   options: {
