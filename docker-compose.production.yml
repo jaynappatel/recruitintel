@@ -27,7 +27,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.collectors
-    command: ["scheduler"]
+    command: ["python", "-m", "recruitintel_collectors", "scheduler"]
     restart: unless-stopped
     environment:
       DATABASE_URL: ${COLLECTOR_DATABASE_URL:?secret-manager-injected}
@@ -40,7 +40,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.collectors
-    command: ["worker", "--classes", "ATS,GITHUB,WEB_SEARCH,WEB_FETCH,PROJECTION,CONTROL,RESUME"]
+    command: ["python", "-m", "recruitintel_collectors", "worker", "--classes", "ATS,GITHUB,WEB_SEARCH,WEB_FETCH,PROJECTION,CONTROL,RESUME"]
     restart: unless-stopped
     environment:
       DATABASE_URL: ${COLLECTOR_DATABASE_URL:?secret-manager-injected}

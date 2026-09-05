@@ -9,8 +9,8 @@ same PostgreSQL database.
 Build `Dockerfile.collectors` and run these two processes:
 
 ```bash
-recruitintel-collectors scheduler
-recruitintel-collectors worker --classes ATS,GITHUB,WEB_SEARCH,WEB_FETCH,PROJECTION,CONTROL,RESUME
+python -m recruitintel_collectors scheduler
+python -m recruitintel_collectors worker --classes ATS,GITHUB,WEB_SEARCH,WEB_FETCH,PROJECTION,CONTROL,RESUME
 ```
 
 `docker-compose.production.yml` defines both services. A managed container host can

@@ -4,6 +4,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHONPATH=/app/services/collectors/src
 
 WORKDIR /app
 
@@ -16,4 +17,4 @@ RUN pip install --no-cache-dir uv \
 
 FROM runtime AS collectors
 WORKDIR /app/services/collectors
-ENTRYPOINT ["recruitintel-collectors"]
+CMD ["python", "-m", "recruitintel_collectors", "scheduler"]
